@@ -52,6 +52,6 @@ def start(config: AgentConfig, envelope: SafetyEnvelope | None = None) -> Device
     else:
         logger.warning(
             "safety envelope: UNMEASURED — every slew will be refused with "
-            "SAFETY_NOT_CONFIGURED until MAX_ALT_SAFE is measured"
+            "SAFETY_ENVELOPE_UNMEASURED until MAX_ALT_SAFE is measured"
         )
     return devices

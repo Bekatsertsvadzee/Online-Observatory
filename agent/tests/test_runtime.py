@@ -30,7 +30,7 @@ def test_startup_logs_the_driver_mode_and_unmeasured_envelope(caplog):
     messages = " ".join(record.getMessage() for record in caplog.records)
     assert "driver_mode=SIMULATED" in messages
     assert "UNMEASURED" in messages
-    assert "SAFETY_NOT_CONFIGURED" in messages
+    assert "SAFETY_ENVELOPE_UNMEASURED" in messages
 
 
 def test_simulated_mount_parks():
