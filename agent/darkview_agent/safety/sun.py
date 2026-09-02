@@ -44,6 +44,12 @@ class SunPosition:
     azimuth_degrees: float
 
 
+@dataclass(frozen=True)
+class EquatorialPosition:
+    right_ascension_hours: float
+    declination_degrees: float
+
+
 def _julian_day(moment: datetime) -> float:
     """Julian Day for a timezone-aware UTC instant."""
     if moment.tzinfo is None:
@@ -68,6 +74,42 @@ def _julian_day(moment: datetime) -> float:
     )
 
 
+def _solar_elements(moment: datetime) -> tuple[float, float, float, float, float]:
+    """The shared intermediate quantities of the NOAA algorithm.
+
+    Returns (century, mean_longitude, mean_anomaly, eccentricity, obliquity).
+    Extracted so `position()` and `equatorial_position()` derive from exactly the
+    same numbers rather than from two copies that could drift apart.
+    """
+    century = (_julian_day(moment) - 2451545.0) / 36525.0
+
+    mean_longitude = (280.46646 + century * (36000.76983 + century * 0.0003032)) % 360.0
+    mean_anomaly = 357.52911 + century * (35999.05029 - 0.0001537 * century)
+    eccentricity = 0.016708634 - century * (0.000042037 + 0.0000001267 * century)
+
+    omega = 125.04 - 1934.136 * century
+    # Mean obliquity of the ecliptic, in degrees-minutes-seconds form.
+    obliquity_seconds = 21.448 - century * (
+        46.815 + century * (0.00059 - century * 0.001813)
+    )
+    mean_obliquity = 23.0 + (26.0 + obliquity_seconds / 60.0) / 60.0
+    obliquity = mean_obliquity + 0.00256 * math.cos(math.radians(omega))
+
+    return century, mean_longitude, mean_anomaly, eccentricity, obliquity
+
+
+def _apparent_longitude(century: float, mean_longitude: float, mean_anomaly: float) -> float:
+    """The Sun's apparent ecliptic longitude, in degrees."""
+    anomaly_radians = math.radians(mean_anomaly)
+    center = (
+        math.sin(anomaly_radians) * (1.914602 - century * (0.004817 + 0.000014 * century))
+        + math.sin(2 * anomaly_radians) * (0.019993 - 0.000101 * century)
+        + math.sin(3 * anomaly_radians) * 0.000289
+    )
+    omega = 125.04 - 1934.136 * century
+    return mean_longitude + center - 0.00569 - 0.00478 * math.sin(math.radians(omega))
+
+
 def position(moment: datetime, site: SiteLocation) -> SunPosition:
     """The Sun's apparent altitude and azimuth at this instant, from this site.
 
@@ -77,30 +119,8 @@ def position(moment: datetime, site: SiteLocation) -> SunPosition:
     ignoring it makes the daylight lock trigger very slightly early. Erring
     toward "the Sun is up" is the safe direction.
     """
-    julian_day = _julian_day(moment)
-    century = (julian_day - 2451545.0) / 36525.0
-
-    mean_longitude = (280.46646 + century * (36000.76983 + century * 0.0003032)) % 360.0
-    mean_anomaly = 357.52911 + century * (35999.05029 - 0.0001537 * century)
-    eccentricity = 0.016708634 - century * (0.000042037 + 0.0000001267 * century)
-
-    anomaly_radians = math.radians(mean_anomaly)
-    center = (
-        math.sin(anomaly_radians) * (1.914602 - century * (0.004817 + 0.000014 * century))
-        + math.sin(2 * anomaly_radians) * (0.019993 - 0.000101 * century)
-        + math.sin(3 * anomaly_radians) * 0.000289
-    )
-
-    true_longitude = mean_longitude + center
-    omega = 125.04 - 1934.136 * century
-    apparent_longitude = true_longitude - 0.00569 - 0.00478 * math.sin(math.radians(omega))
-
-    # Mean obliquity of the ecliptic, in degrees-minutes-seconds form.
-    obliquity_seconds = 21.448 - century * (
-        46.815 + century * (0.00059 - century * 0.001813)
-    )
-    mean_obliquity = 23.0 + (26.0 + obliquity_seconds / 60.0) / 60.0
-    obliquity = mean_obliquity + 0.00256 * math.cos(math.radians(omega))
+    century, mean_longitude, mean_anomaly, eccentricity, obliquity = _solar_elements(moment)
+    apparent_longitude = _apparent_longitude(century, mean_longitude, mean_anomaly)
 
     apparent_radians = math.radians(apparent_longitude)
     obliquity_radians = math.radians(obliquity)
@@ -109,6 +129,7 @@ def position(moment: datetime, site: SiteLocation) -> SunPosition:
     )
 
     # Equation of time, in minutes.
+    anomaly_radians = math.radians(mean_anomaly)
     y = math.tan(obliquity_radians / 2.0) ** 2
     mean_longitude_radians = math.radians(mean_longitude)
     equation_of_time = 4.0 * math.degrees(
@@ -173,3 +194,27 @@ def angular_separation(
         lon2 - lon1
     )
     return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+
+
+def equatorial_position(moment: datetime) -> EquatorialPosition:
+    """The Sun's apparent right ascension and declination.
+
+    Exists so the two coordinate paths can be checked against each other: convert
+    this through equatorial_to_horizontal and it must land where `position()`
+    independently says the Sun is. Two derivations agreeing is much stronger
+    evidence than either one on its own.
+    """
+    century, mean_longitude, mean_anomaly, _, obliquity = _solar_elements(moment)
+    apparent = math.radians(_apparent_longitude(century, mean_longitude, mean_anomaly))
+    obliquity_radians = math.radians(obliquity)
+
+    declination = math.degrees(
+        math.asin(math.sin(obliquity_radians) * math.sin(apparent))
+    )
+    right_ascension = math.degrees(
+        math.atan2(math.cos(obliquity_radians) * math.sin(apparent), math.cos(apparent))
+    )
+    return EquatorialPosition(
+        right_ascension_hours=(right_ascension % 360.0) / 15.0,
+        declination_degrees=declination,
+    )
