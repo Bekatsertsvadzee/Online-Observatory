@@ -142,9 +142,10 @@ This repository is the platform half of Darkview: the Observatory Agent, the API
 realtime service and the database. The website and mobile application live in
 `darkview-clients` and reach this repository only over HTTP.
 
-The two repositories share no file path, so they merge cleanly into one later with both
-histories intact. Do not create a path here that also exists there — `apps/web/`,
-`apps/mobile/` and `packages/contracts/openapi.yaml` are theirs.
+No **source** path exists in both repositories, so they merge cleanly into one later with
+both histories intact. Do not create a source path here that also exists there —
+`apps/web/` and `apps/mobile/` are theirs. Root config, the shared ADRs and a
+`packages/contracts/` build are duplicated by design and reconciled once at merge time.
 
 No UI lives here. `apps/api` is Next.js route handlers only.
 

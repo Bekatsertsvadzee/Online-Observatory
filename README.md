@@ -27,8 +27,18 @@ darkview-platform  (this repository)      darkview-clients
 process boundary, in either repository. It is owned here. `darkview-clients` vendors a
 pinned copy and regenerates from it; it never edits the spec.
 
-The two repositories share no file path, so they can be merged into a single repository
-later with both histories intact.
+**Merging the two later.** No source path exists in both repositories — `agent/`,
+`apps/api/`, `apps/realtime/` and `packages/db/` are only here; `apps/web/` and
+`apps/mobile/` are only there. What both carry is scaffolding: root config, the shared
+ADRs, and a `packages/contracts/` build of the same spec.
+
+So the merge is `git subtree add` twice, which lands each repository under its own prefix
+with its history intact, followed by one reconciliation pass: hoist a single root
+`package.json` workspace, keep this repository's `contracts/openapi.yaml` and delete the
+pinned copy, keep one copy of each shared ADR. Client source needs no edit — it already
+imports `@darkview/contracts` by package name.
+
+Never create a source path here that also exists there.
 
 ## Pinned versions
 
