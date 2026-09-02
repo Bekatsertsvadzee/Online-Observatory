@@ -16,7 +16,12 @@ pydantic[email]==2.12.4
 # real frames; both are array work that numpy is the standard tool for.
 numpy==2.3.4
 
-# Test and lint.
+# The outbound link. websockets backs the real transport; the agent dials out
+# and never binds a port.
+websockets==15.0.1
+
+# Test and lint. psutil proves the process holds no listening socket.
+psutil==7.1.3
 pytest==8.4.2
 pytest-cov==7.0.0
 ruff==0.14.4
