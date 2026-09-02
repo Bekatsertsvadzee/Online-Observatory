@@ -36,6 +36,8 @@ def test_startup_logs_the_driver_mode_and_unmeasured_envelope(caplog):
 def test_simulated_mount_parks():
     mount = SimMount()
     mount.connect()
-    mount.parked = False
+    mount.unpark()
+    assert mount.status().parked is False
+
     mount.park()
-    assert mount.parked is True
+    assert mount.status().parked is True

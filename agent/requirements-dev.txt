@@ -12,6 +12,10 @@ datamodel-code-generator[http]==0.76.0
 # Runtime. The email extra is required — the generated models use EmailStr.
 pydantic[email]==2.12.4
 
+# Frame data. The simulator renders a synthetic star field and DV-033 live-stacks
+# real frames; both are array work that numpy is the standard tool for.
+numpy==2.3.4
+
 # Test and lint.
 pytest==8.4.2
 ruff==0.14.4
