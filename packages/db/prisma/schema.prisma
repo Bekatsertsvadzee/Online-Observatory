@@ -1,0 +1,701 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  USER
+  OPERATOR
+  ADMIN
+}
+
+enum AuthEventType {
+  REGISTERED
+  EMAIL_VERIFIED
+  LOGIN_SUCCEEDED
+  LOGIN_FAILED
+  LOGGED_OUT
+  RATE_LIMITED
+}
+
+enum ObservatoryStatus {
+  ONLINE
+  OFFLINE
+  WEATHER_HOLD
+  MAINTENANCE
+}
+
+enum EquipmentStatus {
+  ONLINE
+  OFFLINE
+  MAINTENANCE
+  FAULT
+}
+
+enum TargetType {
+  PLANET
+  MOON
+  GALAXY
+  NEBULA
+  CLUSTER
+  STAR
+}
+
+enum VisibilityRating {
+  EXCELLENT
+  GOOD
+  FAIR
+  UNAVAILABLE
+}
+
+enum MissionState {
+  REQUESTED
+  SCHEDULED
+  PREPARING
+  SLEWING
+  VERIFYING
+  CENTERING
+  OBSERVING
+  CAPTURING
+  PROCESSING
+  COMPLETE
+  WEATHER_HOLD
+  NOT_VISIBLE
+  HARDWARE_ERROR
+  CANCELLED
+  FAILED
+}
+
+enum MissionEventSource {
+  SIMULATOR
+  OBSERVATORY
+  SYSTEM
+}
+
+enum MissionSharingMode {
+  PRIVATE
+  PUBLIC
+}
+
+enum MissionJoinPolicy {
+  DISABLED
+  OPEN
+}
+
+enum MissionParticipantStatus {
+  JOINED
+  LEFT
+}
+
+enum CaptureAccessStatus {
+  AVAILABLE
+  SAVED
+  REVOKED
+}
+
+enum ReservationStatus {
+  REQUESTED
+  CONFIRMED
+  ACTIVE
+  COMPLETE
+  CANCELLED
+}
+
+enum ProcessingPreset {
+  NATURAL
+  BRIGHT
+  DETAIL
+}
+
+enum CaptureVisibility {
+  PRIVATE
+  UNLISTED
+  PUBLIC
+}
+
+enum CollectionKind {
+  SOLAR_SYSTEM
+  MESSIER_STARTER
+  DEEP_SKY
+  CUSTOM
+}
+
+enum SubscriptionPlan {
+  OBSERVER
+  EXPLORER
+  ADVANCED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAUSED
+  CANCELLED
+  EXPIRED
+}
+
+enum CreditLedgerReason {
+  SUBSCRIPTION_GRANT
+  MISSION_DEBIT
+  PRIVATE_SESSION_DEBIT
+  REFUND
+  ADJUSTMENT
+}
+
+enum PrivateSessionStatus {
+  REQUESTED
+  CONFIRMED
+  ACTIVE
+  COMPLETE
+  CANCELLED
+}
+
+enum ObservatoryCommandOperation {
+  START_MISSION
+  ABORT_MISSION
+  PARK
+  CAPTURE
+}
+
+enum ObservatoryCommandStatus {
+  RECEIVED
+  AUTHORIZED
+  EXECUTING
+  COMPLETED
+  REJECTED
+  EXPIRED
+  FAILED
+}
+
+enum AuditCategory {
+  AUTHENTICATION
+  AUTHORIZATION
+  ACCOUNT
+  MISSION
+  OBSERVATORY
+}
+
+enum NetworkNodeKind {
+  FIRST_PARTY
+  PARTNER
+}
+
+enum NetworkNodeApprovalStatus {
+  DRAFT
+  UNDER_REVIEW
+  APPROVED
+  SUSPENDED
+}
+
+model User {
+  id                  String                   @id @default(uuid()) @db.Uuid
+  email               String                   @unique
+  name                String
+  role                Role                     @default(USER)
+  emailVerifiedAt     DateTime?
+  isDemo              Boolean                  @default(false)
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+  account             Account?
+  sessions            Session[]
+  verificationTokens  EmailVerificationToken[]
+  missions            Mission[]
+  reservations        Reservation[]
+  captures            Capture[]
+  collections         Collection[]
+  subscription        Subscription?
+  creditLedger        CreditLedger[]
+  privateSessions     PrivateSession[]
+  observatoryCommands ObservatoryCommand[]
+  auditLogs           AuditLog[]               @relation("AuditActor")
+  missionPresences    MissionPresence[]
+  missionParticipants MissionParticipant[]
+  captureAccess       CaptureAccess[]
+  networkNodes        ObservatoryNetworkNode[] @relation("NetworkNodeOwner")
+}
+
+model Account {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @unique @db.Uuid
+  passwordHash String
+  isDemo       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Session {
+  id            String   @id @default(uuid()) @db.Uuid
+  tokenHash     String   @unique
+  csrfTokenHash String
+  userId        String   @db.Uuid
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  lastSeenAt    DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model EmailVerificationToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  tokenHash  String    @unique
+  userId     String    @db.Uuid
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model RateLimitBucket {
+  key             String    @id
+  count           Int
+  windowStartedAt DateTime
+  blockedUntil    DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  @@index([blockedUntil])
+}
+
+model Observatory {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  slug                String                  @unique
+  nameEn              String
+  nameKa              String
+  city                String
+  countryCode         String
+  latitude            Float
+  longitude           Float
+  timezone            String
+  status              ObservatoryStatus       @default(OFFLINE)
+  minimumAltitude     Float                   @default(25)
+  isDemo              Boolean                 @default(false)
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  telescopes          Telescope[]
+  cameras             Camera[]
+  compatibleTargets   TargetObservatory[]
+  missions            Mission[]
+  reservations        Reservation[]
+  captures            Capture[]
+  privateSessions     PrivateSession[]
+  observatoryCommands ObservatoryCommand[]
+  networkNode         ObservatoryNetworkNode?
+}
+
+model Telescope {
+  id              String                   @id @default(uuid()) @db.Uuid
+  observatoryId   String                   @db.Uuid
+  name            String
+  manufacturer    String
+  model           String
+  apertureMm      Int
+  focalLengthMm   Int
+  status          EquipmentStatus          @default(OFFLINE)
+  isDemo          Boolean                  @default(false)
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+  observatory     Observatory              @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
+  cameras         Camera[]
+  missions        Mission[]
+  reservations    Reservation[]
+  captures        Capture[]
+  privateSessions PrivateSession[]
+  primaryForNodes ObservatoryNetworkNode[]
+
+  @@unique([observatoryId, name])
+  @@index([observatoryId, status])
+}
+
+model Camera {
+  id            String          @id @default(uuid()) @db.Uuid
+  observatoryId String          @db.Uuid
+  telescopeId   String?         @db.Uuid
+  name          String
+  manufacturer  String
+  model         String
+  sensorType    String
+  resolutionX   Int?
+  resolutionY   Int?
+  status        EquipmentStatus @default(OFFLINE)
+  isDemo        Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  observatory   Observatory     @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
+  telescope     Telescope?      @relation(fields: [telescopeId], references: [id], onDelete: SetNull)
+
+  @@unique([observatoryId, name])
+  @@index([telescopeId])
+}
+
+model Target {
+  id                                  String              @id @default(uuid()) @db.Uuid
+  slug                                String              @unique
+  catalogId                           String              @unique
+  commonName                          String
+  georgianName                        String
+  type                                TargetType
+  rightAscensionHours                 Float
+  declinationDegrees                  Float
+  magnitude                           Float
+  angularSize                         String
+  descriptionEn                       String
+  descriptionKa                       String
+  minimumAltitude                     Float
+  preferredObservationDurationMinutes Int
+  imagePreset                         String
+  bestMonths                          Int[]
+  currentVisibility                   VisibilityRating
+  currentAltitude                     Float
+  qualityScore                        Int
+  isDemo                              Boolean             @default(false)
+  createdAt                           DateTime            @default(now())
+  updatedAt                           DateTime            @updatedAt
+  compatibleObservatories             TargetObservatory[]
+  missions                            Mission[]
+  captures                            Capture[]
+
+  @@index([type, currentVisibility, qualityScore])
+}
+
+model TargetObservatory {
+  targetId      String      @db.Uuid
+  observatoryId String      @db.Uuid
+  isDemo        Boolean     @default(false)
+  target        Target      @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  observatory   Observatory @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
+
+  @@id([targetId, observatoryId])
+  @@index([observatoryId])
+}
+
+model Mission {
+  id                  String               @id @default(uuid()) @db.Uuid
+  userId              String               @db.Uuid
+  targetId            String               @db.Uuid
+  observatoryId       String               @db.Uuid
+  telescopeId         String               @db.Uuid
+  state               MissionState         @default(REQUESTED)
+  sharingMode         MissionSharingMode   @default(PRIVATE)
+  joinPolicy          MissionJoinPolicy    @default(DISABLED)
+  allowSharedCaptures Boolean              @default(false)
+  simulated           Boolean              @default(false)
+  isDemo              Boolean              @default(false)
+  requestedAt         DateTime             @default(now())
+  scheduledFor        DateTime?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  target              Target               @relation(fields: [targetId], references: [id], onDelete: Restrict)
+  observatory         Observatory          @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
+  telescope           Telescope            @relation(fields: [telescopeId], references: [id], onDelete: Restrict)
+  events              MissionEvent[]
+  captures            Capture[]
+  reservation         Reservation?
+  creditLedger        CreditLedger[]
+  commands            ObservatoryCommand[]
+  presences           MissionPresence[]
+  participants        MissionParticipant[]
+  captureAccess       CaptureAccess[]
+
+  @@index([userId, requestedAt])
+  @@index([observatoryId, state, scheduledFor])
+  @@index([targetId])
+  @@index([telescopeId])
+}
+
+model MissionPresence {
+  id         String    @id @default(uuid()) @db.Uuid
+  missionId  String    @db.Uuid
+  userId     String    @db.Uuid
+  lastSeenAt DateTime  @default(now())
+  leftAt     DateTime?
+  isDemo     Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  mission    Mission   @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([missionId, userId])
+  @@index([missionId, leftAt, lastSeenAt])
+}
+
+model MissionParticipant {
+  id              String                   @id @default(uuid()) @db.Uuid
+  missionId       String                   @db.Uuid
+  userId          String                   @db.Uuid
+  status          MissionParticipantStatus @default(JOINED)
+  canSaveCaptures Boolean                  @default(false)
+  joinedAt        DateTime                 @default(now())
+  leftAt          DateTime?
+  isDemo          Boolean                  @default(false)
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+  mission         Mission                  @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  user            User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([missionId, userId])
+  @@index([missionId, status])
+}
+
+model MissionEvent {
+  id         String             @id @default(uuid()) @db.Uuid
+  missionId  String             @db.Uuid
+  state      MissionState
+  source     MissionEventSource
+  message    String?
+  occurredAt DateTime           @default(now())
+  simulated  Boolean            @default(false)
+  isDemo     Boolean            @default(false)
+  mission    Mission            @relation(fields: [missionId], references: [id], onDelete: Cascade)
+
+  @@index([missionId, occurredAt])
+}
+
+model Reservation {
+  id             String            @id @default(uuid()) @db.Uuid
+  userId         String            @db.Uuid
+  observatoryId  String            @db.Uuid
+  telescopeId    String            @db.Uuid
+  missionId      String?           @unique @db.Uuid
+  startsAt       DateTime
+  endsAt         DateTime
+  status         ReservationStatus @default(REQUESTED)
+  isDemo         Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  user           User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  observatory    Observatory       @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
+  telescope      Telescope         @relation(fields: [telescopeId], references: [id], onDelete: Restrict)
+  mission        Mission?          @relation(fields: [missionId], references: [id], onDelete: SetNull)
+  privateSession PrivateSession?
+
+  @@index([observatoryId, startsAt, endsAt])
+  @@index([userId, startsAt])
+}
+
+model Capture {
+  id               String              @id
+  userId           String              @db.Uuid
+  missionId        String              @db.Uuid
+  targetId         String              @db.Uuid
+  observatoryId    String              @db.Uuid
+  telescopeId      String              @db.Uuid
+  capturedAt       DateTime
+  processingPreset ProcessingPreset
+  thumbnailUrl     String
+  originalAssetUrl String
+  fitsUrl          String?
+  visibility       CaptureVisibility   @default(PRIVATE)
+  simulated        Boolean             @default(false)
+  isDemo           Boolean             @default(false)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  user             User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  mission          Mission             @relation(fields: [missionId], references: [id], onDelete: Restrict)
+  target           Target              @relation(fields: [targetId], references: [id], onDelete: Restrict)
+  observatory      Observatory         @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
+  telescope        Telescope           @relation(fields: [telescopeId], references: [id], onDelete: Restrict)
+  collections      CollectionCapture[]
+  access           CaptureAccess[]
+
+  @@index([userId, capturedAt])
+  @@index([missionId])
+  @@index([targetId])
+  @@index([observatoryId])
+}
+
+model CaptureAccess {
+  id        String              @id @default(uuid()) @db.Uuid
+  captureId String
+  missionId String              @db.Uuid
+  userId    String              @db.Uuid
+  status    CaptureAccessStatus @default(AVAILABLE)
+  grantedAt DateTime            @default(now())
+  savedAt   DateTime?
+  isDemo    Boolean             @default(false)
+  capture   Capture             @relation(fields: [captureId], references: [id], onDelete: Cascade)
+  mission   Mission             @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([captureId, userId])
+  @@index([missionId, userId, status])
+}
+
+model Collection {
+  id            String              @id @default(uuid()) @db.Uuid
+  userId        String              @db.Uuid
+  kind          CollectionKind
+  nameEn        String
+  nameKa        String
+  descriptionEn String
+  descriptionKa String
+  isDemo        Boolean             @default(false)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  captures      CollectionCapture[]
+
+  @@unique([userId, kind])
+  @@index([userId])
+}
+
+model CollectionCapture {
+  collectionId String     @db.Uuid
+  captureId    String
+  addedAt      DateTime   @default(now())
+  isDemo       Boolean    @default(false)
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  capture      Capture    @relation(fields: [captureId], references: [id], onDelete: Cascade)
+
+  @@id([collectionId, captureId])
+  @@index([captureId])
+}
+
+model Subscription {
+  id        String             @id @default(uuid()) @db.Uuid
+  userId    String             @unique @db.Uuid
+  plan      SubscriptionPlan
+  status    SubscriptionStatus
+  startsAt  DateTime
+  endsAt    DateTime?
+  isDemo    Boolean            @default(false)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model CreditLedger {
+  id             String             @id @default(uuid()) @db.Uuid
+  userId         String             @db.Uuid
+  missionId      String?            @db.Uuid
+  amount         Int
+  balanceAfter   Int
+  reason         CreditLedgerReason
+  idempotencyKey String             @unique
+  note           String?
+  isDemo         Boolean            @default(false)
+  createdAt      DateTime           @default(now())
+  user           User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  mission        Mission?           @relation(fields: [missionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([missionId])
+}
+
+model PrivateSession {
+  id              String               @id @default(uuid()) @db.Uuid
+  userId          String               @db.Uuid
+  observatoryId   String               @db.Uuid
+  telescopeId     String               @db.Uuid
+  reservationId   String?              @unique @db.Uuid
+  durationMinutes Int
+  startsAt        DateTime
+  endsAt          DateTime
+  status          PrivateSessionStatus @default(REQUESTED)
+  isDemo          Boolean              @default(false)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  observatory     Observatory          @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
+  telescope       Telescope            @relation(fields: [telescopeId], references: [id], onDelete: Restrict)
+  reservation     Reservation?         @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+
+  @@index([observatoryId, startsAt])
+  @@index([userId, startsAt])
+}
+
+model ObservatoryCommand {
+  id            String                      @id
+  missionId     String                      @db.Uuid
+  userId        String                      @db.Uuid
+  observatoryId String                      @db.Uuid
+  operation     ObservatoryCommandOperation
+  status        ObservatoryCommandStatus    @default(RECEIVED)
+  issuedAt      DateTime
+  expiresAt     DateTime
+  completedAt   DateTime?
+  payload       Json?
+  result        Json?
+  simulated     Boolean                     @default(false)
+  isDemo        Boolean                     @default(false)
+  createdAt     DateTime                    @default(now())
+  updatedAt     DateTime                    @updatedAt
+  mission       Mission                     @relation(fields: [missionId], references: [id], onDelete: Restrict)
+  user          User                        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  observatory   Observatory                 @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
+  auditLogs     AuditLog[]
+
+  @@index([missionId, issuedAt])
+  @@index([observatoryId, status, issuedAt])
+  @@index([userId])
+}
+
+model AuditLog {
+  id          String              @id @default(uuid()) @db.Uuid
+  category    AuditCategory
+  action      String
+  actorUserId String?             @db.Uuid
+  actorHash   String?
+  entityType  String?
+  entityId    String?
+  commandId   String?
+  metadata    Json?
+  isDemo      Boolean             @default(false)
+  createdAt   DateTime            @default(now())
+  actor       User?               @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  command     ObservatoryCommand? @relation(fields: [commandId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId, createdAt])
+  @@index([category, createdAt])
+  @@index([entityType, entityId])
+  @@index([commandId])
+}
+
+model ObservatoryNetworkNode {
+  id                  String                      @id @default(uuid()) @db.Uuid
+  ownerId             String                      @db.Uuid
+  observatoryId       String                      @unique @db.Uuid
+  primaryTelescopeId  String?                     @db.Uuid
+  kind                NetworkNodeKind
+  approvalStatus      NetworkNodeApprovalStatus   @default(DRAFT)
+  capabilities        String[]
+  approvedAt          DateTime?
+  isDemo              Boolean                     @default(false)
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+  owner               User                        @relation("NetworkNodeOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  observatory         Observatory                 @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
+  primaryTelescope    Telescope?                  @relation(fields: [primaryTelescopeId], references: [id], onDelete: SetNull)
+  availabilityWindows NetworkAvailabilityWindow[]
+
+  @@index([ownerId])
+  @@index([approvalStatus, kind])
+  @@index([primaryTelescopeId])
+}
+
+model NetworkAvailabilityWindow {
+  id          String                 @id @default(uuid()) @db.Uuid
+  nodeId      String                 @db.Uuid
+  weekday     Int
+  startMinute Int
+  endMinute   Int
+  enabled     Boolean                @default(true)
+  isDemo      Boolean                @default(false)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+  node        ObservatoryNetworkNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@unique([nodeId, weekday, startMinute, endMinute])
+  @@index([nodeId, enabled, weekday])
+}

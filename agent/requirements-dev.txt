@@ -1,0 +1,5 @@
+# Tooling for the Darkview Observatory Agent development environment.
+# Python 3.12 per CLAUDE.md. Create with:
+#   python3.12 -m venv agent/.venv
+#   agent/.venv/bin/pip install -r agent/requirements-dev.txt
+datamodel-code-generator[http]==0.76.0

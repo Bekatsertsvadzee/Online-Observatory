@@ -1,0 +1,33 @@
+{
+  "name": "@darkview/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --port 4000",
+    "build": "next build",
+    "start": "next start --port 4000",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@darkview/contracts": "*",
+    "@darkview/db": "*",
+    "@prisma/adapter-pg": "7.9.1",
+    "@prisma/client": "7.9.1",
+    "next": "16.3.2",
+    "pg": "8.23.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "server-only": "0.0.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.2.14",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  }
+}

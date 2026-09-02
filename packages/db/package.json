@@ -1,0 +1,26 @@
+{
+  "name": "@darkview/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./generated/prisma/client.ts",
+    "./enums": "./generated/prisma/enums.ts",
+    "./schema": "./prisma/schema.prisma",
+    "./development-seed": "./prisma/development-seed.ts"
+  },
+  "scripts": {
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "prisma db seed",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "7.9.1"
+  },
+  "devDependencies": {
+    "prisma": "7.9.1",
+    "tsx": "4.23.12",
+    "dotenv": "17.4.2"
+  }
+}

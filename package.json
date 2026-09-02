@@ -1,0 +1,36 @@
+{
+  "name": "darkview-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @darkview/api",
+    "build": "npm run build --workspace @darkview/api",
+    "start": "npm run start --workspace @darkview/api",
+    "lint": "eslint .",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run test --workspaces --if-present",
+    "db:generate": "npm run db:generate --workspace @darkview/db",
+    "db:migrate": "npm run db:migrate --workspace @darkview/db",
+    "db:seed": "npm run db:seed --workspace @darkview/db",
+    "db:studio": "npm run db:studio --workspace @darkview/db",
+    "contracts:generate": "node scripts/contracts-generate.mjs",
+    "contracts:check": "node scripts/contracts-check.mjs",
+    "postinstall": "npm run db:generate"
+  },
+  "devDependencies": {
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.2",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3"
+  }
+}

@@ -1,0 +1,3494 @@
+openapi: 3.1.0
+
+info:
+  title: Darkview Contract
+  version: 0.1.0
+  summary: The single source of truth for every payload that crosses a Darkview process boundary.
+  description: |
+    Darkview by Astroman — Phase 1 (live-view / EAA).
+
+    AUTHORITY
+    This file plus the JSON Schemas it references are the only place a cross-boundary
+    type may be defined. TypeScript + Zod are generated from it for web, mobile and
+    cloud. Pydantic models are generated from it for the Python Observatory Agent.
+    No hand-written duplicate of any type below may exist in any language.
+
+    Generated artifacts live in `packages/contracts/` (TypeScript + Zod) and
+    `agent/contracts/` (Pydantic). They are committed and never hand-edited.
+    `npm run contracts:check` fails the build if they drift from this file.
+
+    CHANGE PROCESS
+    Only the technical lead approves a change here. If a task needs a field that does
+    not exist, stop and open a contract issue. Do not invent a private endpoint or a
+    local type.
+
+    BOUNDARY THIS CONTRACT PROTECTS
+      web / mobile
+        | HTTPS + WSS
+      Darkview cloud + mission orchestrator
+        | authenticated OUTBOUND WSS (the observatory dials out)
+      Observatory Agent (Python 3.12)
+        | Alpaca HTTP (mount) + ZWO ASI SDK (camera)
+      Celestron NexStar 6SE + ZWO ASI585MC
+
+    No schema in this file gives a browser or mobile client a device address, a mount
+    credential, a raw ASCOM/Alpaca value or any other way to reach hardware. Clients
+    submit intent; the cloud mints the authenticated CommandEnvelope; the agent
+    re-validates it locally and may refuse it.
+
+    PHASE 1 SCOPE
+    Live-view / EAA using short exposures and live stacking. This contract deliberately
+    contains no long-exposure astrophotography concepts.
+
+    KNOWN OPEN ITEMS (see docs/planning/phase1-issue-decomposition.md)
+      - MissionState below is exactly the enumeration in CLAUDE.md. RESOLVED by
+        ADR-004 (2026-08-31): the Build Plan's LOCKED and DELIVERED are not states,
+        and its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as MissionFailureReason
+        diagnostic detail attached to a CLAUDE.md state, never as competing states.
+      - SafetyEnvelopeConfig.maxAltitudeDegrees has no default and is nullable on
+        purpose. `null` means UNMEASURED. It is measured from the physical optical
+        train (mount qualification test Q7) and never guessed.
+      - The payment provider payload is modelled as opaque. No BOG iPay field has been
+        confirmed against provider documentation and none is invented here.
+
+  contact:
+    name: Darkview technical lead
+  license:
+    name: UNLICENSED
+
+servers:
+  - url: /api
+    description: |
+      Darkview cloud API. The absolute base URL is environment configuration, not
+      contract. Never hard-code an observatory or device address anywhere.
+
+tags:
+  - name: identity
+    description: The signed-in user.
+  - name: observatory
+    description: Public observatory status.
+  - name: targets
+    description: Operator-approved target catalogue and live visibility.
+  - name: booking
+    description: Slots, bookings and payment.
+  - name: missions
+    description: Mission lifecycle and the client command boundary.
+  - name: captures
+    description: Captures and the user's Collection.
+  - name: admin
+    description: Operator-only. Separately audited.
+
+security:
+  - userSession: []
+
+x-darkview-websockets:
+  description: |
+    WebSocket channels are part of this contract even though OpenAPI 3.1 has no path
+    item for them. Their message envelopes are defined in components/schemas and are
+    generated into TypeScript, Zod and Pydantic exactly like the HTTP payloads.
+  channels:
+    - name: agentLink
+      url: /ws/agent
+      direction: observatory-agent dials out to cloud
+      auth: agentDeviceToken
+      constraints: |
+        Exactly one live connection per observatory. The observatory NEVER accepts an
+        inbound connection. Heartbeat every 5 s. Exponential-backoff reconnect.
+      outbound:
+        summary: agent -> cloud
+        $ref: "#/components/schemas/AgentToCloudMessage"
+      inbound:
+        summary: cloud -> agent
+        $ref: "#/components/schemas/CloudToAgentMessage"
+      binary: |
+        A LiveFrameHeader message is immediately followed by exactly one binary
+        WebSocket frame carrying the encoded image bytes. Pixel data is never
+        base64-encoded into JSON.
+    - name: missionClient
+      url: /ws/mission/{missionId}
+      direction: cloud to client
+      auth: userSession
+      outbound:
+        summary: cloud -> client
+        $ref: "#/components/schemas/MissionChannelMessage"
+      inbound:
+        summary: client -> cloud
+        $ref: "#/components/schemas/MissionClientMessage"
+      constraints: |
+        Subscription only. A client may not send a CommandEnvelope on this channel.
+        Commands go through POST /missions/{missionId}/command so that the cloud mints
+        and signs the envelope.
+
+paths:
+  /me:
+    get:
+      operationId: getCurrentUser
+      tags: [identity]
+      summary: The signed-in user.
+      responses:
+        "200":
+          description: The current user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /observatory/state:
+    get:
+      operationId: getObservatoryStatus
+      tags: [observatory]
+      summary: Public observatory status.
+      description: |
+        Powers the public status page and the live status chip. Contains no device
+        address, no credential and no raw driver state.
+      security: []
+      responses:
+        "200":
+          description: Public observatory status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicObservatoryStatus"
+
+  /targets:
+    get:
+      operationId: listTargets
+      tags: [targets]
+      summary: The full operator-approved catalogue.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Catalogue page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TargetPage"
+
+  /targets/tonight:
+    get:
+      operationId: listTonightTargets
+      tags: [targets]
+      summary: Catalogue filtered by live ephemeris.
+      description: |
+        Computed at request time from altitude, Sun angle, Moon separation and angular
+        size fit. Never served from a static list.
+      security: []
+      parameters:
+        - name: at
+          in: query
+          required: false
+          description: Instant to evaluate visibility at. Defaults to now.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Targets with their current visibility assessment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TonightTargetList"
+
+  /targets/{slug}:
+    get:
+      operationId: getTarget
+      tags: [targets]
+      summary: One catalogue target.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/TargetSlug"
+      responses:
+        "200":
+          description: The target.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Target"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /slots:
+    get:
+      operationId: listSlots
+      tags: [booking]
+      summary: Bookable observation slots for a date.
+      description: Slots are generated from astronomical darkness, not from fixed office hours.
+      security: []
+      parameters:
+        - name: date
+          in: query
+          required: true
+          description: Local observatory date, ISO 8601 (YYYY-MM-DD).
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Slots for the requested date.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SlotList"
+
+  /bookings:
+    get:
+      operationId: listBookings
+      tags: [booking]
+      summary: The signed-in user's bookings.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Booking page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createBooking
+      tags: [booking]
+      summary: Reserve a slot transactionally and open a payment intent.
+      description: |
+        The slot reservation runs inside a database transaction with row locking and a
+        partial unique index. Exactly one of two simultaneous requests for the same slot
+        succeeds; the other receives 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBookingRequest"
+      responses:
+        "201":
+          description: Booking reserved, awaiting payment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingWithPaymentIntent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /bookings/{bookingId}:
+    get:
+      operationId: getBooking
+      tags: [booking]
+      summary: One booking owned by the signed-in user.
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      responses:
+        "200":
+          description: The booking.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bookings/{bookingId}/cancel:
+    post:
+      operationId: cancelBooking
+      tags: [booking]
+      summary: Cancel a booking and release its slot.
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelBookingRequest"
+      responses:
+        "200":
+          description: The cancelled booking.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /payments/webhook:
+    post:
+      operationId: receivePaymentWebhook
+      tags: [booking]
+      summary: Payment provider callback.
+      description: |
+        The provider's body is opaque to this contract. No provider field is invented
+        here. The cloud verifies the provider signature, normalises the result and only
+        then confirms the booking and creates the mission. A payment success is never
+        simulated in a production environment.
+      security:
+        - paymentWebhookSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentWebhookEnvelope"
+      responses:
+        "202":
+          description: Accepted for processing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentWebhookAck"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /missions:
+    get:
+      operationId: listMissions
+      tags: [missions]
+      summary: The signed-in user's upcoming and past missions.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Mission page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MissionPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /missions/{missionId}:
+    get:
+      operationId: getMission
+      tags: [missions]
+      summary: One mission owned by the signed-in user.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      responses:
+        "200":
+          description: The mission.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Mission"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /missions/{missionId}/start:
+    post:
+      operationId: startMissionSession
+      tags: [missions]
+      summary: Open the live session and become the single active session owner.
+      description: |
+        Exactly one active session owner exists at a time, enforced in the cloud and
+        again in the agent. Starting a session issues the session identity that every
+        subsequent CommandEnvelope must carry.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      responses:
+        "200":
+          description: Session opened.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MissionSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /missions/{missionId}/command:
+    post:
+      operationId: submitMissionCommand
+      tags: [missions]
+      summary: Submit a bounded client intent for the active mission.
+      description: |
+        The client submits INTENT ONLY. It never mints a CommandEnvelope: commandId,
+        sessionId, userId, issuedAt and expiresAt are all set by the cloud. The cloud
+        validates ownership, expiry and the safety envelope, then relays the envelope to
+        the agent, which validates it again independently and may refuse it.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MissionCommandRequest"
+      responses:
+        "202":
+          description: Accepted and relayed to the observatory.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MissionCommandAccepted"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /missions/{missionId}/observation:
+    patch:
+      operationId: setMissionObservation
+      tags: [missions]
+      summary: Open or close this session to observers.
+      description: |
+        Session-owner only. Sessions are private by default (ADR-007); this is the sole
+        way one becomes observable. Closing a session detaches any attached observers.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MissionObservationSettings"
+      responses:
+        "200":
+          description: Observation setting applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Mission"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /missions/{missionId}/observers:
+    get:
+      operationId: listMissionObservers
+      tags: [missions]
+      summary: List observers attached to this mission.
+      description: Visible to the session owner and to operators. Observers see only the count.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      responses:
+        "200":
+          description: Observers attached.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MissionObserverList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    post:
+      operationId: joinMissionAsObserver
+      tags: [missions]
+      summary: Take a paid view-only seat on a live session.
+      description: |
+        Attaches the caller as an OBSERVER (ADR-007). Requires a settled Observer Pack
+        payment, the mission to be observable, and a free seat.
+
+        An observer receives mission state and the live view and nothing else. It grants
+        no command capability and no captures: nothing from this mission enters the
+        observer's Collection.
+
+        Fails with MISSION_NOT_OBSERVABLE if the controller has not opted in, and with
+        OBSERVER_CAPACITY_REACHED when all seats are taken.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      responses:
+        "201":
+          description: Observer seat taken.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MissionObserver"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+    delete:
+      operationId: leaveMissionAsObserver
+      tags: [missions]
+      summary: Release this caller's observer seat.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      responses:
+        "204":
+          description: Seat released.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /missions/{missionId}/events:
+    get:
+      operationId: listMissionEvents
+      tags: [missions]
+      summary: Correlated event log for one mission.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Mission event page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MissionEventPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /captures:
+    get:
+      operationId: listCaptures
+      tags: [captures]
+      summary: The signed-in user's Collection.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Capture page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapturePage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /captures/{captureId}:
+    get:
+      operationId: getCapture
+      tags: [captures]
+      summary: One capture owned by the signed-in user.
+      parameters:
+        - $ref: "#/components/parameters/CaptureId"
+      responses:
+        "200":
+          description: The capture.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capture"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /captures/{captureId}/download:
+    get:
+      operationId: getCaptureDownload
+      tags: [captures]
+      summary: Short-expiry signed download URL.
+      description: Object storage buckets are never public. Every download is a signed URL.
+      parameters:
+        - $ref: "#/components/parameters/CaptureId"
+        - name: kind
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/CaptureAssetKind"
+      responses:
+        "200":
+          description: Signed URL.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureDownload"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/observatory/state:
+    get:
+      operationId: adminGetObservatoryState
+      tags: [admin]
+      summary: Full operator telemetry for the observatory.
+      security:
+        - userSession: [operator]
+      responses:
+        "200":
+          description: Operator observatory state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperatorObservatoryState"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/observatory/mode:
+    post:
+      operationId: adminSetObservatoryMode
+      tags: [admin]
+      summary: Switch the observatory between SIMULATED and REAL hardware.
+      description: |
+        SIMULATED is the default and the normal state. Switching to REAL is an explicit,
+        attended operator action outside the normal test workflow: it requires an
+        operator role, a written reason and an affirmative attended-presence
+        confirmation. No autonomous or background session may perform it. The switch is
+        recorded in the audit log.
+      security:
+        - userSession: [operator]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetObservatoryModeRequest"
+      responses:
+        "200":
+          description: Mode applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperatorObservatoryState"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/observatory/safety-envelope:
+    get:
+      operationId: adminGetSafetyEnvelope
+      tags: [admin]
+      summary: The active safety envelope configuration.
+      security:
+        - userSession: [operator]
+      responses:
+        "200":
+          description: Safety envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SafetyEnvelopeConfig"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    put:
+      operationId: adminSetSafetyEnvelope
+      tags: [admin]
+      summary: Record a measured safety envelope.
+      description: |
+        maxAltitudeDegrees is a measured value from the physical optical train, not a
+        configuration preference. Supplying it requires measuredAt and measuredBy. While
+        it is null the system is UNMEASURED and every slew command is refused by both
+        the cloud and the agent.
+      security:
+        - userSession: [operator]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SafetyEnvelopeConfig"
+      responses:
+        "200":
+          description: Safety envelope stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SafetyEnvelopeConfig"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/observatory/weather-hold:
+    post:
+      operationId: adminSetWeatherHold
+      tags: [admin]
+      summary: Set or clear an operator weather hold.
+      description: |
+        A hold blocks every new mission start. Affected customers are notified and
+        refunded or rescheduled. Phase 1 requires the manual operator hold; an automatic
+        sensor-driven hold is only used if a sensor is actually fitted.
+      security:
+        - userSession: [operator]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetWeatherHoldRequest"
+      responses:
+        "200":
+          description: Weather state applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeatherState"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/override:
+    post:
+      operationId: adminOverrideCommand
+      tags: [admin]
+      summary: Operator manual control, separately audited and still safety-bounded.
+      description: |
+        An override still passes the agent's safety envelope. The Sun exclusion is never
+        overridable. Every override is written to the audit log with the operator's
+        identity and stated reason.
+      security:
+        - userSession: [operator]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperatorOverrideRequest"
+      responses:
+        "202":
+          description: Override relayed to the observatory.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MissionCommandAccepted"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/missions:
+    get:
+      operationId: adminListMissions
+      tags: [admin]
+      summary: All missions, for operations and support.
+      security:
+        - userSession: [operator]
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/MissionState"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Mission page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MissionPage"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/missions/{missionId}/cancel:
+    post:
+      operationId: adminCancelMission
+      tags: [admin]
+      summary: Force-cancel a mission and decide its refund treatment.
+      security:
+        - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCancelMissionRequest"
+      responses:
+        "200":
+          description: The cancelled mission.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Mission"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/targets/{targetId}:
+    patch:
+      operationId: adminUpdateTarget
+      tags: [admin]
+      summary: Enable, disable or tune one catalogue target.
+      security:
+        - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/TargetId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminUpdateTargetRequest"
+      responses:
+        "200":
+          description: The updated target.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Target"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/logs:
+    get:
+      operationId: adminListAuditEvents
+      tags: [admin]
+      summary: Correlated audit event stream. The primary debugging tool.
+      security:
+        - userSession: [operator]
+      parameters:
+        - name: missionId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: category
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/AuditCategory"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Audit event page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEventPage"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+components:
+  securitySchemes:
+    userSession:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Customer or operator session credential. Operator-only routes additionally
+        require role OPERATOR. This credential never travels to the observatory.
+    agentDeviceToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Observatory Agent device token, presented on the outbound WSS handshake at
+        /ws/agent. It is issued per observatory, stored only on the observatory
+        mini-PC and in cloud secret storage, and is never exposed to any client.
+    paymentWebhookSignature:
+      type: apiKey
+      in: header
+      name: X-Darkview-Payment-Signature
+      description: |
+        Provider signature over the raw webhook body. The exact header name and
+        algorithm are provider configuration and must be confirmed against the
+        provider's own documentation before implementation. Nothing here is invented.
+
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque forward pagination cursor from the previous page.
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    MissionId:
+      name: missionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    BookingId:
+      name: bookingId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CaptureId:
+      name: captureId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TargetId:
+      name: targetId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TargetSlug:
+      name: slug
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-z0-9-]+$"
+
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Unauthorized:
+      description: Not authenticated.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Forbidden:
+      description: Authenticated but not permitted.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    NotFound:
+      description: Not found, or not owned by the caller.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    PaymentRequired:
+      description: Payment is required and has not settled, for example an unpaid Observer Pack seat.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Conflict:
+      description: Conflicts with current state, for example a slot already taken or a session already held.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    UnprocessableEntity:
+      description: Well-formed but rejected by validation or by the safety envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+
+  schemas:
+    # ---------------------------------------------------------------------------
+    # Primitives and errors
+    # ---------------------------------------------------------------------------
+
+    Locale:
+      type: string
+      description: Darkview ships Georgian and English from the first commit.
+      enum: [en, ka]
+
+    Currency:
+      type: string
+      enum: [GEL]
+
+    UserRole:
+      type: string
+      enum: [USER, OPERATOR]
+
+    ErrorCode:
+      type: string
+      enum:
+        - BAD_REQUEST
+        - UNAUTHENTICATED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - VALIDATION_FAILED
+        - SLOT_UNAVAILABLE
+        - PAYMENT_REQUIRED
+        - PAYMENT_FAILED
+        - SESSION_NOT_OWNER
+        - MISSION_NOT_ACTIVE
+        - MISSION_NOT_OBSERVABLE
+        - OBSERVER_CAPACITY_REACHED
+        - OBSERVER_CANNOT_COMMAND
+        - OBSERVATORY_OFFLINE
+        - WEATHER_HOLD
+        - SAFETY_REFUSED
+        - SAFETY_NOT_CONFIGURED
+        - RATE_LIMITED
+        - INTERNAL
+
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        message:
+          type: string
+          description: Human-readable, English. Client-facing copy is localised client-side from `code`.
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional structured detail. Never contains a secret, device address or credential.
+
+    PageMeta:
+      type: object
+      additionalProperties: false
+      required: [hasMore]
+      properties:
+        hasMore:
+          type: boolean
+        nextCursor:
+          type: [string, "null"]
+
+    EquatorialCoordinates:
+      type: object
+      description: J2000 equatorial coordinates. Conversion to apparent coordinates happens at the device boundary inside the agent, never in a client.
+      additionalProperties: false
+      required: [raHours, decDegrees, epoch]
+      properties:
+        raHours:
+          type: number
+          minimum: 0
+          exclusiveMaximum: 24
+        decDegrees:
+          type: number
+          minimum: -90
+          maximum: 90
+        epoch:
+          type: string
+          enum: [J2000]
+
+    HorizontalCoordinates:
+      type: object
+      additionalProperties: false
+      required: [altitudeDegrees, azimuthDegrees]
+      properties:
+        altitudeDegrees:
+          type: number
+          minimum: -90
+          maximum: 90
+        azimuthDegrees:
+          type: number
+          minimum: 0
+          exclusiveMaximum: 360
+
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, email, role, locale, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        displayName:
+          type: [string, "null"]
+        role:
+          $ref: "#/components/schemas/UserRole"
+        locale:
+          $ref: "#/components/schemas/Locale"
+        createdAt:
+          type: string
+          format: date-time
+
+    # ---------------------------------------------------------------------------
+    # Targets
+    # ---------------------------------------------------------------------------
+
+    TargetType:
+      type: string
+      description: |
+        Phase 1 catalogue classes only. Every class in this enum is one the
+        NexStar 6SE + ASI585MC combination can present convincingly from a Bortle 8-9
+        sky. Wide targets that do not fit any available field of view are excluded from
+        the catalogue and therefore from this enum.
+      enum:
+        - MOON
+        - PLANET
+        - DOUBLE_STAR
+        - GLOBULAR_CLUSTER
+        - PLANETARY_NEBULA
+        - BRIGHT_NEBULA
+
+    OpticalConfig:
+      type: string
+      description: |
+        The three optical configurations of the C6. Focal length and image scale follow
+        from the choice. F20_BARLOW = 3000 mm, F10_NATIVE = 1500 mm,
+        F6_3_REDUCER = 945 mm with the #94175 reducer.
+      enum:
+        - F20_BARLOW
+        - F10_NATIVE
+        - F6_3_REDUCER
+
+    ImagingProfile:
+      type: string
+      description: |
+        Short-exposure / live-stacking profiles only. Phase 1 is a live-view (EAA)
+        experience. There is no long-exposure profile and none may be added without an
+        approved decision record.
+      enum:
+        - LUNAR
+        - PLANETARY
+        - DOUBLE_STAR
+        - GLOBULAR_CLUSTER
+        - PLANETARY_NEBULA
+        - BRIGHT_NEBULA
+
+    Target:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - slug
+        - type
+        - nameEn
+        - nameKa
+        - coordinates
+        - angularSizeArcmin
+        - magnitude
+        - opticalConfig
+        - imagingProfile
+        - minAltitudeDegrees
+        - expectedMissionMinutes
+        - enabled
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+          pattern: "^[a-z0-9-]+$"
+        catalogId:
+          type: [string, "null"]
+          description: Catalogue designation, for example "M13" or "NGC 6205".
+        type:
+          $ref: "#/components/schemas/TargetType"
+        nameEn:
+          type: string
+        nameKa:
+          type: string
+        descriptionEn:
+          type: [string, "null"]
+        descriptionKa:
+          type: [string, "null"]
+        coordinates:
+          $ref: "#/components/schemas/EquatorialCoordinates"
+        angularSizeArcmin:
+          type: number
+          exclusiveMinimum: 0
+        magnitude:
+          type: number
+        opticalConfig:
+          $ref: "#/components/schemas/OpticalConfig"
+        imagingProfile:
+          $ref: "#/components/schemas/ImagingProfile"
+        minAltitudeDegrees:
+          type: number
+          minimum: 0
+          maximum: 90
+        expectedMissionMinutes:
+          type: integer
+          exclusiveMinimum: 0
+        previewImageUrl:
+          type: [string, "null"]
+          format: uri
+          description: |
+            Must be an image this telescope actually produced. Never a stock image and
+            never output from a professional instrument presented as Darkview output.
+        enabled:
+          type: boolean
+
+    TargetPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Target"
+        page:
+          $ref: "#/components/schemas/PageMeta"
+
+    VisibilityBlockReason:
+      type: string
+      enum:
+        - BELOW_MIN_ALTITUDE
+        - ABOVE_MAX_ALTITUDE
+        - BEHIND_HORIZON_MASK
+        - IN_FORBIDDEN_AZIMUTH
+        - SUN_TOO_HIGH
+        - TOO_CLOSE_TO_SUN
+        - TOO_CLOSE_TO_MOON
+        - DOES_NOT_FIT_FIELD
+        - BELOW_HORIZON
+        - TARGET_DISABLED
+        - WEATHER_HOLD
+        - OBSERVATORY_OFFLINE
+        - SAFETY_ENVELOPE_UNMEASURED
+
+    TargetVisibility:
+      type: object
+      description: Computed at request time from live ephemeris. Never cached as a static list.
+      additionalProperties: false
+      required:
+        [
+          observable,
+          evaluatedAt,
+          horizontal,
+          sunAltitudeDegrees,
+          moonSeparationDegrees,
+          blockReasons,
+        ]
+      properties:
+        observable:
+          type: boolean
+        evaluatedAt:
+          type: string
+          format: date-time
+        horizontal:
+          $ref: "#/components/schemas/HorizontalCoordinates"
+        sunAltitudeDegrees:
+          type: number
+        moonSeparationDegrees:
+          type: number
+        risesAt:
+          type: [string, "null"]
+          format: date-time
+        setsAt:
+          type: [string, "null"]
+          format: date-time
+        blockReasons:
+          type: array
+          items:
+            $ref: "#/components/schemas/VisibilityBlockReason"
+
+    TonightTarget:
+      type: object
+      additionalProperties: false
+      required: [target, visibility]
+      properties:
+        target:
+          $ref: "#/components/schemas/Target"
+        visibility:
+          $ref: "#/components/schemas/TargetVisibility"
+
+    TonightTargetList:
+      type: object
+      additionalProperties: false
+      required: [items, evaluatedAt]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TonightTarget"
+        evaluatedAt:
+          type: string
+          format: date-time
+
+    # ---------------------------------------------------------------------------
+    # Observatory state
+    # ---------------------------------------------------------------------------
+
+    ObservatoryMode:
+      type: string
+      description: |
+        SIMULATED is the default implementation, always. Any interface fed by the
+        simulator must be visibly labelled SIMULATED OBSERVATORY. REAL is reachable
+        only through an explicit, attended operator action.
+      enum: [SIMULATED, REAL]
+
+    ObservatoryLinkState:
+      type: string
+      description: |
+        ONLINE = agent connected and heartbeating. DEGRADED = connected but a heartbeat
+        or device check is late. OFFLINE = no agent connection.
+      enum: [ONLINE, DEGRADED, OFFLINE]
+
+    WeatherStatus:
+      type: string
+      enum: [CLEAR, CLOUDY, UNSAFE, UNKNOWN]
+
+    WeatherSource:
+      type: string
+      description: Phase 1 requires OPERATOR at minimum. SENSOR only if a sensor is actually fitted.
+      enum: [OPERATOR, SENSOR]
+
+    WeatherState:
+      type: object
+      additionalProperties: false
+      required: [status, source, holdActive, updatedAt]
+      properties:
+        status:
+          $ref: "#/components/schemas/WeatherStatus"
+        source:
+          $ref: "#/components/schemas/WeatherSource"
+        holdActive:
+          type: boolean
+        note:
+          type: [string, "null"]
+        updatedAt:
+          type: string
+          format: date-time
+
+    DeviceHealth:
+      type: string
+      enum: [OK, DEGRADED, FAULT, DISCONNECTED, NOT_CONFIGURED]
+
+    DeviceStatus:
+      type: object
+      additionalProperties: false
+      required: [health]
+      properties:
+        health:
+          $ref: "#/components/schemas/DeviceHealth"
+        detail:
+          type: [string, "null"]
+          description: Short operator-facing description. Never a device address, port or credential.
+
+    PublicObservatoryStatus:
+      type: object
+      description: |
+        Everything a public page may know. Deliberately excludes coordinates precise
+        enough to be actionable, device identity, driver state and any address.
+      additionalProperties: false
+      required: [observatoryId, mode, link, weather, updatedAt]
+      properties:
+        observatoryId:
+          type: string
+          format: uuid
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+        link:
+          $ref: "#/components/schemas/ObservatoryLinkState"
+        weather:
+          $ref: "#/components/schemas/WeatherState"
+        missionInProgress:
+          type: boolean
+          default: false
+        currentTargetName:
+          type: [string, "null"]
+          description: Public-safe display name only, and only while a mission owner has opted in.
+        lastSuccessfulMissionAt:
+          type: [string, "null"]
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ObservatoryTelemetry:
+      type: object
+      description: Operator-grade telemetry. Delivered to the operator console and to the mission channel in reduced form.
+      additionalProperties: false
+      required: [mode, link, mount, camera, focuser, weather, reportedAt]
+      properties:
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+        link:
+          $ref: "#/components/schemas/ObservatoryLinkState"
+        mount:
+          $ref: "#/components/schemas/DeviceStatus"
+        camera:
+          $ref: "#/components/schemas/DeviceStatus"
+        focuser:
+          $ref: "#/components/schemas/DeviceStatus"
+        weather:
+          $ref: "#/components/schemas/WeatherState"
+        pointingEquatorial:
+          oneOf:
+            - $ref: "#/components/schemas/EquatorialCoordinates"
+            - type: "null"
+        pointingHorizontal:
+          oneOf:
+            - $ref: "#/components/schemas/HorizontalCoordinates"
+            - type: "null"
+        tracking:
+          type: [boolean, "null"]
+        parked:
+          type: [boolean, "null"]
+        slewing:
+          type: [boolean, "null"]
+        focuserPosition:
+          type: [integer, "null"]
+        ambientTemperatureC:
+          type: [number, "null"]
+        agentVersion:
+          type: [string, "null"]
+        reportedAt:
+          type: string
+          format: date-time
+
+    OperatorObservatoryState:
+      type: object
+      additionalProperties: false
+      required: [observatoryId, telemetry, safetyEnvelope, updatedAt]
+      properties:
+        observatoryId:
+          type: string
+          format: uuid
+        telemetry:
+          $ref: "#/components/schemas/ObservatoryTelemetry"
+        safetyEnvelope:
+          $ref: "#/components/schemas/SafetyEnvelopeConfig"
+        activeMissionId:
+          type: [string, "null"]
+          format: uuid
+        activeSessionId:
+          type: [string, "null"]
+          format: uuid
+        linkLatencyMs:
+          type: [integer, "null"]
+        lastHeartbeatAt:
+          type: [string, "null"]
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SetObservatoryModeRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, reason, attendedOperatorPresent]
+      properties:
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+        reason:
+          type: string
+          minLength: 8
+          description: Recorded verbatim in the audit log.
+        attendedOperatorPresent:
+          type: boolean
+          description: |
+            Must be true to select REAL. It asserts that a human operator is physically
+            present at the observatory for this action. A background or autonomous
+            process may never set it.
+
+    # ---------------------------------------------------------------------------
+    # Safety envelope
+    # ---------------------------------------------------------------------------
+
+    HorizonMaskEntry:
+      type: object
+      description: One bearing from the compass survey of the installation site.
+      additionalProperties: false
+      required: [azimuthDegrees, minAltitudeDegrees]
+      properties:
+        azimuthDegrees:
+          type: number
+          minimum: 0
+          exclusiveMaximum: 360
+        minAltitudeDegrees:
+          type: number
+          minimum: 0
+          maximum: 90
+
+    AzimuthSector:
+      type: object
+      description: Inclusive-start, exclusive-end sector, measured clockwise from north.
+      additionalProperties: false
+      required: [fromDegrees, toDegrees]
+      properties:
+        fromDegrees:
+          type: number
+          minimum: 0
+          exclusiveMaximum: 360
+        toDegrees:
+          type: number
+          minimum: 0
+          exclusiveMaximum: 360
+
+    SafetyEnvelopeConfig:
+      type: object
+      description: |
+        The numbers that stop the telescope destroying itself. Enforced by pure
+        functions in the agent and independently pre-checked by the cloud. Every field
+        here is a measured or surveyed value for one physical installation. Nothing in
+        this schema may carry a shipped default that would let an unmeasured system
+        move.
+      additionalProperties: false
+      required:
+        - observatoryId
+        - minAltitudeDegrees
+        - maxAltitudeDegrees
+        - horizonMask
+        - forbiddenAzimuthSectors
+        - sunExclusionDegrees
+        - daylightLockSunAltitudeDegrees
+        - nudgeMaxDegrees
+        - nudgeRateDegreesPerSecond
+        - slewTimeoutSeconds
+        - heartbeatLossSeconds
+        - linkDeadSeconds
+        - refocusTemperatureDeltaC
+        - updatedAt
+      properties:
+        observatoryId:
+          type: string
+          format: uuid
+        minAltitudeDegrees:
+          type: number
+          minimum: 0
+          maximum: 90
+          description: Below this, extinction and local obstructions ruin the image.
+        maxAltitudeDegrees:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 90
+          description: |
+            MAX_ALT_SAFE. MEASURED from the physical optical train, never guessed and
+            never defaulted. `null` means UNMEASURED: while it is null, both cloud and
+            agent MUST refuse every slew command with SAFETY_NOT_CONFIGURED. Setting it
+            requires measuredAt and measuredBy.
+        maxAltitudeMeasuredAt:
+          type: [string, "null"]
+          format: date-time
+        maxAltitudeMeasuredBy:
+          type: [string, "null"]
+          description: Identity of the operator who performed the physical clearance measurement.
+        maxAltitudeMeasurementNote:
+          type: [string, "null"]
+          description: How the value was obtained, including the clearance actually observed.
+        horizonMask:
+          type: array
+          description: Minimum altitude by bearing, built from the site compass survey.
+          items:
+            $ref: "#/components/schemas/HorizonMaskEntry"
+        forbiddenAzimuthSectors:
+          type: array
+          description: Cable-wrap exclusion sectors. The mount routes the long way round rather than crossing one.
+          items:
+            $ref: "#/components/schemas/AzimuthSector"
+        sunExclusionDegrees:
+          type: number
+          minimum: 0
+          maximum: 180
+          description: |
+            Hard block on any coordinate within this angle of the Sun, computed
+            independently by cloud and agent. Never overridable, including by an
+            operator override.
+        daylightLockSunAltitudeDegrees:
+          type: number
+          description: |
+            No customer mission may start while the Sun is above this altitude. An
+            operator override is permitted for attended terrestrial testing and remains
+            Sun-bounded.
+        nudgeMaxDegrees:
+          type: number
+          exclusiveMinimum: 0
+          description: Cumulative offset a customer may apply from the locked target before the control re-centres.
+        nudgeRateDegreesPerSecond:
+          type: number
+          exclusiveMinimum: 0
+          description: Discrete bounded steps only. No continuous slew is ever exposed to a customer.
+        slewTimeoutSeconds:
+          type: integer
+          exclusiveMinimum: 0
+        heartbeatLossSeconds:
+          type: integer
+          exclusiveMinimum: 0
+          description: Heartbeat gap after which capture stops and the operator is alerted.
+        linkDeadSeconds:
+          type: integer
+          exclusiveMinimum: 0
+          description: Link gap after which the agent Parks unconditionally, with no cloud involvement.
+        refocusTemperatureDeltaC:
+          type: number
+          exclusiveMinimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+
+    SetWeatherHoldRequest:
+      type: object
+      additionalProperties: false
+      required: [holdActive, status]
+      properties:
+        holdActive:
+          type: boolean
+        status:
+          $ref: "#/components/schemas/WeatherStatus"
+        note:
+          type: [string, "null"]
+
+    # ---------------------------------------------------------------------------
+    # Slots, bookings, payment
+    # ---------------------------------------------------------------------------
+
+    Slot:
+      type: object
+      additionalProperties: false
+      required: [startAt, endAt, durationMinutes, available, priceMinor, currency]
+      properties:
+        startAt:
+          type: string
+          format: date-time
+        endAt:
+          type: string
+          format: date-time
+        durationMinutes:
+          type: integer
+          exclusiveMinimum: 0
+        available:
+          type: boolean
+        priceMinor:
+          type: integer
+          minimum: 0
+          description: Price in the minor unit of `currency` (tetri for GEL). Never a float.
+        currency:
+          $ref: "#/components/schemas/Currency"
+        unavailableReason:
+          oneOf:
+            - $ref: "#/components/schemas/SlotUnavailableReason"
+            - type: "null"
+
+    SlotUnavailableReason:
+      type: string
+      enum:
+        - ALREADY_BOOKED
+        - OUTSIDE_ASTRONOMICAL_DARKNESS
+        - WEATHER_HOLD
+        - OBSERVATORY_OFFLINE
+        - MAINTENANCE
+        - IN_THE_PAST
+
+    SlotList:
+      type: object
+      additionalProperties: false
+      required: [date, items]
+      properties:
+        date:
+          type: string
+          format: date
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Slot"
+
+    BookingStatus:
+      type: string
+      enum:
+        - PENDING_PAYMENT
+        - CONFIRMED
+        - CANCELLED
+        - EXPIRED
+        - REFUNDED
+
+    Booking:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          userId,
+          targetId,
+          slotStartAt,
+          durationMinutes,
+          status,
+          priceMinor,
+          currency,
+          createdAt,
+        ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        targetId:
+          type: string
+          format: uuid
+        slotStartAt:
+          type: string
+          format: date-time
+        durationMinutes:
+          type: integer
+          exclusiveMinimum: 0
+        status:
+          $ref: "#/components/schemas/BookingStatus"
+        priceMinor:
+          type: integer
+          minimum: 0
+        currency:
+          $ref: "#/components/schemas/Currency"
+        paymentId:
+          type: [string, "null"]
+          format: uuid
+        missionId:
+          type: [string, "null"]
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateBookingRequest:
+      type: object
+      additionalProperties: false
+      required: [targetId, slotStartAt, durationMinutes]
+      properties:
+        targetId:
+          type: string
+          format: uuid
+        slotStartAt:
+          type: string
+          format: date-time
+        durationMinutes:
+          type: integer
+          exclusiveMinimum: 0
+        locale:
+          $ref: "#/components/schemas/Locale"
+
+    CancelBookingRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+
+    PaymentProvider:
+      type: string
+      description: |
+        SANDBOX is the development and CI provider. It is never selectable in a
+        production environment and a production payment success is never simulated.
+      enum: [SANDBOX, BOG_IPAY]
+
+    PaymentStatus:
+      type: string
+      enum: [PENDING, AUTHORIZED, CAPTURED, FAILED, REFUNDED]
+
+    PaymentIntent:
+      type: object
+      description: |
+        The minimum a client needs to continue a payment. `redirectUrl` is supplied by
+        the provider. No provider-specific field is modelled here because none has been
+        confirmed against provider documentation.
+      additionalProperties: false
+      required: [paymentId, provider, status]
+      properties:
+        paymentId:
+          type: string
+          format: uuid
+        provider:
+          $ref: "#/components/schemas/PaymentProvider"
+        status:
+          $ref: "#/components/schemas/PaymentStatus"
+        redirectUrl:
+          type: [string, "null"]
+          format: uri
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+
+    BookingWithPaymentIntent:
+      type: object
+      additionalProperties: false
+      required: [booking, paymentIntent]
+      properties:
+        booking:
+          $ref: "#/components/schemas/Booking"
+        paymentIntent:
+          $ref: "#/components/schemas/PaymentIntent"
+
+    BookingPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Booking"
+        page:
+          $ref: "#/components/schemas/PageMeta"
+
+    PaymentWebhookEnvelope:
+      type: object
+      description: |
+        The provider's body is opaque on purpose. The cloud verifies the signature over
+        the raw body, then maps the payload to Darkview's own Payment record. Do not add
+        provider fields to this schema before they are confirmed against the provider's
+        published documentation.
+      additionalProperties: false
+      required: [provider, payload]
+      properties:
+        provider:
+          $ref: "#/components/schemas/PaymentProvider"
+        payload:
+          type: object
+          additionalProperties: true
+          description: Provider-defined, unvalidated by Darkview beyond signature verification.
+
+    PaymentWebhookAck:
+      type: object
+      additionalProperties: false
+      required: [received]
+      properties:
+        received:
+          type: boolean
+
+    # ---------------------------------------------------------------------------
+    # Mission
+    # ---------------------------------------------------------------------------
+
+    MissionState:
+      type: string
+      description: |
+        The authoritative mission state machine, exactly as enumerated in CLAUDE.md.
+
+        Primary:  REQUESTED -> SCHEDULED -> PREPARING -> SLEWING -> VERIFYING ->
+                  CENTERING -> OBSERVING -> CAPTURING -> PROCESSING -> COMPLETE
+        Failure / hold: WEATHER_HOLD, NOT_VISIBLE, HARDWARE_ERROR, CANCELLED, FAILED
+
+        VERIFYING is the ASTAP plate-solve step. CENTERING applies the solved offset and
+        re-slews, bounded to three iterations. Any state may enter a failure or hold
+        state, and every path out of one ends at Park.
+
+        Resolved by docs/decisions/ADR-004-mission-state-machine.md (2026-08-31). This
+        enum matches CLAUDE.md and nothing else. The Build Plan's LOCKED and DELIVERED
+        are not states -- "Target locked" and "LIVE" are display labels mapped in the
+        web layer. Its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as
+        MissionFailureReason detail on a state above, never as states.
+      enum:
+        - REQUESTED
+        - SCHEDULED
+        - PREPARING
+        - SLEWING
+        - VERIFYING
+        - CENTERING
+        - OBSERVING
+        - CAPTURING
+        - PROCESSING
+        - COMPLETE
+        - WEATHER_HOLD
+        - NOT_VISIBLE
+        - HARDWARE_ERROR
+        - CANCELLED
+        - FAILED
+
+    MissionFailureReason:
+      type: string
+      description: |
+        Diagnostic detail attached to a failure or hold state. This is NOT a state and
+        must never be used as one, mapped into MissionState, or displayed as a stage in
+        a progress indicator.
+      enum:
+        - PLATE_SOLVE_FAILED
+        - SLEW_TIMEOUT
+        - CENTERING_ITERATIONS_EXHAUSTED
+        - TRACKING_LOST
+        - MOUNT_FAULT
+        - CAMERA_FAULT
+        - FOCUSER_FAULT
+        - AGENT_LINK_LOST
+        - HEARTBEAT_LOST
+        - SAFETY_REFUSED
+        - SAFETY_ENVELOPE_UNMEASURED
+        - TARGET_SET_BELOW_LIMIT
+        - WEATHER_UNSAFE
+        - SESSION_EXPIRED
+        - OPERATOR_ABORT
+        - CUSTOMER_CANCELLED
+        - PAYMENT_FAILED
+
+    Mission:
+      type: object
+      additionalProperties: false
+      required: [id, userId, bookingId, targetId, observatoryId, state, mode, requestedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        bookingId:
+          type: string
+          format: uuid
+        targetId:
+          type: string
+          format: uuid
+        observatoryId:
+          type: string
+          format: uuid
+        state:
+          $ref: "#/components/schemas/MissionState"
+        failureReason:
+          oneOf:
+            - $ref: "#/components/schemas/MissionFailureReason"
+            - type: "null"
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+        scheduledStartAt:
+          type: [string, "null"]
+          format: date-time
+        requestedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: [string, "null"]
+          format: date-time
+        endedAt:
+          type: [string, "null"]
+          format: date-time
+        captureIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        observable:
+          type: boolean
+          default: false
+          description: |
+            Whether the controller has opted this session in to being observed. Sessions
+            are PRIVATE by default (ADR-007). Only the session owner may change it.
+        observerCapacity:
+          type: integer
+          minimum: 0
+          maximum: 5
+          default: 5
+          description: Hard server-side cap on concurrent observers. Never exceeds 5 (ADR-007).
+        observerCount:
+          type: integer
+          minimum: 0
+          description: Observers currently attached. Never exceeds observerCapacity.
+
+    MissionPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Mission"
+        page:
+          $ref: "#/components/schemas/PageMeta"
+
+    SessionRole:
+      type: string
+      description: |
+        Who a person is on a live mission. Exactly one CONTROLLER exists at a time -- that
+        is the session owner, and the only identity for which the cloud will mint a
+        CommandEnvelope. An OBSERVER watches and can never command: the agent rejects any
+        envelope whose sessionId is not the current owner, independently of the cloud.
+      enum: [CONTROLLER, OBSERVER]
+
+    MissionObserver:
+      type: object
+      description: A paid, view-only seat on a session somebody else controls (ADR-007).
+      additionalProperties: false
+      required: [id, missionId, userId, joinedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        missionId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        joinedAt:
+          type: string
+          format: date-time
+        leftAt:
+          type: [string, "null"]
+          format: date-time
+
+    MissionObserverList:
+      type: object
+      additionalProperties: false
+      required: [items, capacity]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MissionObserver"
+        capacity:
+          type: integer
+          minimum: 0
+          maximum: 5
+
+    MissionObservationSettings:
+      type: object
+      description: |
+        The controller's consent to being observed. Set only by the session owner.
+        Sessions are private by default and become observable only by this call.
+      additionalProperties: false
+      required: [observable]
+      properties:
+        observable:
+          type: boolean
+
+    MissionEventSource:
+      type: string
+      enum: [CLOUD, AGENT, OPERATOR]
+
+    MissionEvent:
+      type: object
+      description: One correlated entry in the mission audit trail. Never fabricated or backdated.
+      additionalProperties: false
+      required: [id, missionId, at, state, source]
+      properties:
+        id:
+          type: string
+          format: uuid
+        missionId:
+          type: string
+          format: uuid
+        at:
+          type: string
+          format: date-time
+        state:
+          $ref: "#/components/schemas/MissionState"
+        failureReason:
+          oneOf:
+            - $ref: "#/components/schemas/MissionFailureReason"
+            - type: "null"
+        source:
+          $ref: "#/components/schemas/MissionEventSource"
+        commandId:
+          type: [string, "null"]
+          format: uuid
+        detail:
+          type: [string, "null"]
+
+    MissionEventPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MissionEvent"
+        page:
+          $ref: "#/components/schemas/PageMeta"
+
+    MissionSession:
+      type: object
+      description: |
+        Proof that this client is the single active session owner. The session
+        identifier is minted by the cloud and is required on every CommandEnvelope. It
+        is not a device credential and gives no access to hardware.
+      additionalProperties: false
+      required: [sessionId, missionId, userId, issuedAt, expiresAt, missionChannelUrl]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        missionId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        issuedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        missionChannelUrl:
+          type: string
+          description: Relative WSS path for this mission's client channel.
+        allowedCommands:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClientCommandType"
+
+    # ---------------------------------------------------------------------------
+    # Commands
+    # ---------------------------------------------------------------------------
+
+    CommandType:
+      type: string
+      description: |
+        The complete set of instruction types the cloud may send to the agent. A client
+        may only cause a subset of these to be minted; see ClientCommandType.
+      enum:
+        - GOTO
+        - NUDGE
+        - CAPTURE
+        - FOCUS
+        - ABORT
+        - PARK
+        - SET_PROFILE
+
+    ClientCommandType:
+      type: string
+      description: |
+        What a customer may ask for during a live observation. GOTO, FOCUS, PARK and
+        SET_PROFILE are never client-initiated: the target comes from the booking and
+        the rest are cloud or operator concerns. RECENTER is translated by the cloud
+        into a GOTO back to the booked target; it is not a free-form slew.
+      enum:
+        - NUDGE
+        - CAPTURE
+        - RECENTER
+        - ABORT
+
+    NudgeAxis:
+      type: string
+      enum: [ALTITUDE, AZIMUTH]
+
+    NudgeDirection:
+      type: string
+      enum: [POSITIVE, NEGATIVE]
+
+    FocusMode:
+      type: string
+      enum: [AUTOFOCUS, ABSOLUTE]
+
+    RegionOfInterest:
+      type: object
+      additionalProperties: false
+      required: [x, y, width, height]
+      properties:
+        x:
+          type: integer
+          minimum: 0
+        y:
+          type: integer
+          minimum: 0
+        width:
+          type: integer
+          exclusiveMinimum: 0
+        height:
+          type: integer
+          exclusiveMinimum: 0
+
+    GotoPayload:
+      type: object
+      additionalProperties: false
+      required: [kind, targetId, coordinates, opticalConfig, imagingProfile]
+      properties:
+        kind:
+          type: string
+          enum: [GOTO]
+        targetId:
+          type: string
+          format: uuid
+        coordinates:
+          $ref: "#/components/schemas/EquatorialCoordinates"
+        opticalConfig:
+          $ref: "#/components/schemas/OpticalConfig"
+        imagingProfile:
+          $ref: "#/components/schemas/ImagingProfile"
+        recenter:
+          type: boolean
+          default: false
+          description: True when this GOTO returns the mount to the booked target after customer nudges.
+
+    NudgePayload:
+      type: object
+      description: One discrete bounded step. Never a continuous slew.
+      additionalProperties: false
+      required: [kind, axis, direction, stepArcminutes]
+      properties:
+        kind:
+          type: string
+          enum: [NUDGE]
+        axis:
+          $ref: "#/components/schemas/NudgeAxis"
+        direction:
+          $ref: "#/components/schemas/NudgeDirection"
+        stepArcminutes:
+          type: number
+          exclusiveMinimum: 0
+          description: Bounded by SafetyEnvelopeConfig.nudgeMaxDegrees cumulatively and by nudgeRateDegreesPerSecond instantaneously.
+
+    CapturePayload:
+      type: object
+      description: |
+        Phase 1 capture is a short-exposure / live-stacking run, not a long exposure.
+        The requested integration is bounded by the imaging profile.
+      additionalProperties: false
+      required: [kind, imagingProfile]
+      properties:
+        kind:
+          type: string
+          enum: [CAPTURE]
+        imagingProfile:
+          $ref: "#/components/schemas/ImagingProfile"
+        requestedFrames:
+          type: [integer, "null"]
+          exclusiveMinimum: 0
+        targetIntegrationSeconds:
+          type: [number, "null"]
+          exclusiveMinimum: 0
+
+    FocusPayload:
+      type: object
+      additionalProperties: false
+      required: [kind, mode]
+      properties:
+        kind:
+          type: string
+          enum: [FOCUS]
+        mode:
+          $ref: "#/components/schemas/FocusMode"
+        absolutePosition:
+          type: [integer, "null"]
+          description: Required when mode is ABSOLUTE. The agent applies backlash compensation with a same-direction final approach.
+
+    AbortPayload:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [ABORT]
+        reason:
+          type: [string, "null"]
+
+    ParkPayload:
+      type: object
+      description: Park is the answer to every unresolved condition.
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [PARK]
+        reason:
+          type: [string, "null"]
+
+    SetProfilePayload:
+      type: object
+      additionalProperties: false
+      required: [kind, imagingProfile]
+      properties:
+        kind:
+          type: string
+          enum: [SET_PROFILE]
+        imagingProfile:
+          $ref: "#/components/schemas/ImagingProfile"
+        exposureMilliseconds:
+          type: [number, "null"]
+          exclusiveMinimum: 0
+          description: |
+            Short exposures only. Alt-azimuth field rotation, not the sensor, sets the
+            ceiling. Values beyond the profile's documented range are refused.
+        gain:
+          type: [integer, "null"]
+          minimum: 0
+        regionOfInterest:
+          oneOf:
+            - $ref: "#/components/schemas/RegionOfInterest"
+            - type: "null"
+
+    CommandPayload:
+      description: |
+        Discriminated by `kind`. `payload.kind` MUST equal the envelope's `type`; both
+        the cloud and the agent reject an envelope where they disagree.
+      oneOf:
+        - $ref: "#/components/schemas/GotoPayload"
+        - $ref: "#/components/schemas/NudgePayload"
+        - $ref: "#/components/schemas/CapturePayload"
+        - $ref: "#/components/schemas/FocusPayload"
+        - $ref: "#/components/schemas/AbortPayload"
+        - $ref: "#/components/schemas/ParkPayload"
+        - $ref: "#/components/schemas/SetProfilePayload"
+      discriminator:
+        propertyName: kind
+        mapping:
+          GOTO: "#/components/schemas/GotoPayload"
+          NUDGE: "#/components/schemas/NudgePayload"
+          CAPTURE: "#/components/schemas/CapturePayload"
+          FOCUS: "#/components/schemas/FocusPayload"
+          ABORT: "#/components/schemas/AbortPayload"
+          PARK: "#/components/schemas/ParkPayload"
+          SET_PROFILE: "#/components/schemas/SetProfilePayload"
+
+    CommandEnvelope:
+      type: object
+      description: |
+        The only structure by which anything may instruct the observatory.
+
+        Minted exclusively by the Darkview cloud. A browser or mobile client never
+        constructs one and never sees a device address inside one.
+
+        The agent enforces all of the following independently of the cloud:
+          - idempotent by commandId; a repeat of a seen commandId is ignored;
+          - rejected after expiresAt;
+          - rejected if sessionId is not the current session owner;
+          - rejected if userId does not match the session owner;
+          - rejected if missionId is not the mission the agent currently holds;
+          - rejected if the safety envelope refuses it, even when the cloud approved it.
+      additionalProperties: false
+      required:
+        [commandId, missionId, sessionId, userId, issuedAt, expiresAt, type, payload]
+      properties:
+        commandId:
+          type: string
+          format: uuid
+          description: Idempotency key. The agent keeps a seen-set so retries are safe.
+        missionId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        issuedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          description: Short-lived. A queued command must not fire after a reconnect.
+        type:
+          $ref: "#/components/schemas/CommandType"
+        payload:
+          $ref: "#/components/schemas/CommandPayload"
+        issuedByOperatorId:
+          type: [string, "null"]
+          format: uuid
+          description: Set only for an operator override. Present on every separately audited command.
+        overrideReason:
+          type: [string, "null"]
+          description: Required when issuedByOperatorId is set. Recorded verbatim in the audit log.
+
+    MissionCommandRequest:
+      type: object
+      description: |
+        Client intent. Deliberately does NOT contain commandId, sessionId, userId,
+        issuedAt or expiresAt: the cloud sets all of those. A client that supplies them
+        is rejected.
+      additionalProperties: false
+      required: [type]
+      properties:
+        type:
+          $ref: "#/components/schemas/ClientCommandType"
+        nudge:
+          oneOf:
+            - $ref: "#/components/schemas/NudgePayload"
+            - type: "null"
+        capture:
+          oneOf:
+            - $ref: "#/components/schemas/CapturePayload"
+            - type: "null"
+        reason:
+          type: [string, "null"]
+
+    CommandAcceptanceStatus:
+      type: string
+      enum: [ACCEPTED, REJECTED, DUPLICATE, EXPIRED, COMPLETED, FAILED]
+
+    CommandRejectionReason:
+      type: string
+      description: |
+        Why a command was refused. The SAFETY_ prefixed values are produced by the
+        agent's own envelope check and may occur even when the cloud approved the
+        command; that is the design, not a bug.
+      enum:
+        - DUPLICATE_COMMAND_ID
+        - COMMAND_EXPIRED
+        - WRONG_SESSION
+        - WRONG_USER
+        - WRONG_MISSION
+        - NO_ACTIVE_MISSION
+        - MISSION_ALREADY_ACTIVE
+        - PAYLOAD_TYPE_MISMATCH
+        - MALFORMED_PAYLOAD
+        - COMMAND_NOT_PERMITTED_FOR_CLIENT
+        - SAFETY_ENVELOPE_UNMEASURED
+        - SAFETY_BELOW_MIN_ALTITUDE
+        - SAFETY_ABOVE_MAX_ALTITUDE
+        - SAFETY_HORIZON_MASK
+        - SAFETY_FORBIDDEN_AZIMUTH
+        - SAFETY_SUN_EXCLUSION
+        - SAFETY_DAYLIGHT_LOCK
+        - SAFETY_NUDGE_LIMIT_EXCEEDED
+        - SAFETY_SLEW_RATE
+        - DEVICE_UNAVAILABLE
+        - MODE_NOT_PERMITTED
+        - WEATHER_HOLD_ACTIVE
+        - OBSERVATORY_OFFLINE
+
+    MissionCommandAccepted:
+      type: object
+      additionalProperties: false
+      required: [commandId, missionId, type, issuedAt, expiresAt, status]
+      properties:
+        commandId:
+          type: string
+          format: uuid
+        missionId:
+          type: string
+          format: uuid
+        type:
+          $ref: "#/components/schemas/CommandType"
+        issuedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        status:
+          $ref: "#/components/schemas/CommandAcceptanceStatus"
+        rejectionReason:
+          oneOf:
+            - $ref: "#/components/schemas/CommandRejectionReason"
+            - type: "null"
+
+    OperatorOverrideRequest:
+      type: object
+      description: |
+        Manual operator control. Still safety-bounded; the Sun exclusion is never
+        overridable. Requires a stated reason, which is stored in the audit log.
+      additionalProperties: false
+      required: [type, payload, reason]
+      properties:
+        missionId:
+          type: [string, "null"]
+          format: uuid
+          description: Null for a standalone maintenance action outside any mission.
+        type:
+          $ref: "#/components/schemas/CommandType"
+        payload:
+          $ref: "#/components/schemas/CommandPayload"
+        reason:
+          type: string
+          minLength: 8
+
+    # ---------------------------------------------------------------------------
+    # Captures
+    # ---------------------------------------------------------------------------
+
+    CaptureAssetKind:
+      type: string
+      description: |
+        IMAGE is the delivered, stretched, watermarked image. FITS is the real frame
+        data. UNMARKED is the stored copy without the overlay.
+      enum: [IMAGE, THUMBNAIL, FITS, UNMARKED]
+
+    CaptureVisibility:
+      type: string
+      description: PRIVATE by default. Publishing to the public gallery is opt-in.
+      enum: [PRIVATE, GALLERY]
+
+    Capture:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - missionId
+        - userId
+        - targetId
+        - capturedAt
+        - imagingProfile
+        - opticalConfig
+        - exposureMilliseconds
+        - gain
+        - framesStacked
+        - integrationSeconds
+        - fitsAvailable
+        - visibility
+        - mode
+      properties:
+        id:
+          type: string
+          format: uuid
+        missionId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        targetId:
+          type: string
+          format: uuid
+        capturedAt:
+          type: string
+          format: date-time
+        imagingProfile:
+          $ref: "#/components/schemas/ImagingProfile"
+        opticalConfig:
+          $ref: "#/components/schemas/OpticalConfig"
+        exposureMilliseconds:
+          type: number
+          exclusiveMinimum: 0
+        gain:
+          type: integer
+          minimum: 0
+        framesStacked:
+          type: integer
+          exclusiveMinimum: 0
+        integrationSeconds:
+          type: number
+          exclusiveMinimum: 0
+        widthPx:
+          type: [integer, "null"]
+        heightPx:
+          type: [integer, "null"]
+        solvedFocalLengthMm:
+          type: [number, "null"]
+          description: Read back from the plate solve. Confirms which optical configuration was actually in the train.
+        fitsAvailable:
+          type: boolean
+        visibility:
+          $ref: "#/components/schemas/CaptureVisibility"
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+          description: |
+            A capture produced by the simulator is permanently marked SIMULATED. It is
+            never presented as telescope output and never used as audit evidence of real
+            hardware.
+        thumbnailUrl:
+          type: [string, "null"]
+          format: uri
+          description: Signed, short-expiry URL. Never a public bucket path.
+
+    CapturePage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Capture"
+        page:
+          $ref: "#/components/schemas/PageMeta"
+
+    CaptureDownload:
+      type: object
+      additionalProperties: false
+      required: [kind, url, expiresAt]
+      properties:
+        kind:
+          $ref: "#/components/schemas/CaptureAssetKind"
+        url:
+          type: string
+          format: uri
+        expiresAt:
+          type: string
+          format: date-time
+
+    # ---------------------------------------------------------------------------
+    # Audit
+    # ---------------------------------------------------------------------------
+
+    AuditCategory:
+      type: string
+      enum:
+        - AUTH
+        - BOOKING
+        - PAYMENT
+        - MISSION
+        - COMMAND
+        - SAFETY
+        - OBSERVATORY_MODE
+        - OPERATOR_OVERRIDE
+        - AGENT_LINK
+
+    AuditEvent:
+      type: object
+      description: Append-only. Never edited, never backdated, never fabricated.
+      additionalProperties: false
+      required: [id, at, category, action]
+      properties:
+        id:
+          type: string
+          format: uuid
+        at:
+          type: string
+          format: date-time
+        category:
+          $ref: "#/components/schemas/AuditCategory"
+        action:
+          type: string
+        actorUserId:
+          type: [string, "null"]
+          format: uuid
+        missionId:
+          type: [string, "null"]
+          format: uuid
+        commandId:
+          type: [string, "null"]
+          format: uuid
+        detail:
+          type: object
+          additionalProperties: true
+          description: Structured detail. Never contains a secret, token or device address.
+
+    AuditEventPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+        page:
+          $ref: "#/components/schemas/PageMeta"
+
+    # ---------------------------------------------------------------------------
+    # WebSocket: observatory agent link  (/ws/agent)
+    # ---------------------------------------------------------------------------
+
+    WebSocketProtocolVersion:
+      type: string
+      description: Incremented on any breaking change to the agent link message set. The cloud refuses an agent whose version it does not support.
+      enum: ["1"]
+
+    AgentHello:
+      type: object
+      description: First message after the agent dials out and authenticates.
+      additionalProperties: false
+      required:
+        [
+          type,
+          messageId,
+          sentAt,
+          protocolVersion,
+          observatoryId,
+          agentVersion,
+          mode,
+          bootedAt,
+        ]
+      properties:
+        type:
+          type: string
+          enum: [AGENT_HELLO]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        protocolVersion:
+          $ref: "#/components/schemas/WebSocketProtocolVersion"
+        observatoryId:
+          type: string
+          format: uuid
+        agentVersion:
+          type: string
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+        bootedAt:
+          type: string
+          format: date-time
+        safetyEnvelopeConfigured:
+          type: boolean
+          description: False while maxAltitudeDegrees is unmeasured. The cloud must not schedule a mission against an agent reporting false.
+        resumeMissionId:
+          type: [string, "null"]
+          format: uuid
+          description: Set when the agent restarts holding a mission recovered from its local state store.
+
+    AgentHeartbeat:
+      type: object
+      description: Sent every 5 seconds. Its absence is what triggers the watchdog.
+      additionalProperties: false
+      required: [type, messageId, sentAt, sequence, uptimeSeconds]
+      properties:
+        type:
+          type: string
+          enum: [AGENT_HEARTBEAT]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        sequence:
+          type: integer
+          minimum: 0
+        uptimeSeconds:
+          type: integer
+          minimum: 0
+
+    AgentCommandAck:
+      type: object
+      description: |
+        The agent's independent verdict on one command. A REJECTED ack with a SAFETY_
+        reason after the cloud approved the command is the safety design working.
+      additionalProperties: false
+      required: [type, messageId, sentAt, commandId, status]
+      properties:
+        type:
+          type: string
+          enum: [AGENT_COMMAND_ACK]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        commandId:
+          type: string
+          format: uuid
+        missionId:
+          type: [string, "null"]
+          format: uuid
+        status:
+          $ref: "#/components/schemas/CommandAcceptanceStatus"
+        rejectionReason:
+          oneOf:
+            - $ref: "#/components/schemas/CommandRejectionReason"
+            - type: "null"
+        detail:
+          type: [string, "null"]
+
+    AgentStateDelta:
+      type: object
+      description: Emitted on the agent control loop. Carries telemetry and, if a mission is held, its state.
+      additionalProperties: false
+      required: [type, messageId, sentAt, telemetry]
+      properties:
+        type:
+          type: string
+          enum: [AGENT_STATE_DELTA]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        telemetry:
+          $ref: "#/components/schemas/ObservatoryTelemetry"
+        missionId:
+          type: [string, "null"]
+          format: uuid
+        missionState:
+          oneOf:
+            - $ref: "#/components/schemas/MissionState"
+            - type: "null"
+        failureReason:
+          oneOf:
+            - $ref: "#/components/schemas/MissionFailureReason"
+            - type: "null"
+        centeringIteration:
+          type: [integer, "null"]
+          minimum: 0
+          description: Current plate-solve / re-slew iteration, capped at three.
+        residualArcminutes:
+          type: [number, "null"]
+          description: Distance between the solved position and the target after the last iteration.
+
+    AgentMissionEvent:
+      type: object
+      description: A state transition the agent wants written to the mission audit trail.
+      additionalProperties: false
+      required: [type, messageId, sentAt, missionId, state, occurredAt]
+      properties:
+        type:
+          type: string
+          enum: [AGENT_MISSION_EVENT]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        state:
+          $ref: "#/components/schemas/MissionState"
+        failureReason:
+          oneOf:
+            - $ref: "#/components/schemas/MissionFailureReason"
+            - type: "null"
+        occurredAt:
+          type: string
+          format: date-time
+          description: When it actually happened on the observatory clock. Replayed unchanged after a reconnect; never rewritten to look contemporaneous.
+        commandId:
+          type: [string, "null"]
+          format: uuid
+        detail:
+          type: [string, "null"]
+
+    LiveFrameEncoding:
+      type: string
+      description: Phase 1 delivers MJPEG. WebRTC is a Phase 2 change and requires an approved decision record.
+      enum: [JPEG]
+
+    LiveFrameHeader:
+      type: object
+      description: |
+        Metadata for exactly one live-view frame. The encoded bytes follow as the very
+        next binary WebSocket frame on the same connection. Pixel data is never
+        base64-encoded into JSON.
+      additionalProperties: false
+      required:
+        [
+          type,
+          messageId,
+          sentAt,
+          missionId,
+          sequence,
+          capturedAt,
+          encoding,
+          widthPx,
+          heightPx,
+          byteLength,
+          exposureMilliseconds,
+          gain,
+          mode,
+        ]
+      properties:
+        type:
+          type: string
+          enum: [AGENT_LIVE_FRAME]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          minimum: 0
+        capturedAt:
+          type: string
+          format: date-time
+        encoding:
+          $ref: "#/components/schemas/LiveFrameEncoding"
+        widthPx:
+          type: integer
+          exclusiveMinimum: 0
+        heightPx:
+          type: integer
+          exclusiveMinimum: 0
+        byteLength:
+          type: integer
+          exclusiveMinimum: 0
+        exposureMilliseconds:
+          type: number
+          exclusiveMinimum: 0
+        gain:
+          type: integer
+          minimum: 0
+        stackedFrames:
+          type: [integer, "null"]
+          exclusiveMinimum: 0
+          description: Set when the frame is a live stack rather than a single sub-exposure.
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+          description: A frame produced by SimCamera is marked SIMULATED and any UI showing it must say so.
+
+    AgentCaptureReady:
+      type: object
+      description: A finished capture has been uploaded by the agent and is ready for the cloud to record.
+      additionalProperties: false
+      required:
+        [
+          type,
+          messageId,
+          sentAt,
+          missionId,
+          commandId,
+          capturedAt,
+          imagingProfile,
+          opticalConfig,
+          exposureMilliseconds,
+          gain,
+          framesStacked,
+          integrationSeconds,
+          imageStorageKey,
+          mode,
+        ]
+      properties:
+        type:
+          type: string
+          enum: [AGENT_CAPTURE_READY]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        commandId:
+          type: string
+          format: uuid
+        capturedAt:
+          type: string
+          format: date-time
+        imagingProfile:
+          $ref: "#/components/schemas/ImagingProfile"
+        opticalConfig:
+          $ref: "#/components/schemas/OpticalConfig"
+        exposureMilliseconds:
+          type: number
+          exclusiveMinimum: 0
+        gain:
+          type: integer
+          minimum: 0
+        framesStacked:
+          type: integer
+          exclusiveMinimum: 0
+        integrationSeconds:
+          type: number
+          exclusiveMinimum: 0
+        imageStorageKey:
+          type: string
+          description: Object storage key written by the agent. Not a URL and never a public path.
+        unmarkedStorageKey:
+          type: [string, "null"]
+        fitsStorageKey:
+          type: [string, "null"]
+        solvedFocalLengthMm:
+          type: [number, "null"]
+        widthPx:
+          type: [integer, "null"]
+        heightPx:
+          type: [integer, "null"]
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+
+    AgentErrorSeverity:
+      type: string
+      enum: [WARNING, ERROR, FATAL]
+
+    AgentError:
+      type: object
+      additionalProperties: false
+      required: [type, messageId, sentAt, severity, code, message]
+      properties:
+        type:
+          type: string
+          enum: [AGENT_ERROR]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        severity:
+          $ref: "#/components/schemas/AgentErrorSeverity"
+        code:
+          type: string
+        message:
+          type: string
+          description: Operator-facing. Never contains a token, credential or local address.
+        missionId:
+          type: [string, "null"]
+          format: uuid
+        commandId:
+          type: [string, "null"]
+          format: uuid
+
+    AgentToCloudMessage:
+      description: Every message the Observatory Agent may send over its outbound link.
+      oneOf:
+        - $ref: "#/components/schemas/AgentHello"
+        - $ref: "#/components/schemas/AgentHeartbeat"
+        - $ref: "#/components/schemas/AgentCommandAck"
+        - $ref: "#/components/schemas/AgentStateDelta"
+        - $ref: "#/components/schemas/AgentMissionEvent"
+        - $ref: "#/components/schemas/LiveFrameHeader"
+        - $ref: "#/components/schemas/AgentCaptureReady"
+        - $ref: "#/components/schemas/AgentError"
+      discriminator:
+        propertyName: type
+        mapping:
+          AGENT_HELLO: "#/components/schemas/AgentHello"
+          AGENT_HEARTBEAT: "#/components/schemas/AgentHeartbeat"
+          AGENT_COMMAND_ACK: "#/components/schemas/AgentCommandAck"
+          AGENT_STATE_DELTA: "#/components/schemas/AgentStateDelta"
+          AGENT_MISSION_EVENT: "#/components/schemas/AgentMissionEvent"
+          AGENT_LIVE_FRAME: "#/components/schemas/LiveFrameHeader"
+          AGENT_CAPTURE_READY: "#/components/schemas/AgentCaptureReady"
+          AGENT_ERROR: "#/components/schemas/AgentError"
+
+    CloudWelcome:
+      type: object
+      description: Cloud response to AgentHello. Establishes the mission the agent is expected to hold, if any.
+      additionalProperties: false
+      required: [type, messageId, sentAt, protocolVersion, serverTime]
+      properties:
+        type:
+          type: string
+          enum: [CLOUD_WELCOME]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        protocolVersion:
+          $ref: "#/components/schemas/WebSocketProtocolVersion"
+        serverTime:
+          type: string
+          format: date-time
+          description: For agent clock-skew detection. The agent never uses it to rewrite a recorded event time.
+        expectedMissionId:
+          type: [string, "null"]
+          format: uuid
+        heartbeatIntervalSeconds:
+          type: integer
+          exclusiveMinimum: 0
+          default: 5
+
+    CloudCommand:
+      type: object
+      description: The only way the cloud instructs the observatory.
+      additionalProperties: false
+      required: [type, messageId, sentAt, command]
+      properties:
+        type:
+          type: string
+          enum: [CLOUD_COMMAND]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        command:
+          $ref: "#/components/schemas/CommandEnvelope"
+
+    CloudHeartbeatAck:
+      type: object
+      additionalProperties: false
+      required: [type, messageId, sentAt, sequence]
+      properties:
+        type:
+          type: string
+          enum: [CLOUD_HEARTBEAT_ACK]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        sequence:
+          type: integer
+          minimum: 0
+
+    CloudSessionUpdate:
+      type: object
+      description: |
+        Tells the agent who the single active session owner is. The agent refuses any
+        command whose sessionId does not match the value it last received here, which is
+        what stops a stale browser tab.
+      additionalProperties: false
+      required: [type, messageId, sentAt, missionId]
+      properties:
+        type:
+          type: string
+          enum: [CLOUD_SESSION_UPDATE]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        sessionId:
+          type: [string, "null"]
+          format: uuid
+          description: Null revokes the session. The agent then accepts no client-originated command for this mission.
+        userId:
+          type: [string, "null"]
+          format: uuid
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+
+    CloudSafetyEnvelopeUpdate:
+      type: object
+      description: |
+        Distributes the measured envelope to the agent. The agent stores it locally and
+        keeps enforcing it after the cloud link dies. Receiving an envelope whose
+        maxAltitudeDegrees is null puts the agent in the refuse-all-slews state.
+      additionalProperties: false
+      required: [type, messageId, sentAt, envelope]
+      properties:
+        type:
+          type: string
+          enum: [CLOUD_SAFETY_ENVELOPE_UPDATE]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        envelope:
+          $ref: "#/components/schemas/SafetyEnvelopeConfig"
+
+    CloudError:
+      type: object
+      additionalProperties: false
+      required: [type, messageId, sentAt, code, message]
+      properties:
+        type:
+          type: string
+          enum: [CLOUD_ERROR]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        message:
+          type: string
+        fatal:
+          type: boolean
+          default: false
+          description: When true the agent closes the link, backs off and re-dials. It does not stop enforcing safety while disconnected.
+
+    CloudToAgentMessage:
+      description: Every message the cloud may send down the agent link.
+      oneOf:
+        - $ref: "#/components/schemas/CloudWelcome"
+        - $ref: "#/components/schemas/CloudCommand"
+        - $ref: "#/components/schemas/CloudHeartbeatAck"
+        - $ref: "#/components/schemas/CloudSessionUpdate"
+        - $ref: "#/components/schemas/CloudSafetyEnvelopeUpdate"
+        - $ref: "#/components/schemas/CloudError"
+      discriminator:
+        propertyName: type
+        mapping:
+          CLOUD_WELCOME: "#/components/schemas/CloudWelcome"
+          CLOUD_COMMAND: "#/components/schemas/CloudCommand"
+          CLOUD_HEARTBEAT_ACK: "#/components/schemas/CloudHeartbeatAck"
+          CLOUD_SESSION_UPDATE: "#/components/schemas/CloudSessionUpdate"
+          CLOUD_SAFETY_ENVELOPE_UPDATE: "#/components/schemas/CloudSafetyEnvelopeUpdate"
+          CLOUD_ERROR: "#/components/schemas/CloudError"
+
+    # ---------------------------------------------------------------------------
+    # WebSocket: mission client channel  (/ws/mission/{missionId})
+    # ---------------------------------------------------------------------------
+
+    MissionStateUpdate:
+      type: object
+      additionalProperties: false
+      required: [type, messageId, sentAt, missionId, state]
+      properties:
+        type:
+          type: string
+          enum: [MISSION_STATE]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        state:
+          $ref: "#/components/schemas/MissionState"
+        failureReason:
+          oneOf:
+            - $ref: "#/components/schemas/MissionFailureReason"
+            - type: "null"
+        remainingSeconds:
+          type: [integer, "null"]
+          minimum: 0
+
+    MissionTelemetryUpdate:
+      type: object
+      description: |
+        Client-safe telemetry. Deliberately narrower than ObservatoryTelemetry: no
+        device identity, no driver state, no address.
+      additionalProperties: false
+      required: [type, messageId, sentAt, missionId, mode, link]
+      properties:
+        type:
+          type: string
+          enum: [MISSION_TELEMETRY]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+        link:
+          $ref: "#/components/schemas/ObservatoryLinkState"
+        tracking:
+          type: [boolean, "null"]
+        centeringIteration:
+          type: [integer, "null"]
+          minimum: 0
+        residualArcminutes:
+          type: [number, "null"]
+        nudgeUsedDegrees:
+          type: [number, "null"]
+          minimum: 0
+        ambientTemperatureC:
+          type: [number, "null"]
+
+    MissionStreamInfo:
+      type: object
+      description: Where the client reads the live view. A short-expiry signed URL, never a device address.
+      additionalProperties: false
+      required: [type, messageId, sentAt, missionId, streamUrl, encoding, mode, expiresAt]
+      properties:
+        type:
+          type: string
+          enum: [MISSION_STREAM]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        streamUrl:
+          type: string
+          format: uri
+        encoding:
+          $ref: "#/components/schemas/LiveFrameEncoding"
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+        expiresAt:
+          type: string
+          format: date-time
+
+    MissionCaptureReady:
+      type: object
+      additionalProperties: false
+      required: [type, messageId, sentAt, missionId, capture]
+      properties:
+        type:
+          type: string
+          enum: [MISSION_CAPTURE_READY]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        capture:
+          $ref: "#/components/schemas/Capture"
+
+    MissionCommandResult:
+      type: object
+      description: The outcome of a command the client submitted over HTTP, delivered asynchronously.
+      additionalProperties: false
+      required: [type, messageId, sentAt, missionId, commandId, status]
+      properties:
+        type:
+          type: string
+          enum: [MISSION_COMMAND_RESULT]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        commandId:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/CommandAcceptanceStatus"
+        rejectionReason:
+          oneOf:
+            - $ref: "#/components/schemas/CommandRejectionReason"
+            - type: "null"
+
+    MissionChannelError:
+      type: object
+      additionalProperties: false
+      required: [type, messageId, sentAt, code, message]
+      properties:
+        type:
+          type: string
+          enum: [MISSION_ERROR]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        message:
+          type: string
+
+    MissionChannelMessage:
+      description: Everything the cloud pushes to a subscribed live-mission client.
+      oneOf:
+        - $ref: "#/components/schemas/MissionStateUpdate"
+        - $ref: "#/components/schemas/MissionTelemetryUpdate"
+        - $ref: "#/components/schemas/MissionStreamInfo"
+        - $ref: "#/components/schemas/MissionCaptureReady"
+        - $ref: "#/components/schemas/MissionCommandResult"
+        - $ref: "#/components/schemas/MissionChannelError"
+      discriminator:
+        propertyName: type
+        mapping:
+          MISSION_STATE: "#/components/schemas/MissionStateUpdate"
+          MISSION_TELEMETRY: "#/components/schemas/MissionTelemetryUpdate"
+          MISSION_STREAM: "#/components/schemas/MissionStreamInfo"
+          MISSION_CAPTURE_READY: "#/components/schemas/MissionCaptureReady"
+          MISSION_COMMAND_RESULT: "#/components/schemas/MissionCommandResult"
+          MISSION_ERROR: "#/components/schemas/MissionChannelError"
+
+    MissionClientSubscribe:
+      type: object
+      additionalProperties: false
+      required: [type, messageId, sentAt, missionId, sessionId]
+      properties:
+        type:
+          type: string
+          enum: [CLIENT_SUBSCRIBE]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+
+    MissionClientPing:
+      type: object
+      additionalProperties: false
+      required: [type, messageId, sentAt]
+      properties:
+        type:
+          type: string
+          enum: [CLIENT_PING]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+
+    MissionClientMessage:
+      description: |
+        The complete set of messages a client may send on the mission channel. It is
+        deliberately tiny: subscribe and keep-alive. A client may not send a
+        CommandEnvelope, a device instruction or any hardware-shaped value here.
+      oneOf:
+        - $ref: "#/components/schemas/MissionClientSubscribe"
+        - $ref: "#/components/schemas/MissionClientPing"
+      discriminator:
+        propertyName: type
+        mapping:
+          CLIENT_SUBSCRIBE: "#/components/schemas/MissionClientSubscribe"
+          CLIENT_PING: "#/components/schemas/MissionClientPing"
+
+    # ---------------------------------------------------------------------------
+    # Admin request bodies
+    # ---------------------------------------------------------------------------
+
+    AdminCancelMissionRequest:
+      type: object
+      additionalProperties: false
+      required: [reason, resolution]
+      properties:
+        reason:
+          type: string
+          minLength: 4
+        resolution:
+          type: string
+          enum: [REFUND, RESCHEDULE, NONE]
+
+    AdminUpdateTargetRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        imagingProfile:
+          $ref: "#/components/schemas/ImagingProfile"
+        opticalConfig:
+          $ref: "#/components/schemas/OpticalConfig"
+        minAltitudeDegrees:
+          type: number
+          minimum: 0
+          maximum: 90
+        expectedMissionMinutes:
+          type: integer
+          exclusiveMinimum: 0
+        previewImageUrl:
+          type: [string, "null"]
+          format: uri
+        descriptionEn:
+          type: [string, "null"]
+        descriptionKa:
+          type: [string, "null"]

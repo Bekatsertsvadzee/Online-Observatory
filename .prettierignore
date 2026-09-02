@@ -1,0 +1,18 @@
+.next
+coverage
+node_modules
+playwright-report
+packages/db/generated
+packages/contracts/generated
+test-results
+*.log
+*.pdf
+*.docx
+*.xlsx
+*.png
+*.jpg
+*.jpeg
+DARKVIEW — Codex Website Build Prompts.md
+___1Main FIles
+.venv
+logs

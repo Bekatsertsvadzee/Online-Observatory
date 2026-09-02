@@ -1,0 +1,20 @@
+.env
+.env.local
+.env.*.local
+.venv/
+__pycache__/
+codex-telegram-*.txt
+node_modules/
+.next/
+out/
+coverage/
+playwright-report/
+test-results/
+packages/db/generated/prisma/
+*.tsbuildinfo
+.DS_Store
+agent/.venv/
+
+# never commit commercial or personal material
+/private/
+*.xlsx
