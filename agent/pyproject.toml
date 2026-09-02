@@ -1,0 +1,38 @@
+[project]
+name = "darkview-agent"
+version = "0.1.0"
+description = "Darkview Observatory Agent"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # The email extra is required: the generated contract models use EmailStr.
+    "pydantic[email]>=2.9,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9",
+    "ruff>=0.7,<1",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["darkview_agent*", "contracts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# contracts/ is generated from contracts/openapi.yaml and never hand-edited.
+# Linting it would only invite someone to "fix" it.
+exclude = ["contracts", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

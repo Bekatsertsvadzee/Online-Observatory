@@ -1,5 +1,17 @@
-# Tooling for the Darkview Observatory Agent development environment.
+# Tooling and runtime for the Darkview Observatory Agent development environment.
 # Python 3.12 per CLAUDE.md. Create with:
 #   python3.12 -m venv agent/.venv
 #   agent/.venv/bin/pip install -r agent/requirements-dev.txt
+#
+# A venv does not survive being moved. If the repository folder is renamed or
+# relocated, delete agent/.venv and recreate it.
+
+# Contract code generation: produces agent/contracts/models.py from openapi.yaml.
 datamodel-code-generator[http]==0.76.0
+
+# Runtime. The email extra is required — the generated models use EmailStr.
+pydantic[email]==2.12.4
+
+# Test and lint.
+pytest==8.4.2
+ruff==0.14.4

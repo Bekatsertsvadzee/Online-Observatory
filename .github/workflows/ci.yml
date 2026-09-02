@@ -42,11 +42,20 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Lint (agent)
+        run: agent/.venv/bin/ruff check agent
+
       - name: Typecheck
         run: npm run typecheck
 
       - name: Unit tests
         run: npm test
+
+      # The agent never commands real hardware in CI. The simulator is the
+      # default implementation and these tests run against it, always.
+      - name: Unit tests (agent)
+        working-directory: agent
+        run: ../agent/.venv/bin/python -m pytest
 
       - name: Build
         run: npm run build
