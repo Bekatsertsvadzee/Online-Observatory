@@ -71,7 +71,9 @@ class LinkSession:
         self._agent_version = agent_version
         self._connect = connect
         self._clock = clock or SystemClock()
-        self._queue = queue or OutboundQueue()
+        # Not `queue or OutboundQueue()`: OutboundQueue defines __len__, so an
+        # empty one is falsy and an injected queue would be silently discarded.
+        self._queue = OutboundQueue() if queue is None else queue
         self._mode = mode
 
         self._state = LinkState.DISCONNECTED

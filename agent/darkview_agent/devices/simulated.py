@@ -140,8 +140,15 @@ class SimMount(MountDriver):
         Park is the recovery action on heartbeat loss and device fault. A park
         that could itself fail because of connection state would be useless in
         exactly the situation it exists for.
+
+        It stops motion inline rather than calling abort_slew(). Routing through
+        another method means a park can fail because that method failed, and the
+        one operation that must always work should not depend on anything else
+        working first.
         """
-        self.abort_slew()
+        self._slew_start = None
+        self._slew_from = None
+        self._slew_to = None
         self._altitude = PARK_ALTITUDE_DEGREES
         self._azimuth = PARK_AZIMUTH_DEGREES
         self._tracking = False

@@ -104,7 +104,9 @@ class CommandValidator:
         seen_capacity: int = 4096,
     ) -> None:
         self._envelope = envelope or SafetyEnvelope()
-        self._audit = audit or AuditLog()
+        # Not `audit or AuditLog()`: AuditLog defines __len__, so an empty one is
+        # falsy and an injected log would be silently discarded.
+        self._audit = AuditLog() if audit is None else audit
         self._seen: OrderedDict[str, Ack] = OrderedDict()
         self._seen_capacity = seen_capacity
         self._ownership: SessionOwnership | None = None

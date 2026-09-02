@@ -33,6 +33,9 @@ def build_config(
     daylight_lock_sun_altitude_degrees: float = -12.0,
     nudge_max_degrees: float = 0.5,
     nudge_rate_degrees_per_second: float = 0.1,
+    slew_timeout_seconds: int = 120,
+    heartbeat_loss_seconds: int = 15,
+    link_dead_seconds: int = 60,
 ) -> SafetyEnvelopeConfig:
     return SafetyEnvelopeConfig.model_validate(
         {
@@ -45,9 +48,9 @@ def build_config(
             "daylightLockSunAltitudeDegrees": daylight_lock_sun_altitude_degrees,
             "nudgeMaxDegrees": nudge_max_degrees,
             "nudgeRateDegreesPerSecond": nudge_rate_degrees_per_second,
-            "slewTimeoutSeconds": 120,
-            "heartbeatLossSeconds": 15,
-            "linkDeadSeconds": 60,
+            "slewTimeoutSeconds": slew_timeout_seconds,
+            "heartbeatLossSeconds": heartbeat_loss_seconds,
+            "linkDeadSeconds": link_dead_seconds,
             "refocusTemperatureDeltaC": 1.5,
             "updatedAt": datetime.now(UTC).isoformat(),
         }
