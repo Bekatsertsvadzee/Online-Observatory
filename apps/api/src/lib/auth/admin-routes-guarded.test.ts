@@ -53,7 +53,12 @@ describe("every admin route is behind the operator guard", () => {
     // Routes that are deliberately reachable without an operator role. Anything
     // added to the app tree that is not here and not under /admin must still make
     // its own authentication decision -- this list is the record of that decision.
-    const publicRoutes = new Set(["health", "me"]);
+    //
+    //   health   liveness only; reports nothing about the observatory
+    //   me       requires a session, but any role
+    //   targets  public by contract (security: []) -- choosing what to look at
+    //            does not require an account, and the catalogue is not secret
+    const publicRoutes = new Set(["health", "me", "targets"]);
 
     const topLevel = routeFilesUnder(appDirectory)
       .map((file) => path.relative(appDirectory, file).split(path.sep)[0])
