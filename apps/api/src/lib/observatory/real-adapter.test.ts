@@ -21,7 +21,7 @@ describe("RealObservatoryAdapter", () => {
       adapter.getCoordinates(),
       adapter.startMission({
         ...command,
-        target: { id: "saturn", catalogId: "SATURN", commonName: "Saturn" },
+        target: { id: "saturn", catalogId: "SATURN", nameEn: "Saturn" },
         coordinates: {
           rightAscensionHours: 23.4,
           declinationDegrees: -5.2,

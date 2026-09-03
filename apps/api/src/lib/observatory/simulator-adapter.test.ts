@@ -25,7 +25,7 @@ function startCommand(overrides: Partial<StartMissionCommand> = {}): StartMissio
     userId: "user-1",
     issuedAt: "2026-08-26T19:59:00.000Z",
     expiresAt: "2026-08-26T20:01:00.000Z",
-    target: { id: "saturn", catalogId: "SATURN", commonName: "Saturn" },
+    target: { id: "saturn", catalogId: "SATURN", nameEn: "Saturn" },
     coordinates: {
       rightAscensionHours: 23.4,
       declinationDegrees: -5.2,
