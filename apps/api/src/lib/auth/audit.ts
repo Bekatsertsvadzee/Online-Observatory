@@ -18,7 +18,7 @@ export async function recordAuthEvent(
 ) {
   await getDatabase().auditLog.create({
     data: {
-      category: "AUTHENTICATION",
+      category: "AUTH",
       action: type,
       actorUserId: options.userId,
       actorHash: options.actor ? hashAuditActor(options.actor) : undefined,
