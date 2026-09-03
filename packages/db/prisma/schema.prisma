@@ -306,6 +306,9 @@ model User {
   email               String                   @unique
   name                String
   role                UserRole                 @default(USER)
+  /// Contract: Locale. Darkview ships Georgian and English from the first commit,
+  /// so every user has one and the contract User requires it.
+  locale              Locale                   @default(en)
   emailVerifiedAt     DateTime?
   isDemo              Boolean                  @default(false)
   createdAt           DateTime                 @default(now())

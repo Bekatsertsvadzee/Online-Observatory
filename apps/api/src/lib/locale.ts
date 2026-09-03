@@ -1,8 +1,13 @@
-export const locales = ["en", "ka"] as const;
-export type Locale = (typeof locales)[number];
+import { Locale } from "@darkview/contracts";
+import type { Locale as LocaleValue } from "@darkview/contracts";
 
-export const defaultLocale: Locale = "en";
+/** Locales come from contracts/openapi.yaml, never from a second list here. */
+export const locales = Object.values(Locale);
 
-export function isLocale(value: string): value is Locale {
-  return locales.includes(value as Locale);
+export type { LocaleValue as Locale };
+
+export const defaultLocale: LocaleValue = Locale.EN;
+
+export function isLocale(value: string): value is LocaleValue {
+  return (locales as string[]).includes(value);
 }

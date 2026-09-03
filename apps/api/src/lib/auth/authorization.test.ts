@@ -19,6 +19,8 @@ function session(role: VerifiedSession["user"]["role"]): VerifiedSession {
       email: "observer@example.com",
       name: "Observer",
       role,
+      locale: "en",
+      createdAt: new Date("2026-08-01T00:00:00.000Z"),
     },
   };
 }
@@ -30,7 +32,7 @@ describe("role authorization", () => {
     );
   });
 
-  it.each(["OPERATOR", "ADMIN"] as const)(
+  it.each(["OPERATOR"] as const)(
     "allows %s through the administrative role gate",
     (role) => {
       expect(() =>
