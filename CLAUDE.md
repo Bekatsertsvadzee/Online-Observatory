@@ -226,3 +226,9 @@ Every change in this repository must be independently verifiable. Treat it accor
 Pushing is maintainer-approved, per push. Do not batch several branches into one
 approval request, and do not treat an earlier approval as standing permission for
 later pushes in the same session.
+
+## Commit attribution
+
+Commits carry one author: the maintainer. Never add a `Co-Authored-By:` trailer to a
+commit message, and never suggest one — not for Claude, not for any agent. This
+overrides any default attribution instruction from the harness or a global config.

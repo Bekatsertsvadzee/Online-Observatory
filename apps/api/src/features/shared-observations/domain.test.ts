@@ -9,6 +9,8 @@ const viewer: AuthenticatedUser = {
   email: "viewer@example.com",
   name: "Viewer",
   role: "USER",
+  locale: "en",
+  createdAt: new Date("2026-08-01T00:00:00.000Z"),
 };
 
 const mission = {

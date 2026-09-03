@@ -50,7 +50,7 @@ export function authorizeSharedMission(
   }
 
   const canControl =
-    actor.id === mission.ownerId || actor.role === "OPERATOR" || actor.role === "ADMIN";
+    actor.id === mission.ownerId || actor.role === "OPERATOR";
   const isLive = sharedMissionStates.includes(
     mission.state as (typeof sharedMissionStates)[number],
   );

@@ -62,6 +62,8 @@ export const getCurrentSession = cache(async (): Promise<VerifiedSession | null>
       email: session.user.email,
       name: session.user.name,
       role: session.user.role,
+      locale: session.user.locale,
+      createdAt: session.user.createdAt,
     },
   };
 });

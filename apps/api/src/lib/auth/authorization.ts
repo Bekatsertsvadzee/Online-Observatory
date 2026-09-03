@@ -34,4 +34,4 @@ export async function requireRole(locale: Locale, allowedRoles: readonly Role[])
   return session;
 }
 
-export const observatoryAdministrativeRoles = ["OPERATOR", "ADMIN"] as const;
+export const observatoryAdministrativeRoles = ["OPERATOR"] as const;

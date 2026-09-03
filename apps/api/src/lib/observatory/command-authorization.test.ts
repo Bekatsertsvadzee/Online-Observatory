@@ -16,6 +16,8 @@ function validContext(): TelescopeCommandAuthorizationContext {
       email: "observer@example.com",
       name: "Observer",
       role: "USER",
+      locale: "en",
+      createdAt: new Date("2026-08-01T00:00:00.000Z"),
     },
     mission: {
       id: "mission-1",
