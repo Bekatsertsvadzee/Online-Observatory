@@ -393,6 +393,12 @@ model Observatory {
   /// Contract: ObservatoryMode. SIMULATED is the default implementation, always.
   /// REAL is reachable only through an explicit, attended operator action.
   mode                ObservatoryMode         @default(SIMULATED)
+  /// SHA-256 of the agent device token presented on the /ws/agent handshake.
+  /// The token itself is never stored here and never logged: only the agent's
+  /// mini-PC and cloud secret storage hold it. Null means no agent may connect.
+  deviceTokenHash     String?                 @unique
+  /// Set when the agent link drops or misses heartbeats past the threshold.
+  linkLostAt          DateTime?
   isDemo              Boolean                 @default(false)
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt
@@ -405,6 +411,7 @@ model Observatory {
   privateSessions     PrivateSession[]
   observatoryCommands ObservatoryCommand[]
   safetyEnvelope      SafetyEnvelope?
+  agentMessages       AgentMessage[]
   weatherState        WeatherState?
   networkNode         ObservatoryNetworkNode?
 }
@@ -473,6 +480,21 @@ model WeatherState {
   setByUserId   String?       @db.Uuid
   updatedAt     DateTime      @updatedAt
   observatory   Observatory   @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
+}
+
+/// Every message the agent sends carries a messageId. The agent replays its queue
+/// after an outage, so the same message arrives more than once by design -- that is
+/// the recovery path working, not a fault. Recording the id makes ingestion
+/// idempotent: a replayed message is recognised and does not write a second row.
+model AgentMessage {
+  messageId     String      @id @db.Uuid
+  observatoryId String      @db.Uuid
+  type          String
+  sentAt        DateTime
+  receivedAt    DateTime    @default(now())
+  observatory   Observatory @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
+
+  @@index([observatoryId, receivedAt])
 }
 
 model Telescope {

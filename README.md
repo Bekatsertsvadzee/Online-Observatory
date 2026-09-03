@@ -62,7 +62,7 @@ Do not upgrade a major mid-phase.
 ```
 agent/               Observatory Agent (Python 3.12) + generated Pydantic
 apps/api/            REST API, authentication, booking, payment, orchestration
-apps/realtime/       observatory WebSocket service — created when DV-057 starts
+apps/realtime/       observatory WebSocket service — /ws/agent, its own process
 packages/db/         Prisma schema, migrations, seed, generated client
 packages/contracts/  Generated TypeScript + Zod  (never hand-edited)
 contracts/           openapi.yaml — the single source of truth
@@ -86,16 +86,29 @@ python3.12 -m venv agent/.venv
 agent/.venv/bin/pip install -r agent/requirements-dev.txt
 ```
 
+## Running the two processes
+
+The API and the observatory link are separate processes and are not interchangeable. The
+agent socket is long-lived; a serverless function cannot hold one, and `CLAUDE.md` forbids
+trying.
+
+```bash
+npm run dev --workspace @darkview/api        # :4000  REST
+npm run dev --workspace @darkview/realtime   # :4001  /ws/agent
+```
+
+The observatory dials out to the realtime service and presents its device token as
+`Authorization: Bearer <token>`. Nothing dials the observatory: it has no reachable
+address and no listening port. An observatory with no `deviceTokenHash` admits no agent.
+
+The development seed issues a known token for the demo observatory, printed when the seed
+runs. It is development-only — the seed refuses to run unless `NODE_ENV=development`.
+
 ## State of apps/api
 
-`apps/api/src` currently holds the server-side modules extracted from the original
-single-application prototype: authentication, session handling, the database client, the
-observatory adapters and the shared-observation logic. **No route handlers exist yet.**
-DV-050 and DV-051 add them, and the extracted modules are their starting point rather
-than finished work.
-
-Until those endpoints exist, `darkview-clients` compiles against the seam but cannot sign
-a user in. That is expected: this repository is built first.
+`apps/api/src` holds the server-side modules extracted from the original
+single-application prototype, plus the routes added since: `GET /health` and `GET /me`.
+The booking, mission and admin routes do not exist yet — DV-052 onward add them.
 
 ## Where to start
 
