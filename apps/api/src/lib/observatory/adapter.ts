@@ -38,8 +38,8 @@ export type ObservatoryStatus = {
 
 export type ObservatoryTarget = {
   id: string;
-  catalogId: string;
-  commonName: string;
+  catalogId: string | null;
+  nameEn: string;
 };
 
 export type ObservatoryCoordinates = {

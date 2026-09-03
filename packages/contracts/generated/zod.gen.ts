@@ -85,6 +85,33 @@ export const zTargetType = z.enum([
 ]);
 
 /**
+ * A body whose position is computed from ephemeris at request time. Phase 1
+ * offers the Moon and the four planets the Build Plan lists; the rest are
+ * named so the enum does not need a breaking change to add one.
+ *
+ */
+export const zSolarSystemBody = z.enum([
+    'MOON',
+    'MERCURY',
+    'VENUS',
+    'MARS',
+    'JUPITER',
+    'SATURN',
+    'URANUS',
+    'NEPTUNE'
+]);
+
+/**
+ * Where a target's position comes from. FIXED targets carry J2000
+ * coordinates. EPHEMERIS targets do not have any: the Moon and the planets
+ * move, and a stored coordinate for one is a statement that is false the day
+ * after it is written. Their position is computed at request time from
+ * solarSystemBody.
+ *
+ */
+export const zTargetPositionSource = z.enum(['FIXED', 'EPHEMERIS']);
+
+/**
  * The three optical configurations of the C6. Focal length and image scale follow
  * from the choice. F20_BARLOW = 3000 mm, F10_NATIVE = 1500 mm,
  * F6_3_REDUCER = 945 mm with the #94175 reducer.
@@ -111,6 +138,12 @@ export const zImagingProfile = z.enum([
     'BRIGHT_NEBULA'
 ]);
 
+/**
+ * A catalogue object. Exactly one of `coordinates` or `solarSystemBody` is
+ * present, decided by `positionSource`: a FIXED target has coordinates and no
+ * body, an EPHEMERIS target has a body and no coordinates.
+ *
+ */
 export const zTarget = z.object({
     id: z.uuid(),
     slug: z.string().regex(/^[a-z0-9-]+$/),
@@ -120,7 +153,9 @@ export const zTarget = z.object({
     nameKa: z.string(),
     descriptionEn: z.string().nullish(),
     descriptionKa: z.string().nullish(),
-    coordinates: zEquatorialCoordinates,
+    positionSource: zTargetPositionSource,
+    coordinates: zEquatorialCoordinates.nullish(),
+    solarSystemBody: zSolarSystemBody.nullish(),
     angularSizeArcmin: z.number().gt(0),
     magnitude: z.number(),
     opticalConfig: zOpticalConfig,

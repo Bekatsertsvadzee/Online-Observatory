@@ -117,6 +117,36 @@ class TargetType(StrEnum):
     bright_nebula = 'BRIGHT_NEBULA'
 
 
+class SolarSystemBody(StrEnum):
+    """
+    A body whose position is computed from ephemeris at request time. Phase 1
+    offers the Moon and the four planets the Build Plan lists; the rest are
+    named so the enum does not need a breaking change to add one.
+
+    """
+    moon = 'MOON'
+    mercury = 'MERCURY'
+    venus = 'VENUS'
+    mars = 'MARS'
+    jupiter = 'JUPITER'
+    saturn = 'SATURN'
+    uranus = 'URANUS'
+    neptune = 'NEPTUNE'
+
+
+class TargetPositionSource(StrEnum):
+    """
+    Where a target's position comes from. FIXED targets carry J2000
+    coordinates. EPHEMERIS targets do not have any: the Moon and the planets
+    move, and a stored coordinate for one is a statement that is false the day
+    after it is written. Their position is computed at request time from
+    solarSystemBody.
+
+    """
+    fixed = 'FIXED'
+    ephemeris = 'EPHEMERIS'
+
+
 class OpticalConfig(StrEnum):
     """
     The three optical configurations of the C6. Focal length and image scale follow
@@ -145,6 +175,12 @@ class ImagingProfile(StrEnum):
 
 
 class Target(BaseModel):
+    """
+    A catalogue object. Exactly one of `coordinates` or `solarSystemBody` is
+    present, decided by `positionSource`: a FIXED target has coordinates and no
+    body, an EPHEMERIS target has a body and no coordinates.
+
+    """
     model_config = ConfigDict(
         extra='forbid',
     )
@@ -156,7 +192,9 @@ class Target(BaseModel):
     name_ka: str = Field(..., alias='nameKa')
     description_en: str | None = Field(None, alias='descriptionEn')
     description_ka: str | None = Field(None, alias='descriptionKa')
-    coordinates: EquatorialCoordinates
+    position_source: TargetPositionSource = Field(..., alias='positionSource')
+    coordinates: EquatorialCoordinates | None = Field(None, description='J2000 coordinates. Present only when positionSource is FIXED.')
+    solar_system_body: SolarSystemBody | None = Field(None, alias='solarSystemBody', description='Present only when positionSource is EPHEMERIS.')
     angular_size_arcmin: float = Field(..., alias='angularSizeArcmin', gt=0.0)
     magnitude: float
     optical_config: OpticalConfig = Field(..., alias='opticalConfig')

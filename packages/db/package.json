@@ -7,7 +7,8 @@
     ".": "./generated/prisma/client.ts",
     "./enums": "./generated/prisma/enums.ts",
     "./schema": "./prisma/schema.prisma",
-    "./development-seed": "./prisma/development-seed.ts"
+    "./development-seed": "./prisma/development-seed.ts",
+    "./phase1-catalogue": "./prisma/phase1-catalogue.ts"
   },
   "scripts": {
     "db:generate": "prisma generate",
