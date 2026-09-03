@@ -21,6 +21,16 @@ export const DEMO_IDS = {
   },
 } as const;
 
+/**
+ * Device token for the demo observatory's agent link.
+ *
+ * Development only. seed.ts refuses to run unless NODE_ENV=development, and this
+ * value is deliberately unmistakable so it can never be confused for a real one.
+ * A production token is generated per observatory and stored in secret storage;
+ * only its SHA-256 is ever written to the database.
+ */
+export const DEMO_AGENT_DEVICE_TOKEN = "DEMO-DEVICE-TOKEN-NOT-FOR-ANY-REAL-OBSERVATORY";
+
 export const DEMO_TARGETS = [
   {
     id: "00000000-0000-4000-8000-000000000101",

@@ -1,9 +1,12 @@
 import "dotenv/config";
 
+import { createHash } from "node:crypto";
+
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "../generated/prisma/client";
 import {
+  DEMO_AGENT_DEVICE_TOKEN,
   DEMO_CAPTURES,
   DEMO_IDS,
   DEMO_MISSIONS,
@@ -101,6 +104,11 @@ async function seedDevelopmentDatabase() {
       });
     }
 
+    // Same algorithm the realtime service uses to verify the presented token.
+    const demoDeviceTokenHash = createHash("sha256")
+      .update(DEMO_AGENT_DEVICE_TOKEN, "utf8")
+      .digest("base64url");
+
     await database.observatory.upsert({
       where: { id: DEMO_IDS.observatory },
       create: {
@@ -115,6 +123,7 @@ async function seedDevelopmentDatabase() {
         timezone: "Asia/Tbilisi",
         status: "ONLINE",
         mode: "SIMULATED",
+        deviceTokenHash: demoDeviceTokenHash,
         isDemo: true,
       },
       update: {
@@ -122,6 +131,7 @@ async function seedDevelopmentDatabase() {
         nameKa: "[დემო] Darkview თბილისის ობსერვატორია",
         status: "ONLINE",
         mode: "SIMULATED",
+        deviceTokenHash: demoDeviceTokenHash,
         isDemo: true,
       },
     });
@@ -602,7 +612,8 @@ async function seedDevelopmentDatabase() {
     }
 
     console.info(
-      "Development seed complete: all observations are marked demo and simulated.",
+      "Development seed complete: all observations are marked demo and simulated.\n" +
+        `Agent device token for the demo observatory: ${DEMO_AGENT_DEVICE_TOKEN}`,
     );
   } finally {
     await database.$disconnect();
