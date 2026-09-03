@@ -1,0 +1,101 @@
+{
+  "source": "darkview_agent.safety -- NOAA/Meeus, independent of astronomy-engine",
+  "generatedBy": "scripts/generate-ephemeris-reference.py",
+  "site": {
+    "latitudeDegrees": 41.7151,
+    "longitudeDegrees": 44.8271
+  },
+  "note": "Altitudes are airless: the agent applies no refraction correction, and the cloud matches that convention for the Sun.",
+  "samples": [
+    {
+      "at": "2026-09-03T20:00:00+00:00",
+      "sun": {
+        "altitudeDegrees": -39.08670695646154,
+        "azimuthDegrees": 340.70034371151064
+      },
+      "targets": [
+        {
+          "slug": "m13-hercules-cluster",
+          "raHours": 16.6948,
+          "decDegrees": 36.4599,
+          "altitudeDegrees": 31.782646618418546,
+          "azimuthDegrees": 292.5934308959618
+        },
+        {
+          "slug": "m42-orion-nebula",
+          "raHours": 5.5881,
+          "decDegrees": -5.3911,
+          "altitudeDegrees": -22.869439779440935,
+          "azimuthDegrees": 76.14911652601636
+        },
+        {
+          "slug": "albireo",
+          "raHours": 19.512,
+          "decDegrees": 27.9597,
+          "altitudeDegrees": 58.35705916774737,
+          "azimuthDegrees": 255.56068347279876
+        }
+      ]
+    },
+    {
+      "at": "2026-12-21T22:00:00+00:00",
+      "sun": {
+        "altitudeDegrees": -67.73089302775756,
+        "azimuthDegrees": 39.574228747585266
+      },
+      "targets": [
+        {
+          "slug": "m13-hercules-cluster",
+          "raHours": 16.6948,
+          "decDegrees": 36.4599,
+          "altitudeDegrees": -5.567459189867318,
+          "azimuthDegrees": 27.529874953373774
+        },
+        {
+          "slug": "m42-orion-nebula",
+          "raHours": 5.5881,
+          "decDegrees": -5.3911,
+          "altitudeDegrees": 38.97507640723275,
+          "azimuthDegrees": 207.97729945561073
+        },
+        {
+          "slug": "albireo",
+          "raHours": 19.512,
+          "decDegrees": 27.9597,
+          "altitudeDegrees": -19.99279383810085,
+          "azimuthDegrees": 353.0756182163789
+        }
+      ]
+    },
+    {
+      "at": "2027-03-15T02:00:00+00:00",
+      "sun": {
+        "altitudeDegrees": -14.477856702794696,
+        "azimuthDegrees": 79.91360519577836
+      },
+      "targets": [
+        {
+          "slug": "m13-hercules-cluster",
+          "raHours": 16.6948,
+          "decDegrees": 36.4599,
+          "altitudeDegrees": 84.20880456626033,
+          "azimuthDegrees": 154.12717898155628
+        },
+        {
+          "slug": "m42-orion-nebula",
+          "raHours": 5.5881,
+          "decDegrees": -5.3911,
+          "altitudeDegrees": -50.79932637062932,
+          "azimuthDegrees": 333.3605849515724
+        },
+        {
+          "slug": "albireo",
+          "raHours": 19.512,
+          "decDegrees": 27.9597,
+          "altitudeDegrees": 50.80221668301409,
+          "azimuthDegrees": 95.69749116170493
+        }
+      ]
+    }
+  ]
+}
