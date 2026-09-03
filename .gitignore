@@ -18,3 +18,4 @@ agent/.venv/
 # never commit commercial or personal material
 /private/
 *.xlsx
+.coverage
