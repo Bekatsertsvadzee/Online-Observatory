@@ -5,12 +5,12 @@ import { createHash } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "../generated/prisma/client";
+import { PHASE1_TARGETS } from "./phase1-catalogue";
 import {
   DEMO_AGENT_DEVICE_TOKEN,
   DEMO_CAPTURES,
   DEMO_IDS,
   DEMO_MISSIONS,
-  DEMO_TARGETS,
   assertDevelopmentSeedData,
 } from "./development-seed";
 
@@ -251,9 +251,11 @@ async function seedDevelopmentDatabase() {
       });
     }
 
-    for (const target of DEMO_TARGETS) {
-      const { id, bestMonths, ...targetData } = target;
-      const data = { ...targetData, bestMonths: [...bestMonths] };
+    // The Phase 1 catalogue is real product data, not demo data: exactly the twelve
+    // objects of Build Plan section 01. previewImageUrl stays null until the
+    // operator has photographed the target through this telescope.
+    for (const target of PHASE1_TARGETS) {
+      const { id, ...data } = target;
       await database.target.upsert({
         where: { id },
         create: { id, ...data },
@@ -269,9 +271,9 @@ async function seedDevelopmentDatabase() {
         create: {
           targetId: id,
           observatoryId: DEMO_IDS.observatory,
-          isDemo: true,
+          isDemo: false,
         },
-        update: { isDemo: true },
+        update: { isDemo: false },
       });
     }
 
@@ -330,7 +332,7 @@ async function seedDevelopmentDatabase() {
       create: {
         id: DEMO_IDS.booking,
         userId: DEMO_IDS.observer,
-        targetId: DEMO_TARGETS[0].id,
+        targetId: PHASE1_TARGETS[0].id,
         observatoryId: DEMO_IDS.observatory,
         telescopeId: DEMO_IDS.telescope,
         missionId: DEMO_MISSIONS[3].id,
@@ -349,7 +351,7 @@ async function seedDevelopmentDatabase() {
       create: {
         id: DEMO_IDS.privateBooking,
         userId: DEMO_IDS.observer,
-        targetId: DEMO_TARGETS[0].id,
+        targetId: PHASE1_TARGETS[0].id,
         observatoryId: DEMO_IDS.observatory,
         telescopeId: DEMO_IDS.telescope,
         slotStartAt: new Date("2026-09-05T18:00:00.000Z"),
@@ -612,7 +614,8 @@ async function seedDevelopmentDatabase() {
     }
 
     console.info(
-      "Development seed complete: all observations are marked demo and simulated.\n" +
+      `Development seed complete: ${PHASE1_TARGETS.length} catalogue targets, ` +
+        "all observations marked demo and simulated.\n" +
         `Agent device token for the demo observatory: ${DEMO_AGENT_DEVICE_TOKEN}`,
     );
   } finally {

@@ -46,13 +46,6 @@ enum TargetType {
   BRIGHT_NEBULA
 }
 
-enum VisibilityRating {
-  EXCELLENT
-  GOOD
-  FAIR
-  UNAVAILABLE
-}
-
 enum MissionState {
   REQUESTED
   SCHEDULED
@@ -284,6 +277,24 @@ enum ImagingProfile {
   GLOBULAR_CLUSTER
   PLANETARY_NEBULA
   BRIGHT_NEBULA
+}
+
+/// Contract: TargetPositionSource.
+enum TargetPositionSource {
+  FIXED
+  EPHEMERIS
+}
+
+/// Contract: SolarSystemBody. A body whose position is computed, never stored.
+enum SolarSystemBody {
+  MOON
+  MERCURY
+  VENUS
+  MARS
+  JUPITER
+  SATURN
+  URANUS
+  NEPTUNE
 }
 
 /// Contract: OpticalConfig. Which optical train was actually in place.
@@ -542,35 +553,50 @@ model Camera {
   @@index([telescopeId])
 }
 
+/// Contract: Target. The Phase 1 catalogue is Build Plan section 01: twelve objects,
+/// all confirmed to fit an available field of view and all bright enough for a
+/// Bortle 8-9 sky.
+///
+/// Nothing here caches visibility. Both the contract and the Build Plan require
+/// altitude, Sun angle and Moon separation to be computed at request time from live
+/// ephemeris, never read from a stored column -- a target's observability changes
+/// minute by minute, and a stored answer is wrong almost immediately.
 model Target {
-  id                                  String              @id @default(uuid()) @db.Uuid
-  slug                                String              @unique
-  catalogId                           String              @unique
-  commonName                          String
-  georgianName                        String
-  type                                TargetType
-  rightAscensionHours                 Float
-  declinationDegrees                  Float
-  magnitude                           Float
-  angularSize                         String
-  descriptionEn                       String
-  descriptionKa                       String
-  minimumAltitude                     Float
-  preferredObservationDurationMinutes Int
-  imagePreset                         String
-  bestMonths                          Int[]
-  currentVisibility                   VisibilityRating
-  currentAltitude                     Float
-  qualityScore                        Int
-  isDemo                              Boolean             @default(false)
-  createdAt                           DateTime            @default(now())
-  updatedAt                           DateTime            @updatedAt
-  compatibleObservatories             TargetObservatory[]
-  bookings                            Booking[]
-  missions                            Mission[]
-  captures                            Capture[]
+  id                      String                @id @default(uuid()) @db.Uuid
+  slug                    String                @unique
+  catalogId               String?               @unique
+  nameEn                  String
+  nameKa                  String
+  type                    TargetType
+  /// FIXED targets carry J2000 coordinates; EPHEMERIS targets carry a body and
+  /// have their position computed at request time. Exactly one of the two below
+  /// is set, which target_position_source_consistent enforces in the database.
+  positionSource          TargetPositionSource
+  rightAscensionHours     Float?
+  declinationDegrees      Float?
+  solarSystemBody         SolarSystemBody?
+  angularSizeArcmin       Float
+  magnitude               Float
+  opticalConfig           OpticalConfig
+  imagingProfile          ImagingProfile
+  minAltitudeDegrees      Float
+  expectedMissionMinutes  Int
+  /// An image this telescope actually produced, or null. Never a stock image and
+  /// never output from another instrument: the Build Plan requires the operator to
+  /// photograph each target before it appears on the site.
+  previewImageUrl         String?
+  descriptionEn           String?
+  descriptionKa           String?
+  enabled                 Boolean               @default(true)
+  isDemo                  Boolean               @default(false)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  compatibleObservatories TargetObservatory[]
+  bookings                Booking[]
+  missions                Mission[]
+  captures                Capture[]
 
-  @@index([type, currentVisibility, qualityScore])
+  @@index([type, enabled])
 }
 
 model TargetObservatory {

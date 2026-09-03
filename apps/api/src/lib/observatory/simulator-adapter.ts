@@ -78,8 +78,10 @@ export class SimulatorObservatoryAdapter implements ObservatoryAdapter {
     return this.execute("startMission", command, () => {
       if (
         !command.target.id.trim() ||
-        !command.target.catalogId.trim() ||
-        !command.target.commonName.trim() ||
+        !command.target.nameEn.trim() ||
+        // catalogId is optional -- the Moon and the planets have no catalogue
+        // designation -- but an empty string is a bug, not an absent value.
+        command.target.catalogId?.trim() === "" ||
         command.coordinates.rightAscensionHours < 0 ||
         command.coordinates.rightAscensionHours >= 24 ||
         command.coordinates.declinationDegrees < -90 ||

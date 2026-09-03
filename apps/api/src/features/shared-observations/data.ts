@@ -58,8 +58,8 @@ export async function getSharedMissionView(missionId: string, actor: Authenticat
     id: mission.id,
     state: mission.state as (typeof sharedMissionStates)[number],
     target: {
-      commonName: mission.target.commonName,
-      georgianName: mission.target.georgianName,
+      nameEn: mission.target.nameEn,
+      nameKa: mission.target.nameKa,
       catalogId: mission.target.catalogId,
     },
     observatory: {

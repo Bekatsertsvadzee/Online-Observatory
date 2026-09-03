@@ -115,6 +115,51 @@ export const TargetType = {
 export type TargetType = typeof TargetType[keyof typeof TargetType];
 
 /**
+ * A body whose position is computed from ephemeris at request time. Phase 1
+ * offers the Moon and the four planets the Build Plan lists; the rest are
+ * named so the enum does not need a breaking change to add one.
+ *
+ */
+export const SolarSystemBody = {
+    MOON: 'MOON',
+    MERCURY: 'MERCURY',
+    VENUS: 'VENUS',
+    MARS: 'MARS',
+    JUPITER: 'JUPITER',
+    SATURN: 'SATURN',
+    URANUS: 'URANUS',
+    NEPTUNE: 'NEPTUNE'
+} as const;
+
+/**
+ * A body whose position is computed from ephemeris at request time. Phase 1
+ * offers the Moon and the four planets the Build Plan lists; the rest are
+ * named so the enum does not need a breaking change to add one.
+ *
+ */
+export type SolarSystemBody = typeof SolarSystemBody[keyof typeof SolarSystemBody];
+
+/**
+ * Where a target's position comes from. FIXED targets carry J2000
+ * coordinates. EPHEMERIS targets do not have any: the Moon and the planets
+ * move, and a stored coordinate for one is a statement that is false the day
+ * after it is written. Their position is computed at request time from
+ * solarSystemBody.
+ *
+ */
+export const TargetPositionSource = { FIXED: 'FIXED', EPHEMERIS: 'EPHEMERIS' } as const;
+
+/**
+ * Where a target's position comes from. FIXED targets carry J2000
+ * coordinates. EPHEMERIS targets do not have any: the Moon and the planets
+ * move, and a stored coordinate for one is a statement that is false the day
+ * after it is written. Their position is computed at request time from
+ * solarSystemBody.
+ *
+ */
+export type TargetPositionSource = typeof TargetPositionSource[keyof typeof TargetPositionSource];
+
+/**
  * The three optical configurations of the C6. Focal length and image scale follow
  * from the choice. F20_BARLOW = 3000 mm, F10_NATIVE = 1500 mm,
  * F6_3_REDUCER = 945 mm with the #94175 reducer.
@@ -157,6 +202,12 @@ export const ImagingProfile = {
  */
 export type ImagingProfile = typeof ImagingProfile[keyof typeof ImagingProfile];
 
+/**
+ * A catalogue object. Exactly one of `coordinates` or `solarSystemBody` is
+ * present, decided by `positionSource`: a FIXED target has coordinates and no
+ * body, an EPHEMERIS target has a body and no coordinates.
+ *
+ */
 export type Target = {
     id: string;
     slug: string;
@@ -169,7 +220,15 @@ export type Target = {
     nameKa: string;
     descriptionEn?: string | null;
     descriptionKa?: string | null;
-    coordinates: EquatorialCoordinates;
+    positionSource: TargetPositionSource;
+    /**
+     * J2000 coordinates. Present only when positionSource is FIXED.
+     */
+    coordinates?: EquatorialCoordinates | null;
+    /**
+     * Present only when positionSource is EPHEMERIS.
+     */
+    solarSystemBody?: SolarSystemBody | null;
     angularSizeArcmin: number;
     magnitude: number;
     opticalConfig: OpticalConfig;

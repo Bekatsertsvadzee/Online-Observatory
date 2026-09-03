@@ -212,7 +212,7 @@ export async function saveSharedCaptureAction(input: unknown) {
   const collectionKind =
     capture.target.type === "PLANET" || capture.target.type === "MOON"
       ? "SOLAR_SYSTEM"
-      : capture.target.catalogId.startsWith("M")
+      : capture.target.catalogId?.startsWith("M")
         ? "MESSIER_STARTER"
         : "DEEP_SKY";
   const collectionNames = {
