@@ -58,7 +58,10 @@ describe("every admin route is behind the operator guard", () => {
     //   me       requires a session, but any role
     //   targets  public by contract (security: []) -- choosing what to look at
     //            does not require an account, and the catalogue is not secret
-    const publicRoutes = new Set(["health", "me", "targets"]);
+    //   slots    public by contract (security: []) -- someone deciding whether
+    //            to book should not have to sign up to see what is available.
+    //            Reserving one is POST /bookings, which is not public.
+    const publicRoutes = new Set(["health", "me", "targets", "slots"]);
 
     const topLevel = routeFilesUnder(appDirectory)
       .map((file) => path.relative(appDirectory, file).split(path.sep)[0])
