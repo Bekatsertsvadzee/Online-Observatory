@@ -11,10 +11,14 @@ describe("development seed data", () => {
   it("marks catalog data as demo and observations as simulated", () => {
     expect(assertDevelopmentSeedData).not.toThrow();
     expect(DEMO_TARGETS.every((target) => target.isDemo)).toBe(true);
-    expect(DEMO_MISSIONS.every((mission) => mission.isDemo && mission.simulated)).toBe(
+    expect(
+      DEMO_MISSIONS.every((mission) => mission.isDemo && mission.mode === "SIMULATED"),
+    ).toBe(
       true,
     );
-    expect(DEMO_CAPTURES.every((capture) => capture.isDemo && capture.simulated)).toBe(
+    expect(
+      DEMO_CAPTURES.every((capture) => capture.isDemo && capture.mode === "SIMULATED"),
+    ).toBe(
       true,
     );
   });

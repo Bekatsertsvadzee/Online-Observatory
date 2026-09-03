@@ -7,10 +7,10 @@ datasource db {
   provider = "postgresql"
 }
 
-enum Role {
+/// Contract: UserRole. Members must match contracts/openapi.yaml exactly.
+enum UserRole {
   USER
   OPERATOR
-  ADMIN
 }
 
 enum AuthEventType {
@@ -36,13 +36,14 @@ enum EquipmentStatus {
   FAULT
 }
 
+/// Contract: TargetType.
 enum TargetType {
-  PLANET
   MOON
-  GALAXY
-  NEBULA
-  CLUSTER
-  STAR
+  PLANET
+  DOUBLE_STAR
+  GLOBULAR_CLUSTER
+  PLANETARY_NEBULA
+  BRIGHT_NEBULA
 }
 
 enum VisibilityRating {
@@ -70,10 +71,32 @@ enum MissionState {
   FAILED
 }
 
+/// Contract: MissionEventSource.
+/// Contract: MissionFailureReason. Detail carried alongside a failure state.
+enum MissionFailureReason {
+  PLATE_SOLVE_FAILED
+  SLEW_TIMEOUT
+  CENTERING_ITERATIONS_EXHAUSTED
+  TRACKING_LOST
+  MOUNT_FAULT
+  CAMERA_FAULT
+  FOCUSER_FAULT
+  AGENT_LINK_LOST
+  HEARTBEAT_LOST
+  SAFETY_REFUSED
+  SAFETY_ENVELOPE_UNMEASURED
+  TARGET_SET_BELOW_LIMIT
+  WEATHER_UNSAFE
+  SESSION_EXPIRED
+  OPERATOR_ABORT
+  CUSTOMER_CANCELLED
+  PAYMENT_FAILED
+}
+
 enum MissionEventSource {
-  SIMULATOR
-  OBSERVATORY
-  SYSTEM
+  CLOUD
+  AGENT
+  OPERATOR
 }
 
 enum MissionSharingMode {
@@ -97,12 +120,13 @@ enum CaptureAccessStatus {
   REVOKED
 }
 
-enum ReservationStatus {
-  REQUESTED
+/// Contract: BookingStatus.
+enum BookingStatus {
+  PENDING_PAYMENT
   CONFIRMED
-  ACTIVE
-  COMPLETE
   CANCELLED
+  EXPIRED
+  REFUNDED
 }
 
 enum ProcessingPreset {
@@ -111,10 +135,10 @@ enum ProcessingPreset {
   DETAIL
 }
 
+/// Contract: CaptureVisibility. GALLERY is the only sharing state in Phase 1.
 enum CaptureVisibility {
   PRIVATE
-  UNLISTED
-  PUBLIC
+  GALLERY
 }
 
 enum CollectionKind {
@@ -171,12 +195,17 @@ enum ObservatoryCommandStatus {
   FAILED
 }
 
+/// Contract: AuditCategory.
 enum AuditCategory {
-  AUTHENTICATION
-  AUTHORIZATION
-  ACCOUNT
+  AUTH
+  BOOKING
+  PAYMENT
   MISSION
-  OBSERVATORY
+  COMMAND
+  SAFETY
+  OBSERVATORY_MODE
+  OPERATOR_OVERRIDE
+  AGENT_LINK
 }
 
 enum NetworkNodeKind {
@@ -191,11 +220,92 @@ enum NetworkNodeApprovalStatus {
   SUSPENDED
 }
 
+/// Contract: Locale.
+enum Locale {
+  en
+  ka
+}
+
+/// Contract: Currency.
+enum Currency {
+  GEL
+}
+
+/// Contract: ObservatoryMode. SIMULATED is the default implementation, always.
+enum ObservatoryMode {
+  SIMULATED
+  REAL
+}
+
+/// Contract: WeatherStatus.
+enum WeatherStatus {
+  CLEAR
+  CLOUDY
+  UNSAFE
+  UNKNOWN
+}
+
+/// Contract: SessionRole. Exactly one CONTROLLER exists per mission at a time.
+enum SessionRole {
+  CONTROLLER
+  OBSERVER
+}
+
+/// Contract: SlotUnavailableReason.
+enum SlotUnavailableReason {
+  ALREADY_BOOKED
+  OUTSIDE_ASTRONOMICAL_DARKNESS
+  WEATHER_HOLD
+  OBSERVATORY_OFFLINE
+  MAINTENANCE
+  IN_THE_PAST
+}
+
+/// Contract: PaymentProvider. SANDBOX is never selectable in production.
+enum PaymentProvider {
+  SANDBOX
+  BOG_IPAY
+}
+
+/// Contract: PaymentStatus.
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+}
+
+/// Contract: ImagingProfile.
+enum ImagingProfile {
+  LUNAR
+  PLANETARY
+  DOUBLE_STAR
+  GLOBULAR_CLUSTER
+  PLANETARY_NEBULA
+  BRIGHT_NEBULA
+}
+
+/// Contract: OpticalConfig. Which optical train was actually in place.
+enum OpticalConfig {
+  F20_BARLOW
+  F10_NATIVE
+  F6_3_REDUCER
+}
+
+/// Contract: CaptureAssetKind.
+enum CaptureAssetKind {
+  IMAGE
+  THUMBNAIL
+  FITS
+  UNMARKED
+}
+
 model User {
   id                  String                   @id @default(uuid()) @db.Uuid
   email               String                   @unique
   name                String
-  role                Role                     @default(USER)
+  role                UserRole                 @default(USER)
   emailVerifiedAt     DateTime?
   isDemo              Boolean                  @default(false)
   createdAt           DateTime                 @default(now())
@@ -204,7 +314,8 @@ model User {
   sessions            Session[]
   verificationTokens  EmailVerificationToken[]
   missions            Mission[]
-  reservations        Reservation[]
+  bookings            Booking[]
+  payments            Payment[]
   captures            Capture[]
   collections         Collection[]
   subscription        Subscription?
@@ -276,7 +387,9 @@ model Observatory {
   longitude           Float
   timezone            String
   status              ObservatoryStatus       @default(OFFLINE)
-  minimumAltitude     Float                   @default(25)
+  /// Contract: ObservatoryMode. SIMULATED is the default implementation, always.
+  /// REAL is reachable only through an explicit, attended operator action.
+  mode                ObservatoryMode         @default(SIMULATED)
   isDemo              Boolean                 @default(false)
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt
@@ -284,11 +397,79 @@ model Observatory {
   cameras             Camera[]
   compatibleTargets   TargetObservatory[]
   missions            Mission[]
-  reservations        Reservation[]
+  bookings            Booking[]
   captures            Capture[]
   privateSessions     PrivateSession[]
   observatoryCommands ObservatoryCommand[]
+  safetyEnvelope      SafetyEnvelope?
+  weatherState        WeatherState?
   networkNode         ObservatoryNetworkNode?
+}
+
+/// Contract: SafetyEnvelopeConfig. The numbers that stop the telescope destroying
+/// itself. Every value here is measured or surveyed for one physical installation.
+///
+/// NOTHING IN THIS MODEL MAY CARRY A DEFAULT THAT WOULD LET AN UNMEASURED SYSTEM MOVE.
+/// maxAltitudeDegrees is deliberately nullable with no default: null means UNMEASURED,
+/// and while it is null both the cloud and the agent refuse every slew with
+/// SAFETY_NOT_CONFIGURED. Setting it requires measuredAt and measuredBy.
+model SafetyEnvelope {
+  id                            String              @id @default(uuid()) @db.Uuid
+  observatoryId                 String              @unique @db.Uuid
+  minAltitudeDegrees            Float
+  maxAltitudeDegrees            Float?
+  maxAltitudeMeasuredAt         DateTime?
+  maxAltitudeMeasuredBy         String?
+  maxAltitudeMeasurementNote    String?
+  sunExclusionDegrees           Float
+  daylightLockSunAltitudeDegrees Float
+  nudgeMaxDegrees               Float
+  nudgeRateDegreesPerSecond     Float
+  slewTimeoutSeconds            Int
+  heartbeatLossSeconds          Int
+  linkDeadSeconds               Int
+  refocusTemperatureDeltaC      Float
+  createdAt                     DateTime            @default(now())
+  updatedAt                     DateTime            @updatedAt
+  observatory                   Observatory         @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
+  horizonMask                   HorizonMaskEntry[]
+  forbiddenAzimuthSectors       AzimuthSector[]
+}
+
+/// Contract: HorizonMaskEntry. One bearing from the compass survey of the site.
+model HorizonMaskEntry {
+  id                 String         @id @default(uuid()) @db.Uuid
+  safetyEnvelopeId   String         @db.Uuid
+  azimuthDegrees     Float
+  minAltitudeDegrees Float
+  safetyEnvelope     SafetyEnvelope @relation(fields: [safetyEnvelopeId], references: [id], onDelete: Cascade)
+
+  @@unique([safetyEnvelopeId, azimuthDegrees])
+}
+
+/// Contract: AzimuthSector. Cable-wrap exclusion, inclusive start, exclusive end,
+/// measured clockwise from north.
+model AzimuthSector {
+  id               String         @id @default(uuid()) @db.Uuid
+  safetyEnvelopeId String         @db.Uuid
+  fromDegrees      Float
+  toDegrees        Float
+  safetyEnvelope   SafetyEnvelope @relation(fields: [safetyEnvelopeId], references: [id], onDelete: Cascade)
+
+  @@index([safetyEnvelopeId])
+}
+
+/// Contract: WeatherState. Phase 1 requires the manual operator hold; an automatic
+/// sensor-driven hold is only used if a sensor is actually fitted.
+model WeatherState {
+  id            String        @id @default(uuid()) @db.Uuid
+  observatoryId String        @unique @db.Uuid
+  status        WeatherStatus @default(UNKNOWN)
+  holdActive    Boolean       @default(false)
+  note          String?
+  setByUserId   String?       @db.Uuid
+  updatedAt     DateTime      @updatedAt
+  observatory   Observatory   @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
 }
 
 model Telescope {
@@ -306,7 +487,7 @@ model Telescope {
   observatory     Observatory              @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
   cameras         Camera[]
   missions        Mission[]
-  reservations    Reservation[]
+  bookings        Booking[]
   captures        Capture[]
   privateSessions PrivateSession[]
   primaryForNodes ObservatoryNetworkNode[]
@@ -360,6 +541,7 @@ model Target {
   createdAt                           DateTime            @default(now())
   updatedAt                           DateTime            @updatedAt
   compatibleObservatories             TargetObservatory[]
+  bookings                            Booking[]
   missions                            Mission[]
   captures                            Capture[]
 
@@ -384,10 +566,14 @@ model Mission {
   observatoryId       String               @db.Uuid
   telescopeId         String               @db.Uuid
   state               MissionState         @default(REQUESTED)
+  /// Contract: MissionFailureReason. Detail for a failure or hold state.
+  failureReason       MissionFailureReason?
   sharingMode         MissionSharingMode   @default(PRIVATE)
   joinPolicy          MissionJoinPolicy    @default(DISABLED)
   allowSharedCaptures Boolean              @default(false)
-  simulated           Boolean              @default(false)
+  /// Contract: ObservatoryMode. A mission run against the simulator is permanently
+  /// marked SIMULATED and is never presented as real telescope output.
+  mode                ObservatoryMode      @default(SIMULATED)
   isDemo              Boolean              @default(false)
   requestedAt         DateTime             @default(now())
   scheduledFor        DateTime?
@@ -401,7 +587,7 @@ model Mission {
   telescope           Telescope            @relation(fields: [telescopeId], references: [id], onDelete: Restrict)
   events              MissionEvent[]
   captures            Capture[]
-  reservation         Reservation?
+  booking             Booking?
   creditLedger        CreditLedger[]
   commands            ObservatoryCommand[]
   presences           MissionPresence[]
@@ -462,57 +648,123 @@ model MissionEvent {
   @@index([missionId, occurredAt])
 }
 
-model Reservation {
-  id             String            @id @default(uuid()) @db.Uuid
-  userId         String            @db.Uuid
-  observatoryId  String            @db.Uuid
-  telescopeId    String            @db.Uuid
-  missionId      String?           @unique @db.Uuid
-  startsAt       DateTime
-  endsAt         DateTime
-  status         ReservationStatus @default(REQUESTED)
-  isDemo         Boolean           @default(false)
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
-  user           User              @relation(fields: [userId], references: [id], onDelete: Restrict)
-  observatory    Observatory       @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
-  telescope      Telescope         @relation(fields: [telescopeId], references: [id], onDelete: Restrict)
-  mission        Mission?          @relation(fields: [missionId], references: [id], onDelete: SetNull)
-  privateSession PrivateSession?
+/// Contract: Booking. A slot is identified by its start instant and duration --
+/// slots are generated (DV-054), not stored, so there is no Slot table.
+///
+/// Two CONFIRMED bookings may never occupy the same slot. Prisma cannot express a
+/// partial unique index, so it is created as raw SQL in the migration:
+///   booking_confirmed_slot_unique ON (observatoryId, slotStartAt) WHERE status = 'CONFIRMED'
+model Booking {
+  id              String        @id @default(uuid()) @db.Uuid
+  userId          String        @db.Uuid
+  targetId        String        @db.Uuid
+  observatoryId   String        @db.Uuid
+  telescopeId     String        @db.Uuid
+  missionId       String?       @unique @db.Uuid
+  paymentId       String?       @unique @db.Uuid
+  slotStartAt     DateTime
+  durationMinutes Int
+  status          BookingStatus @default(PENDING_PAYMENT)
+  priceMinor      Int
+  currency        Currency      @default(GEL)
+  isDemo          Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  user            User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  target          Target        @relation(fields: [targetId], references: [id], onDelete: Restrict)
+  observatory     Observatory   @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
+  telescope       Telescope     @relation(fields: [telescopeId], references: [id], onDelete: Restrict)
+  mission         Mission?      @relation(fields: [missionId], references: [id], onDelete: SetNull)
+  payment         Payment?      @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  privateSession  PrivateSession?
 
-  @@index([observatoryId, startsAt, endsAt])
-  @@index([userId, startsAt])
+  @@index([observatoryId, slotStartAt])
+  @@index([userId, slotStartAt])
+  @@index([status])
 }
 
+/// Contract: PaymentIntent. No provider-specific column is modelled, because no
+/// provider documentation has been confirmed yet (DV-056).
+model Payment {
+  id            String          @id @default(uuid()) @db.Uuid
+  userId        String          @db.Uuid
+  provider      PaymentProvider
+  status        PaymentStatus   @default(PENDING)
+  amountMinor   Int
+  currency      Currency        @default(GEL)
+  providerRef   String?
+  redirectUrl   String?
+  failureReason String?
+  isDemo        Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  authorizedAt  DateTime?
+  capturedAt    DateTime?
+  refundedAt    DateTime?
+  user          User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  booking       Booking?
+
+  @@unique([provider, providerRef])
+  @@index([userId, createdAt])
+  @@index([status])
+}
+
+/// Contract: Capture. The frame metadata is what makes a capture evidence rather
+/// than a picture: a capture produced by the simulator is permanently marked
+/// SIMULATED and is never presented as telescope output.
 model Capture {
-  id               String              @id
-  userId           String              @db.Uuid
-  missionId        String              @db.Uuid
-  targetId         String              @db.Uuid
-  observatoryId    String              @db.Uuid
-  telescopeId      String              @db.Uuid
-  capturedAt       DateTime
-  processingPreset ProcessingPreset
-  thumbnailUrl     String
-  originalAssetUrl String
-  fitsUrl          String?
-  visibility       CaptureVisibility   @default(PRIVATE)
-  simulated        Boolean             @default(false)
-  isDemo           Boolean             @default(false)
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
+  id                  String              @id
+  userId              String              @db.Uuid
+  missionId           String              @db.Uuid
+  targetId            String              @db.Uuid
+  observatoryId       String              @db.Uuid
+  telescopeId         String              @db.Uuid
+  capturedAt          DateTime
+  imagingProfile      ImagingProfile
+  opticalConfig       OpticalConfig
+  exposureMilliseconds Float
+  gain                Int
+  framesStacked       Int
+  integrationSeconds  Float
+  widthPx             Int?
+  heightPx            Int?
+  solvedFocalLengthMm Float?
+  fitsAvailable       Boolean             @default(false)
+  processingPreset    ProcessingPreset
+  visibility          CaptureVisibility   @default(PRIVATE)
+  /// Contract: ObservatoryMode. Never defaulted to REAL.
+  mode                ObservatoryMode     @default(SIMULATED)
+  isDemo              Boolean             @default(false)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
   user             User                @relation(fields: [userId], references: [id], onDelete: Restrict)
   mission          Mission             @relation(fields: [missionId], references: [id], onDelete: Restrict)
   target           Target              @relation(fields: [targetId], references: [id], onDelete: Restrict)
   observatory      Observatory         @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
   telescope        Telescope           @relation(fields: [telescopeId], references: [id], onDelete: Restrict)
-  collections      CollectionCapture[]
-  access           CaptureAccess[]
+  collections         CollectionCapture[]
+  access              CaptureAccess[]
+  assets              CaptureAsset[]
 
   @@index([userId, capturedAt])
   @@index([missionId])
   @@index([targetId])
   @@index([observatoryId])
+}
+
+/// Contract: CaptureAssetKind. One stored object per kind. URLs are never public
+/// bucket paths -- the API signs a short-expiry URL at request time.
+model CaptureAsset {
+  id          String           @id @default(uuid()) @db.Uuid
+  captureId   String
+  kind        CaptureAssetKind
+  storageKey  String
+  byteSize    Int?
+  contentType String?
+  createdAt   DateTime         @default(now())
+  capture     Capture          @relation(fields: [captureId], references: [id], onDelete: Cascade)
+
+  @@unique([captureId, kind])
 }
 
 model CaptureAccess {
@@ -598,7 +850,7 @@ model PrivateSession {
   userId          String               @db.Uuid
   observatoryId   String               @db.Uuid
   telescopeId     String               @db.Uuid
-  reservationId   String?              @unique @db.Uuid
+  bookingId       String?              @unique @db.Uuid
   durationMinutes Int
   startsAt        DateTime
   endsAt          DateTime
@@ -609,7 +861,7 @@ model PrivateSession {
   user            User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
   observatory     Observatory          @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
   telescope       Telescope            @relation(fields: [telescopeId], references: [id], onDelete: Restrict)
-  reservation     Reservation?         @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  booking         Booking?             @relation(fields: [bookingId], references: [id], onDelete: SetNull)
 
   @@index([observatoryId, startsAt])
   @@index([userId, startsAt])

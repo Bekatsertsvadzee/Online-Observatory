@@ -2,7 +2,7 @@ import "dotenv/config";
 
 import { PrismaPg } from "@prisma/adapter-pg";
 
-import { PrismaClient } from "../src/generated/prisma/client";
+import { PrismaClient } from "../generated/prisma/client";
 import {
   DEMO_CAPTURES,
   DEMO_IDS,
@@ -114,16 +114,39 @@ async function seedDevelopmentDatabase() {
         longitude: 44.8271,
         timezone: "Asia/Tbilisi",
         status: "ONLINE",
-        minimumAltitude: 25,
+        mode: "SIMULATED",
         isDemo: true,
       },
       update: {
         nameEn: "[DEMO] Darkview Tbilisi Observatory",
         nameKa: "[დემო] Darkview თბილისის ობსერვატორია",
         status: "ONLINE",
-        minimumAltitude: 25,
+        mode: "SIMULATED",
         isDemo: true,
       },
+    });
+
+    // MAX_ALT_SAFE is MEASURED from the physical optical train (DV-034). It is null
+    // here and must stay null until that measurement exists: while it is null the
+    // system is UNMEASURED and both cloud and agent refuse every slew. A seeded
+    // value would defeat the entire safety envelope, so the seed must never set one.
+    await database.safetyEnvelope.upsert({
+      where: { observatoryId: DEMO_IDS.observatory },
+      create: {
+        id: DEMO_IDS.safetyEnvelope,
+        observatoryId: DEMO_IDS.observatory,
+        minAltitudeDegrees: 25,
+        maxAltitudeDegrees: null,
+        sunExclusionDegrees: 30,
+        daylightLockSunAltitudeDegrees: -12,
+        nudgeMaxDegrees: 0.5,
+        nudgeRateDegreesPerSecond: 0.25,
+        slewTimeoutSeconds: 120,
+        heartbeatLossSeconds: 15,
+        linkDeadSeconds: 45,
+        refocusTemperatureDeltaC: 1.5,
+      },
+      update: { minAltitudeDegrees: 25 },
     });
 
     await database.telescope.upsert({
@@ -277,14 +300,14 @@ async function seedDevelopmentDatabase() {
           id,
           missionId,
           state,
-          source: "SIMULATOR",
+          source: "AGENT",
           message,
           simulated: true,
           isDemo: true,
         },
         update: {
           state,
-          source: "SIMULATOR",
+          source: "AGENT",
           message,
           simulated: true,
           isDemo: true,
@@ -292,39 +315,45 @@ async function seedDevelopmentDatabase() {
       });
     }
 
-    await database.reservation.upsert({
-      where: { id: DEMO_IDS.reservation },
+    await database.booking.upsert({
+      where: { id: DEMO_IDS.booking },
       create: {
-        id: DEMO_IDS.reservation,
+        id: DEMO_IDS.booking,
         userId: DEMO_IDS.observer,
+        targetId: DEMO_TARGETS[0].id,
         observatoryId: DEMO_IDS.observatory,
         telescopeId: DEMO_IDS.telescope,
         missionId: DEMO_MISSIONS[3].id,
-        startsAt: new Date("2026-09-01T18:30:00.000Z"),
-        endsAt: new Date("2026-09-01T18:45:00.000Z"),
+        slotStartAt: new Date("2026-09-01T18:30:00.000Z"),
+        durationMinutes: 15,
         status: "CONFIRMED",
+        priceMinor: 4500,
+        currency: "GEL",
         isDemo: true,
       },
       update: { status: "CONFIRMED", isDemo: true },
     });
 
-    await database.reservation.upsert({
-      where: { id: DEMO_IDS.privateReservation },
+    await database.booking.upsert({
+      where: { id: DEMO_IDS.privateBooking },
       create: {
-        id: DEMO_IDS.privateReservation,
+        id: DEMO_IDS.privateBooking,
         userId: DEMO_IDS.observer,
+        targetId: DEMO_TARGETS[0].id,
         observatoryId: DEMO_IDS.observatory,
         telescopeId: DEMO_IDS.telescope,
-        startsAt: new Date("2026-09-05T18:00:00.000Z"),
-        endsAt: new Date("2026-09-05T19:00:00.000Z"),
+        slotStartAt: new Date("2026-09-05T18:00:00.000Z"),
+        durationMinutes: 60,
         status: "CONFIRMED",
+        priceMinor: 18000,
+        currency: "GEL",
         isDemo: true,
       },
       update: { status: "CONFIRMED", isDemo: true },
     });
 
     for (const capture of DEMO_CAPTURES) {
-      const { id, ...captureData } = capture;
+      const { id, thumbnailStorageKey, ...captureData } = capture;
       const data = {
         ...captureData,
         userId: DEMO_IDS.observer,
@@ -335,6 +364,11 @@ async function seedDevelopmentDatabase() {
         where: { id },
         create: { id, ...data },
         update: data,
+      });
+      await database.captureAsset.upsert({
+        where: { captureId_kind: { captureId: id, kind: "THUMBNAIL" } },
+        create: { captureId: id, kind: "THUMBNAIL", storageKey: thumbnailStorageKey },
+        update: { storageKey: thumbnailStorageKey },
       });
     }
 
@@ -501,7 +535,7 @@ async function seedDevelopmentDatabase() {
         userId: DEMO_IDS.observer,
         observatoryId: DEMO_IDS.observatory,
         telescopeId: DEMO_IDS.telescope,
-        reservationId: DEMO_IDS.privateReservation,
+        bookingId: DEMO_IDS.privateBooking,
         durationMinutes: 60,
         startsAt: new Date("2026-09-05T18:00:00.000Z"),
         endsAt: new Date("2026-09-05T19:00:00.000Z"),
@@ -540,7 +574,7 @@ async function seedDevelopmentDatabase() {
     const auditLogs = [
       {
         id: "00000000-0000-4000-8000-000000000501",
-        category: "ACCOUNT" as const,
+        category: "AUTH" as const,
         action: "DEMO_USER_SEEDED",
         actorUserId: DEMO_IDS.observer,
         entityType: "User",
@@ -549,7 +583,7 @@ async function seedDevelopmentDatabase() {
       },
       {
         id: "00000000-0000-4000-8000-000000000502",
-        category: "OBSERVATORY" as const,
+        category: "OBSERVATORY_MODE" as const,
         action: "SIMULATED_COMMAND_COMPLETED",
         actorUserId: DEMO_IDS.operator,
         entityType: "ObservatoryCommand",

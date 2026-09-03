@@ -24,7 +24,10 @@ export async function getSharedMissionView(missionId: string, actor: Authenticat
       captures: {
         orderBy: { capturedAt: "desc" },
         take: 3,
-        include: { access: { where: { userId: actor.id }, take: 1 } },
+        include: {
+          access: { where: { userId: actor.id }, take: 1 },
+          assets: { where: { kind: "THUMBNAIL" }, take: 1 },
+        },
       },
     },
   });
@@ -73,10 +76,10 @@ export async function getSharedMissionView(missionId: string, actor: Authenticat
     canJoin: authorization.canJoin,
     canControl: authorization.canControl,
     allowSharedCaptures: mission.allowSharedCaptures,
-    simulated: mission.simulated,
+    mode: mission.mode,
     captures: mission.captures.map((capture) => ({
       id: capture.id,
-      thumbnailUrl: capture.thumbnailUrl,
+      thumbnailStorageKey: capture.assets.at(0)?.storageKey ?? null,
       processingPreset: capture.processingPreset,
       capturedAt: capture.capturedAt.toISOString(),
       canSave: canSaveSharedCapture({
