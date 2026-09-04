@@ -53,6 +53,9 @@ dependency order.
 | DV-038 | `[ATTENDED]` Evidence run accumulation | M |
 | DV-039 | Weather state handling in the agent | M |
 
+DV-026 carries an obligation from work already merged — see **Wiring owed to DV-026**
+below. Read it before starting that issue.
+
 ## API, data and realtime
 
 | ID | Title | Size |
@@ -149,6 +152,27 @@ DV-003 → DV-020/021/022 → DV-023/025 → DV-026 → DV-057/058 → DV-060 �
 DV-034 (where `MAX_ALT_SAFE` is measured) → DV-028/029/030 → DV-036.
 
 Everything else hangs off that path and must not be scheduled ahead of it.
+
+## Wiring owed to DV-026
+
+Safety fixes have added constructor arguments to `CommandValidator` that **nothing
+constructs yet**. No production code in `darkview_agent/` builds a validator today — the
+mission runner does, and DV-026 is where it gets built. Both arguments default to the
+safe answer, so the omission is silent rather than dangerous. Silent is the problem: it
+will look like a bug when a nudge is refused for no visible reason.
+
+| Argument | Default | What DV-026 must pass | If it is forgotten |
+| --- | --- | --- | --- |
+| `pointing` | `None` | `lambda: (s.altitude_degrees, s.azimuth_degrees)` from `MountDriver.status()` | Every NUDGE is refused with `DEVICE_UNAVAILABLE` |
+| `attended` | `False` | `AgentConfig.attended` | The daylight lock can never be lifted, so attended terrestrial testing is impossible |
+
+Both defaults are deliberate. Fail closed is the right behaviour for an unwired
+validator, so the fix is always to wire it and never to default it open. Issues #10 and
+#12 record why each exists.
+
+DV-026's acceptance criteria should include a NUDGE accepted end to end through the
+runner. That is the only thing that proves `pointing` was actually connected — a unit
+test of the validator passes either way.
 
 ## Blocking external dependencies
 
