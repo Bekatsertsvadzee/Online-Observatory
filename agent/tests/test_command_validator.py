@@ -24,11 +24,20 @@ from tests.command_fixtures import (
     nudge_payload,
     park,
 )
-from tests.envelope_fixtures import NOON, TBILISI, build_config
+from tests.envelope_fixtures import NOON, TBILISI, build_config, mask_entry, sector
+
+#: Where the simulated mount sits unless a test moves it: comfortably inside the
+#: envelope, so a nudge test isolates the rule it cares about.
+RESTING_POINTING = (40.0, 180.0)
 
 
 def validator(
-    *, measured: bool = True, owned: bool = True, attended: bool = False, **config
+    *,
+    measured: bool = True,
+    owned: bool = True,
+    attended: bool = False,
+    pointing: tuple[float, float] | None = RESTING_POINTING,
+    **config,
 ) -> CommandValidator:
     safety = SafetyEnvelope(
         config=build_config(
@@ -38,7 +47,11 @@ def validator(
         ),
         site=TBILISI,
     )
-    instance = CommandValidator(envelope=safety, attended=attended)
+    instance = CommandValidator(
+        envelope=safety,
+        attended=attended,
+        pointing=None if pointing is None else lambda: pointing,
+    )
     if owned:
         instance.set_ownership(OWNERSHIP)
     return instance
@@ -380,6 +393,161 @@ def test_handing_over_the_session_resets_the_nudge_budget():
 
     subject.set_ownership(OWNERSHIP)
     assert subject.cumulative_nudge_degrees == 0.0
+
+
+# --------------------------------------------------------------------------
+# A nudge is judged on where it lands, not only on how far it moves
+#
+# `nudgeMaxDegrees` is measured from the target the customer booked.
+# `MAX_ALT_SAFE` is measured from the physical optical train. A step can sit
+# inside every relative limit and still take the mount somewhere the envelope
+# forbids, so the projected pointing is checked too.
+# --------------------------------------------------------------------------
+
+
+def test_a_nudge_may_not_climb_past_the_measured_max_altitude():
+    """The whole point. 0.2 degrees is well within the 0.5 degree allowance."""
+    subject = validator(
+        nudge_max_degrees=0.5,
+        nudge_rate_degrees_per_second=0.2,
+        pointing=(67.9, 180.0),  # max_altitude_degrees is 68.0
+    )
+
+    ack = subject.validate(nudge(payload=nudge_payload(12.0)), NOW)
+
+    assert ack.rejection_reason is CommandRejectionReason.safety_above_max_altitude
+
+
+def test_a_nudge_may_not_sink_below_the_minimum_altitude():
+    subject = validator(
+        nudge_max_degrees=0.5,
+        nudge_rate_degrees_per_second=0.2,
+        min_altitude_degrees=20.0,
+        pointing=(20.1, 180.0),
+    )
+
+    ack = subject.validate(
+        nudge(payload=nudge_payload(12.0, direction="NEGATIVE")), NOW
+    )
+
+    assert ack.rejection_reason is CommandRejectionReason.safety_below_min_altitude
+
+
+def test_a_nudge_may_not_drop_below_the_surveyed_horizon():
+    subject = validator(
+        nudge_max_degrees=0.5,
+        nudge_rate_degrees_per_second=0.2,
+        horizon_mask=[mask_entry(180.0, 35.0)],
+        pointing=(35.1, 180.0),
+    )
+
+    ack = subject.validate(
+        nudge(payload=nudge_payload(12.0, direction="NEGATIVE")), NOW
+    )
+
+    assert ack.rejection_reason is CommandRejectionReason.safety_horizon_mask
+
+
+def test_a_nudge_may_not_turn_into_a_forbidden_azimuth_sector():
+    """Cable wrap does not care that the step was a small one."""
+    subject = validator(
+        nudge_max_degrees=0.5,
+        nudge_rate_degrees_per_second=0.2,
+        forbidden_azimuth_sectors=[sector(180.0, 200.0)],
+        pointing=(40.0, 179.9),
+    )
+
+    ack = subject.validate(
+        nudge(payload=nudge_payload(12.0, axis="AZIMUTH")), NOW
+    )
+
+    assert ack.rejection_reason is CommandRejectionReason.safety_forbidden_azimuth
+
+
+def test_a_nudge_refused_on_pointing_does_not_consume_the_budget():
+    """Criterion 3 of the issue: a refused nudge did not move the telescope."""
+    subject = validator(
+        nudge_max_degrees=0.5,
+        nudge_rate_degrees_per_second=0.2,
+        pointing=(67.9, 180.0),
+    )
+
+    subject.validate(nudge(payload=nudge_payload(12.0)), NOW)
+
+    assert subject.cumulative_nudge_degrees == 0.0
+
+
+def test_a_nudge_is_refused_when_the_mount_position_cannot_be_read():
+    """Fail closed. A nudge is relative, so without a position there is nothing
+    to judge -- unlike a GOTO, which names where it is going."""
+    subject = validator(
+        nudge_max_degrees=0.5, nudge_rate_degrees_per_second=0.2, pointing=None
+    )
+
+    ack = subject.validate(nudge(payload=nudge_payload(12.0)), NOW)
+
+    assert ack.rejection_reason is CommandRejectionReason.device_unavailable
+    assert subject.cumulative_nudge_degrees == 0.0
+
+
+def test_a_mount_that_raises_is_the_same_answer_as_no_mount():
+    safety = SafetyEnvelope(
+        config=build_config(max_altitude_degrees=68.0), site=TBILISI
+    )
+
+    def unavailable() -> tuple[float, float]:
+        raise RuntimeError("mount not connected")
+
+    subject = CommandValidator(envelope=safety, pointing=unavailable)
+    subject.set_ownership(OWNERSHIP)
+
+    ack = subject.validate(nudge(payload=nudge_payload(3.0)), NOW)
+
+    assert ack.rejection_reason is CommandRejectionReason.device_unavailable
+
+
+def test_a_nudge_that_lands_inside_the_envelope_is_still_accepted():
+    """The absolute check must not refuse an ordinary nudge."""
+    subject = validator(
+        nudge_max_degrees=0.5, nudge_rate_degrees_per_second=0.2, pointing=(40.0, 180.0)
+    )
+
+    ack = subject.validate(nudge(payload=nudge_payload(12.0)), NOW)
+
+    assert ack.accepted is True
+    assert subject.cumulative_nudge_degrees == pytest.approx(0.2)
+
+
+def test_a_nudge_may_not_step_into_the_sun_exclusion():
+    """A nudge toward the Sun is a nudge toward the Sun.
+
+    At local solar noon on this date the Sun sits at altitude 71.7, azimuth 178.2
+    over Tbilisi. Altitude 40 due south is 31.7 degrees away and permitted; two
+    degrees higher is 29.7 and is not. So the refusal below can only come from
+    checking where the nudge *lands*, never from where the mount already is.
+
+    Attended, so the daylight lock is lifted and the Sun exclusion is the rule
+    under test rather than the one that happens to fire first.
+    """
+    subject = validator(
+        nudge_max_degrees=3.0,
+        nudge_rate_degrees_per_second=2.0,
+        attended=True,
+        pointing=(40.0, 180.0),
+    )
+
+    # A small step stays outside the exclusion and is accepted, which pins the
+    # starting position as permitted.
+    assert subject.validate(
+        nudge(payload=nudge_payload(6.0), issued_by_operator_id=uuid4()), NOON
+    ).accepted is True
+
+    # The same rule, the same position, a bigger step. Only the projection differs.
+    ack = subject.validate(
+        nudge(payload=nudge_payload(120.0), issued_by_operator_id=uuid4()), NOON
+    )
+
+    assert ack.rejection_reason is CommandRejectionReason.safety_sun_exclusion
 
 
 # --------------------------------------------------------------------------

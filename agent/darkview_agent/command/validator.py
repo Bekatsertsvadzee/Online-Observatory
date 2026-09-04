@@ -19,6 +19,13 @@ moves the mount to a known-safe position by definition; refusing it because the
 envelope is unmeasured would strand a telescope in exactly the situation Park
 exists to resolve. They are still fully authorised — an unauthorised Park is
 still unauthorised.
+
+Both pointing commands are judged on where the telescope would end up, not on
+how far it would move. GOTO says where it is going. NUDGE does not: it is
+relative to wherever the mount is now, so step 6 reads the current position and
+checks the projected one. A step within every relative limit can still land
+outside the envelope, because `nudgeMaxDegrees` is measured from the booked
+target and MAX_ALT_SAFE is measured from the mount.
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -36,7 +44,7 @@ from contracts.models import (
 )
 from darkview_agent.command.audit import AuditEvent, AuditLog
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
-from darkview_agent.safety.envelope import SafetyEnvelope
+from darkview_agent.safety.envelope import SafetyEnvelope, normalise_azimuth
 
 logger = logging.getLogger("darkview.agent.command")
 
@@ -103,8 +111,18 @@ class CommandValidator:
         audit: AuditLog | None = None,
         seen_capacity: int = 4096,
         attended: bool = False,
+        pointing: Callable[[], tuple[float, float]] | None = None,
     ) -> None:
         self._envelope = envelope or SafetyEnvelope()
+        # Where the mount is now, as (altitude, azimuth) in degrees. A callable
+        # rather than a driver: this module decides, it does not drive, and a test
+        # needs to place the telescope somewhere without a device.
+        #
+        # None means the position is unknowable, and an unknowable position
+        # refuses every nudge. A GOTO names where it is going and can be judged on
+        # its own; a nudge is relative to wherever the mount happens to be, so
+        # without that there is nothing to judge.
+        self._pointing = pointing
         # Whether an operator is physically at the observatory, from the local
         # configuration and nothing else. Defaults to False for the same reason
         # `load_config` refuses to start REAL without it: unattended is the state
@@ -240,6 +258,21 @@ class CommandValidator:
         """
         return self._attended and envelope.issued_by_operator_id is not None
 
+    def _current_pointing(self) -> tuple[float, float] | None:
+        """Where the mount is, or None if that cannot be established.
+
+        A driver that raises is the same answer as no driver at all: unknown. It
+        is not this function's job to decide what a broken mount means, only to
+        refuse to guess where it is aimed.
+        """
+        if self._pointing is None:
+            return None
+        try:
+            return self._pointing()
+        except Exception:
+            logger.warning("mount position unavailable; refusing the nudge")
+            return None
+
     def _check_pointing(self, envelope: CommandEnvelope, payload, at_time: datetime) -> Ack | None:
         if payload.kind == "GOTO":
             if self._envelope.site is None:
@@ -268,10 +301,48 @@ class CommandValidator:
 
         # NUDGE
         step_degrees = payload.step_arcminutes / ARCMINUTES_PER_DEGREE
+
+        # The relative bound: how far this customer has moved from the target they
+        # booked. It protects the framing, not the telescope.
         verdict = self._envelope.evaluate_nudge(self._cumulative_nudge_degrees, step_degrees)
         if not verdict.permitted:
             assert verdict.reason is not None
             return self._reject(envelope, verdict.reason, verdict.detail)
+
+        # The absolute bound: where the mount would actually end up. Nothing above
+        # this line knows that. `nudgeMaxDegrees` is measured from the locked
+        # target, so a target parked just inside MAX_ALT_SAFE can be walked past it
+        # by steps that are each within every relative limit.
+        pointing = self._current_pointing()
+        if pointing is None:
+            return self._reject(
+                envelope,
+                CommandRejectionReason.device_unavailable,
+                "the mount's current position could not be read, so where this "
+                "nudge would land cannot be checked against the envelope",
+            )
+
+        altitude, azimuth = pointing
+        signed_step = (
+            step_degrees if payload.direction.value == "POSITIVE" else -step_degrees
+        )
+        if payload.axis.value == "ALTITUDE":
+            altitude += signed_step
+        else:
+            azimuth = normalise_azimuth(azimuth + signed_step)
+
+        verdict = self._envelope.evaluate_pointing(
+            at_time,
+            altitude,
+            azimuth,
+            operator_override=self._operator_override(envelope),
+        )
+        if not verdict.permitted:
+            assert verdict.reason is not None
+            return self._reject(envelope, verdict.reason, verdict.detail)
+
+        # Only now. A refused nudge did not move the telescope, so it must not
+        # consume any of the customer's allowance either.
         self._cumulative_nudge_degrees += step_degrees
         return None
 
