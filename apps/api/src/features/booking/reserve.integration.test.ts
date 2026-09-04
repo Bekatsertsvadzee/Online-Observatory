@@ -13,6 +13,17 @@ const { testDatabase } = vi.hoisted(() => ({
 
 vi.mock("@/lib/db/client", () => ({ getDatabase: () => testDatabase.current }));
 
+/**
+ * `reserveSlot` reads one variable, NODE_ENV. `getServerEnvironment` validates the
+ * whole server environment, so the real one would make this suite demand APP_URL
+ * and AUTH_SECRET to open a database connection it has already been handed. The
+ * mock still reads `process.env` at call time, so `vi.stubEnv("NODE_ENV", ...)`
+ * below drives the production check exactly as it drives the real function.
+ */
+vi.mock("@/lib/validation/env", () => ({
+  getServerEnvironment: () => ({ NODE_ENV: process.env.NODE_ENV ?? "test" }),
+}));
+
 const { PAYMENT_HOLD_MINUTES, releaseSlotForFailedPayment, reserveSlot } =
   await import("@/features/booking/reserve");
 const { listSlotsForDate } = await import("@/features/booking/slots");
