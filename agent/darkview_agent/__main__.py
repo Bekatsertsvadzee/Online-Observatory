@@ -18,6 +18,11 @@ Two refusals to start, both fail-closed:
 
 On shutdown the mount is parked. A clean stop is still a stop, and the mount does
 not know the difference between an operator pressing Ctrl-C and a crash.
+
+The local state store is opened before anything else and closed last, so what the
+agent knows about itself -- which commands it has decided, what it audited, who
+owns the telescope, the measured limits -- is on disk from the first pass to the
+final park.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from darkview_agent.link.session import LinkState, ProtocolVersionRefused
 from darkview_agent.link.websocket import build_connector
 from darkview_agent.safety.envelope import SafetyEnvelope
 from darkview_agent.safety.watchdog import WatchdogThread
+from darkview_agent.state.store import StateStore
 from darkview_agent.supervisor import DEFAULT_LOOP_INTERVAL_SECONDS, build_supervisor
 
 logger = logging.getLogger("darkview.agent")
@@ -51,13 +57,19 @@ def run(config: AgentConfig, stop: threading.Event) -> None:
             "DARKVIEW_AGENT_SITE_LONGITUDE are set"
         )
 
+    config.state_path.parent.mkdir(parents=True, exist_ok=True)
+    store = StateStore(config.state_path)
+    logger.info("local state: %s", store.path)
+
     assert config.cloud_url is not None and config.device_token is not None
     supervisor = build_supervisor(
         config=config,
         devices=devices,
         connect=build_connector(config.cloud_url, config.device_token),
         envelope=envelope,
+        store=store,
     )
+    supervisor.recover()
 
     watchdog = WatchdogThread(supervisor.watchdog)
     watchdog.start()
@@ -92,6 +104,9 @@ def run(config: AgentConfig, stop: threading.Event) -> None:
                 devices.mount.park()
             except Exception as error:
                 logger.error("could not park the mount on shutdown: %s", error)
+        # Closed after the park, so the audit event the park may write still has
+        # somewhere to go.
+        store.close()
 
 
 def main() -> int:

@@ -120,10 +120,13 @@ DV-021 outbound WSS link         DV-052 target catalogue
 DV-023 safety envelope           DV-053 ephemeris
 DV-025 command validation        DV-057 agent link service
 DV-024 watchdog                  DV-058 orchestrator
-DV-027 local state store         DV-059 cloud safety
-DV-026 mission runner (sim)      DV-062 audit log
-DV-040 supervisor + run loop     DV-060 mission channel
+DV-026 mission runner (sim)      DV-059 cloud safety
+DV-040 supervisor + run loop     DV-062 audit log
+DV-027 local state store         DV-060 mission channel
 ```
+
+DV-027 ran after DV-040 rather than before it: there was nothing to make durable
+until something joined the pieces. ADR-010 records what it stores and why.
 
 **Milestone S1 — simulated end to end.** A command traverses API → WSS → agent →
 `SimMount`, the mission runs the full state machine, and the operator console shows it.
@@ -197,6 +200,12 @@ absolute alt/az slew to the projected position. That is exactly a nudge against
 `SimMount`. Against a tracking Celestron it is a real question — whether the offset
 belongs on the target or on the axes — and DV-028 has to decide it from the mount's
 behaviour rather than from the line the simulator made look correct.
+
+**Since paid by DV-027.** The audit log, the idempotency set, session ownership
+with its spent nudge allowance, and the measured safety envelope now survive a
+restart. A mission does not: the agent parks and reports it through
+`AgentHello.resumeMissionId`, because coming back with a mission id and no state
+machine is not enough to know where a telescope is pointing.
 
 **The mission profile is still the runner's defaults.** A `GotoPayload` carries an
 `opticalConfig` and an `imagingProfile`; nothing yet maps either to an exposure, a gain or

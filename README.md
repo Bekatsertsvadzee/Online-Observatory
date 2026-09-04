@@ -127,9 +127,15 @@ runs. It is development-only — the seed refuses to run unless `NODE_ENV=develo
 | `DARKVIEW_AGENT_SITE_LONGITUDE` | no | As above. |
 | `DARKVIEW_AGENT_DRIVER_MODE` | no | `SIMULATED` (default) or `REAL`. |
 | `DARKVIEW_AGENT_ATTENDED` | no | Set only when an operator is physically at the observatory. `REAL` without it refuses to start. |
+| `DARKVIEW_AGENT_STATE_PATH` | no | The local state store. Defaults to `~/.darkview/agent-state.sqlite3`. |
 
 The agent refuses to start without the first three: one that cannot reach the cloud
 cannot be told to stop.
+
+The state file holds what must survive a restart: decided command ids, the local
+audit log, session ownership and the measured safety envelope (ADR-010). It
+belongs to one installation and must never be copied between observatories — it
+names that observatory's sessions, users and missions.
 
 `MAX_ALT_SAFE` is deliberately absent from this table. It is not agent configuration —
 it arrives from the cloud in `CLOUD_SAFETY_ENVELOPE_UPDATE`, and until it does the agent

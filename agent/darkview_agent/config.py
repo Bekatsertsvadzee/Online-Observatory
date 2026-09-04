@@ -14,6 +14,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from darkview_agent.safety.sun import SiteLocation
 
@@ -25,6 +26,14 @@ class DriverMode(StrEnum):
 
 class ConfigurationError(Exception):
     """Raised when configuration would put the agent in an unsafe state."""
+
+
+#: Where the agent keeps what must survive a restart (DV-027, ADR-010).
+#:
+#: Under the home directory rather than the working directory: a service started
+#: from a different folder must not come back with an empty memory of which
+#: commands it has already run.
+DEFAULT_STATE_PATH = Path.home() / ".darkview" / "agent-state.sqlite3"
 
 
 def _env_flag(environment: dict[str, str], name: str) -> bool:
@@ -45,6 +54,7 @@ class AgentConfig:
     device_token: str | None = None
     observatory_id: uuid.UUID | None = None
     site: SiteLocation | None = None
+    state_path: Path = DEFAULT_STATE_PATH
 
     @property
     def is_simulated(self) -> bool:
@@ -92,7 +102,13 @@ def load_config(environment: dict[str, str] | None = None) -> AgentConfig:
         device_token=env.get("DARKVIEW_AGENT_DEVICE_TOKEN") or None,
         observatory_id=_observatory_id(env),
         site=_site(env),
+        state_path=_state_path(env),
     )
+
+
+def _state_path(environment: dict[str, str]) -> Path:
+    raw = environment.get("DARKVIEW_AGENT_STATE_PATH", "").strip()
+    return Path(raw).expanduser() if raw else DEFAULT_STATE_PATH
 
 
 def _observatory_id(environment: dict[str, str]) -> uuid.UUID | None:
