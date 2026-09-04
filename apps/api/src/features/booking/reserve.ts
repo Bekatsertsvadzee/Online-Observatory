@@ -11,6 +11,7 @@ import type {
 import { getDatabase } from "@/lib/db/client";
 import { nightWindow } from "@/lib/slots/darkness";
 import { generateSlots, SLOT_DURATION_MINUTES } from "@/lib/slots/generate";
+import { getServerEnvironment } from "@/lib/validation/env";
 
 /**
  * PROVISIONAL. How long a reserved slot is held while payment is outstanding.
@@ -29,14 +30,18 @@ export const PAYMENT_HOLD_MINUTES = 15;
 /**
  * Phase 1 has one payment provider in code and it is the sandbox. The real
  * provider arrives in DV-056 with its own documentation; nothing here invents an
- * API for it. The environment check lives at the route boundary, not here, so
- * that this module stays a pure domain function.
+ * API for it.
+ *
+ * The contract is explicit that SANDBOX "is never selectable in a production
+ * environment and a production payment success is never simulated", so a
+ * production deployment that reaches this refuses to reserve at all. Selling a
+ * slot against a payment that cannot really be taken is worse than an outage.
  */
 const PHASE_1_PROVIDER = "SANDBOX" as const;
 
 export type ReserveSlotFailure = {
   ok: false;
-  status: 404 | 409 | 422;
+  status: 404 | 409 | 422 | 500;
   code: ErrorCode;
   message: string;
 };
@@ -169,6 +174,15 @@ export async function reserveSlot(input: {
 }): Promise<ReserveSlotResult> {
   const database = getDatabase();
   const { userId, request, idempotencyKey, now } = input;
+
+  if (getServerEnvironment().NODE_ENV === "production") {
+    return {
+      ok: false,
+      status: 500,
+      code: "INTERNAL",
+      message: "Bookings are unavailable: no payment provider is configured.",
+    };
+  }
 
   if (idempotencyKey) {
     const existing = await replayByIdempotencyKey(userId, idempotencyKey);

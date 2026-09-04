@@ -220,6 +220,25 @@ describe("reserving a slot", () => {
     );
   });
 
+  it("refuses to reserve at all in production, where SANDBOX is not selectable", async () => {
+    // The contract: SANDBOX "is never selectable in a production environment and a
+    // production payment success is never simulated". Selling a slot against a
+    // payment that cannot really be taken is worse than refusing to sell one.
+    vi.stubEnv("NODE_ENV", "production");
+
+    try {
+      const result = await reserve({ slotStartAt: firstSlotStartAt() });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.status).toBe(500);
+      expect(await database.booking.count()).toBe(0);
+      expect(await database.payment.count()).toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("refuses an instant that is not a slot the observatory offers", async () => {
     // Two and a half minutes past a real slot: off the five-minute alignment grid
     // and off the forty-minute stride, so the generator never emits it.
