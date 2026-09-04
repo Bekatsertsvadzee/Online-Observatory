@@ -1726,6 +1726,16 @@ export type TargetId = string;
 
 export type TargetSlug = string;
 
+/**
+ * Client-generated key that makes retrying a booking safe. A second request
+ * carrying a key the signed-in user has already used returns the booking the
+ * first request created, with its original payment intent, instead of
+ * reserving a second slot. Keys are scoped to the user, so two people cannot
+ * collide on one.
+ *
+ */
+export type IdempotencyKey = string;
+
 export type GetCurrentUserData = {
     body?: never;
     path?: never;
@@ -1891,6 +1901,17 @@ export type ListBookingsResponse = ListBookingsResponses[keyof ListBookingsRespo
 
 export type CreateBookingData = {
     body: CreateBookingRequest;
+    headers?: {
+        /**
+         * Client-generated key that makes retrying a booking safe. A second request
+         * carrying a key the signed-in user has already used returns the booking the
+         * first request created, with its original payment intent, instead of
+         * reserving a second slot. Keys are scoped to the user, so two people cannot
+         * collide on one.
+         *
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/bookings';

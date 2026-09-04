@@ -1328,6 +1328,16 @@ export const zTargetId = z.uuid();
 export const zTargetSlug = z.string().regex(/^[a-z0-9-]+$/);
 
 /**
+ * Client-generated key that makes retrying a booking safe. A second request
+ * carrying a key the signed-in user has already used returns the booking the
+ * first request created, with its original payment intent, instead of
+ * reserving a second slot. Keys are scoped to the user, so two people cannot
+ * collide on one.
+ *
+ */
+export const zIdempotencyKey = z.string().min(8).max(128).regex(/^[A-Za-z0-9_.:-]+$/);
+
+/**
  * The current user.
  */
 export const zGetCurrentUserResponse = zUser;
@@ -1385,6 +1395,10 @@ export const zListBookingsQuery = z.object({
 export const zListBookingsResponse = zBookingPage;
 
 export const zCreateBookingBody = zCreateBookingRequest;
+
+export const zCreateBookingHeaders = z.object({
+    'Idempotency-Key': z.string().min(8).max(128).regex(/^[A-Za-z0-9_.:-]+$/).optional()
+});
 
 /**
  * Booking reserved, awaiting payment.
