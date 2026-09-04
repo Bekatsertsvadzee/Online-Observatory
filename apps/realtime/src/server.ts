@@ -7,7 +7,7 @@ import { AgentLink } from "@/link/agent-link";
 import { createPrismaStore } from "@/link/prisma-store";
 import { AgentLinkRegistry } from "@/link/registry";
 import { HEARTBEAT_INTERVAL_SECONDS } from "@/link/protocol";
-import type { LinkStore } from "@/link/store";
+import type { LinkStore, ObservatoryRecord } from "@/link/store";
 import { getEnvironment } from "@/env";
 
 const AGENT_PATH = "/ws/agent";
@@ -46,20 +46,28 @@ export function createRealtimeServer(store: LinkStore) {
       }
 
       sockets.handleUpgrade(request, socket, head, (connection) => {
-        attach(connection, observatory.id);
+        attach(connection, observatory);
       });
     })();
   });
 
-  function attach(connection: WebSocket, observatoryId: string) {
+  /**
+   * The whole authenticated record is handed to the link, not just its id.
+   *
+   * `mode` in particular is the SIMULATED/REAL flag the hardware-safety rules are
+   * built on, so it has to be the database's answer. A literal here would read as
+   * true to the first piece of code that consults it and be wrong for any
+   * observatory an operator had switched to REAL.
+   */
+  function attach(connection: WebSocket, observatory: ObservatoryRecord) {
     const link = new AgentLink(
-      { id: observatoryId, slug: "", mode: "SIMULATED" },
+      observatory,
       store,
       (message) => connection.send(JSON.stringify(message)),
       (reason) => connection.close(1000, reason),
     );
 
-    const admission = registry.admit(observatoryId, link);
+    const admission = registry.admit(observatory.id, link);
     if (!admission.admitted) {
       // The incumbent keeps the observatory. This connection is closed without
       // ever being registered, so the running link is untouched.
@@ -71,8 +79,8 @@ export function createRealtimeServer(store: LinkStore) {
       void link.receive(data.toString());
     });
     connection.on("close", () => {
-      registry.release(observatoryId, link);
-      void store.markLinkLost(observatoryId, new Date());
+      registry.release(observatory.id, link);
+      void store.markLinkLost(observatory.id, new Date());
     });
   }
 
@@ -97,5 +105,7 @@ if (process.env.NODE_ENV !== "test") {
   const environment = getEnvironment();
   const server = createRealtimeServer(createPrismaStore(environment.DATABASE_URL));
   server.listen(environment.REALTIME_PORT);
-  console.log(`darkview realtime listening on :${environment.REALTIME_PORT}${AGENT_PATH}`);
+  console.log(
+    `darkview realtime listening on :${environment.REALTIME_PORT}${AGENT_PATH}`,
+  );
 }
