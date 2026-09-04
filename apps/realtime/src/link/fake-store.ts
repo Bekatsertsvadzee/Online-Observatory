@@ -1,4 +1,5 @@
 import type {
+  ActiveSession,
   InboundMessageRecord,
   LinkStore,
   ObservatoryRecord,
@@ -19,7 +20,8 @@ export class FakeLinkStore implements LinkStore {
   private readonly observatories = new Map<string, ObservatoryRecord>();
   private readonly seen = new Set<string>();
   private readonly commands = new Map<string, RelayableCommand>();
-  private readonly sessions = new Map<string, string | null>();
+  private readonly sessions = new Map<string, ActiveSession>();
+  private readonly observatoryOf = new Map<string, string>();
 
   registerToken(tokenHash: string, observatory: ObservatoryRecord) {
     this.observatories.set(tokenHash, observatory);
@@ -48,8 +50,14 @@ export class FakeLinkStore implements LinkStore {
     this.commands.set(command.envelope.commandId, command);
   }
 
-  setActiveSession(missionId: string, sessionId: string | null) {
-    this.sessions.set(missionId, sessionId);
+  /** Put a live session in the store, owned by `observatoryId`. */
+  setActiveSession(observatoryId: string, session: ActiveSession) {
+    this.sessions.set(session.sessionId, session);
+    this.observatoryOf.set(session.sessionId, observatoryId);
+  }
+
+  revokeSession(sessionId: string) {
+    this.sessions.delete(sessionId);
   }
 
   async loadCommand(commandId: string) {
@@ -69,7 +77,19 @@ export class FakeLinkStore implements LinkStore {
     this.relayed.set(commandId, at);
   }
 
-  async activeSessionId(missionId: string) {
-    return this.sessions.get(missionId) ?? null;
+  async loadSession(sessionId: string) {
+    return this.sessions.get(sessionId) ?? null;
+  }
+
+  async activeSession(observatoryId: string, now: Date) {
+    for (const session of this.sessions.values()) {
+      if (
+        this.observatoryOf.get(session.sessionId) === observatoryId &&
+        session.expiresAt > now
+      ) {
+        return session;
+      }
+    }
+    return null;
   }
 }

@@ -88,12 +88,24 @@ export function cloudCommand(command: CommandEnvelope): CloudCommand {
 /**
  * Tell the agent who owns the mission. A null sessionId revokes it, after which
  * the agent accepts no client-originated command for that mission at all.
+ *
+ * `userId` is not optional in practice. The agent refuses any command whose
+ * userId does not match the session owner, so an update without one leaves it
+ * holding half an owner -- and the agent's answer to that, correctly, is to hold
+ * no owner and refuse everything.
  */
 export function cloudSessionUpdate(
   missionId: string,
-  sessionId: string | null,
+  session: { sessionId: string; userId: string; expiresAt: Date } | null,
 ): CloudSessionUpdate {
-  return { type: "CLOUD_SESSION_UPDATE", ...envelope(), missionId, sessionId };
+  return {
+    type: "CLOUD_SESSION_UPDATE",
+    ...envelope(),
+    missionId,
+    sessionId: session?.sessionId ?? null,
+    userId: session?.userId ?? null,
+    expiresAt: session?.expiresAt.toISOString() ?? null,
+  };
 }
 
 export type Send = (message: CloudToAgentMessage) => void;

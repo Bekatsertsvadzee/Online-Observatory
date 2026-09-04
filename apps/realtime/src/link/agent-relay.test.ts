@@ -29,6 +29,25 @@ const SESSION_ID = "33333333-3333-4333-8333-333333333333";
 const USER_ID = "44444444-4444-4444-8444-444444444444";
 
 const NOW = new Date("2026-12-15T20:00:00.000Z");
+const EXPIRES_AT = new Date("2026-12-15T20:30:00.000Z");
+
+function liveSession() {
+  return {
+    sessionId: SESSION_ID,
+    missionId: MISSION_ID,
+    userId: USER_ID,
+    expiresAt: EXPIRES_AT,
+  };
+}
+
+function sessionNotification(sessionId: string | null): string {
+  return JSON.stringify({
+    kind: "SESSION",
+    observatoryId: observatory.id,
+    missionId: MISSION_ID,
+    sessionId,
+  });
+}
 
 let store: FakeLinkStore;
 let registry: AgentLinkRegistry;
@@ -177,44 +196,66 @@ describe("handling a raw notification", () => {
     expect(sent).toHaveLength(1);
   });
 
-  it("tells the agent who owns the mission", async () => {
+  it("tells the agent who owns the mission, and which user", async () => {
     await connectAgent();
+    store.setActiveSession(observatory.id, liveSession());
 
-    const outcome = await relay.handle(
-      JSON.stringify({
-        kind: "SESSION",
-        observatoryId: observatory.id,
-        missionId: MISSION_ID,
-        sessionId: SESSION_ID,
-      }),
-    );
+    const outcome = await relay.handle(sessionNotification(SESSION_ID));
 
     expect(outcome).toBe("SENT");
+    // userId is the part that matters. The agent refuses any command whose
+    // userId does not match the session owner, so an update without one leaves
+    // it holding no owner and refusing everything.
     expect(sent[0]).toMatchObject({
       type: "CLOUD_SESSION_UPDATE",
       missionId: MISSION_ID,
       sessionId: SESSION_ID,
+      userId: USER_ID,
+      expiresAt: EXPIRES_AT.toISOString(),
     });
   });
 
   it("revokes a session with a null sessionId", async () => {
     await connectAgent();
 
-    await relay.handle(
-      JSON.stringify({
-        kind: "SESSION",
-        observatoryId: observatory.id,
-        missionId: MISSION_ID,
-        sessionId: null,
-      }),
-    );
+    await relay.handle(sessionNotification(null));
 
     // Null is the revoke. The agent then accepts no client command for the
     // mission at all, which is what stops a stale browser tab.
     expect(sent[0]).toMatchObject({
       type: "CLOUD_SESSION_UPDATE",
       sessionId: null,
+      userId: null,
     });
+  });
+
+  it("revokes when the session was revoked between the notify and the read", async () => {
+    await connectAgent();
+    store.setActiveSession(observatory.id, liveSession());
+    store.revokeSession(SESSION_ID);
+
+    await relay.handle(sessionNotification(SESSION_ID));
+
+    // The notification said "grant". The row says the session is gone, and the
+    // row is what the agent is told -- ADR-009's rule, applied to the case where
+    // trusting the payload would hand a revoked customer the telescope.
+    expect(sent[0]).toMatchObject({ type: "CLOUD_SESSION_UPDATE", sessionId: null });
+  });
+
+  it("refuses to hand one mission a session that belongs to another", async () => {
+    await connectAgent();
+    store.setActiveSession(observatory.id, liveSession());
+
+    await relay.handle(
+      JSON.stringify({
+        kind: "SESSION",
+        observatoryId: observatory.id,
+        missionId: "55555555-5555-4555-8555-555555555555",
+        sessionId: SESSION_ID,
+      }),
+    );
+
+    expect(sent[0]).toMatchObject({ sessionId: null });
   });
 
   it("survives a payload that is not the shape it expects", async () => {
@@ -290,5 +331,44 @@ describe("sweeping what the notification missed", () => {
 
     expect(await relay.sweep(observatory.id)).toBe(0);
     expect(store.relayed.has(envelope.commandId)).toBe(false);
+  });
+
+  it("re-asserts who owns the mission before sending it any command", async () => {
+    await connectAgent();
+    store.setActiveSession(observatory.id, liveSession());
+    store.addCommand(storedCommand(envelopeFor()));
+
+    await relay.sweep(observatory.id);
+
+    // Ownership lives in the agent's memory, so an agent that restarted has
+    // forgotten it and would refuse the command below with NO_ACTIVE_MISSION.
+    // The order is the point: told who owns it, then given the command.
+    expect(sent.map((message) => message.type)).toEqual([
+      "CLOUD_SESSION_UPDATE",
+      "CLOUD_COMMAND",
+    ]);
+    expect(sent[0]).toMatchObject({ sessionId: SESSION_ID, userId: USER_ID });
+  });
+
+  it("says nothing about ownership when no session is live", async () => {
+    await connectAgent();
+
+    await relay.sweep(observatory.id);
+
+    // Not a revocation. The agent came back holding no owner, and there is
+    // nothing to revoke.
+    expect(sent).toHaveLength(0);
+  });
+
+  it("does not re-assert a session that has already lapsed", async () => {
+    await connectAgent();
+    store.setActiveSession(observatory.id, {
+      ...liveSession(),
+      expiresAt: new Date(NOW.getTime() - 1_000),
+    });
+
+    await relay.sweep(observatory.id);
+
+    expect(sent).toHaveLength(0);
   });
 });

@@ -76,6 +76,15 @@ class MissionRequest:
     requested_frames: int = DEFAULT_CAPTURE_FRAMES
     exposure_milliseconds: float = DEFAULT_EXPOSURE_MILLISECONDS
     gain: int = DEFAULT_GAIN
+    operator_override: bool = False
+    """Whether this mission may run with the Sun up.
+
+    Only ever true for an attended operator at the observatory, decided locally.
+    Without it a daylight command accepted by the validator would be refused here
+    a moment later, and attended terrestrial testing -- which DV-034 and DV-035
+    depend on -- could not happen at all. It never lifts the Sun exclusion; the
+    envelope refuses that regardless of who asked.
+    """
 
 
 @dataclass(frozen=True)
@@ -190,6 +199,16 @@ class MissionRunner:
     # Accepting work
     # ------------------------------------------------------------------
 
+    def set_envelope(self, envelope: SafetyEnvelope) -> None:
+        """Adopt a newly measured envelope for the next mission.
+
+        A mission already under way keeps the envelope it was admitted under.
+        Re-judging it halfway would mean a slew that was permitted when it started
+        becoming a failure mid-motion, which is not safer -- the mount is already
+        there -- and would lose the record of what it was actually checked against.
+        """
+        self._envelope = envelope
+
     def offer(self, request: MissionRequest, at_time: datetime) -> None:
         """Take on a mission, or refuse because one is already running.
 
@@ -284,7 +303,10 @@ class MissionRunner:
             self._envelope.site,
         )
         verdict = self._envelope.evaluate_pointing(
-            at_time, horizontal.altitude_degrees, horizontal.azimuth_degrees
+            at_time,
+            horizontal.altitude_degrees,
+            horizontal.azimuth_degrees,
+            operator_override=request.operator_override,
         )
         if not verdict.permitted:
             reason = (

@@ -106,6 +106,7 @@ trying.
 ```bash
 npm run dev --workspace @darkview/api        # :4000  REST
 npm run dev --workspace @darkview/realtime   # :4001  /ws/agent
+agent/.venv/bin/python -m darkview_agent     # the observatory, dialling out
 ```
 
 The observatory dials out to the realtime service and presents its device token as
@@ -115,12 +116,32 @@ address and no listening port. An observatory with no `deviceTokenHash` admits n
 The development seed issues a known token for the demo observatory, printed when the seed
 runs. It is development-only — the seed refuses to run unless `NODE_ENV=development`.
 
+### The agent's environment
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `DARKVIEW_AGENT_OBSERVATORY_ID` | yes | Which observatory this is. Must match the record the device token belongs to. |
+| `DARKVIEW_AGENT_CLOUD_URL` | yes | `wss://…/ws/agent`. |
+| `DARKVIEW_AGENT_DEVICE_TOKEN` | yes | Presented as `Authorization: Bearer`. Never appears in a URL or a log. |
+| `DARKVIEW_AGENT_SITE_LATITUDE` | no | Both coordinates or neither. Without them the Sun cannot be computed and every slew is refused. |
+| `DARKVIEW_AGENT_SITE_LONGITUDE` | no | As above. |
+| `DARKVIEW_AGENT_DRIVER_MODE` | no | `SIMULATED` (default) or `REAL`. |
+| `DARKVIEW_AGENT_ATTENDED` | no | Set only when an operator is physically at the observatory. `REAL` without it refuses to start. |
+
+The agent refuses to start without the first three: one that cannot reach the cloud
+cannot be told to stop.
+
+`MAX_ALT_SAFE` is deliberately absent from this table. It is not agent configuration —
+it arrives from the cloud in `CLOUD_SAFETY_ENVELOPE_UPDATE`, and until it does the agent
+refuses every slew.
+
 ## State of apps/api
 
 `apps/api/src` holds the server-side modules extracted from the original
 single-application prototype, plus the routes added since: `GET /health`, `GET /me`,
-`GET /targets/tonight`, `GET /slots` and `POST /bookings`. The mission and admin routes
-do not exist yet — DV-058 onward add them.
+`GET /targets/tonight`, `GET /slots` and `POST /bookings`, plus the mission routes
+`POST /missions/{missionId}/start` and `POST /missions/{missionId}/command`. The admin
+routes do not exist yet — DV-063 adds them.
 
 ## Where to start
 

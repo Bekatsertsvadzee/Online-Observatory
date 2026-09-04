@@ -5,11 +5,29 @@ import { PrismaClient } from "@darkview/db";
 import type { CommandEnvelope } from "@darkview/contracts";
 
 import type {
+  ActiveSession,
   InboundMessageRecord,
   LinkStore,
   ObservatoryRecord,
   RelayableCommand,
 } from "@/link/store";
+
+/**
+ * The mission states during which a session may command the mount.
+ *
+ * The same list as `LIVE_MISSION_STATES` in the API's mission orchestrator and
+ * as the predicate of Mission_active_per_observatory_unique. Duplicated rather
+ * than imported because this service does not depend on the Next.js app; if one
+ * changes, all three change.
+ */
+const LIVE_MISSION_STATES = [
+  "PREPARING",
+  "SLEWING",
+  "VERIFYING",
+  "CENTERING",
+  "OBSERVING",
+  "CAPTURING",
+] as const;
 
 export function createPrismaStore(connectionString: string): LinkStore {
   const database = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
@@ -73,13 +91,47 @@ export function createPrismaStore(connectionString: string): LinkStore {
       });
     },
 
-    async activeSessionId(missionId: string, now: Date): Promise<string | null> {
-      const session = await database.missionSession.findFirst({
-        where: { missionId, revokedAt: null, expiresAt: { gt: now } },
-        select: { id: true },
+    async loadSession(sessionId: string): Promise<ActiveSession | null> {
+      const session = await database.missionSession.findUnique({
+        where: { id: sessionId },
+        select: {
+          id: true,
+          missionId: true,
+          userId: true,
+          expiresAt: true,
+          revokedAt: true,
+        },
       });
-      return session?.id ?? null;
+      if (!session || session.revokedAt !== null) return null;
+      return toActiveSession(session);
     },
+
+    async activeSession(observatoryId: string, now: Date): Promise<ActiveSession | null> {
+      const session = await database.missionSession.findFirst({
+        where: {
+          revokedAt: null,
+          expiresAt: { gt: now },
+          mission: { observatoryId, state: { in: [...LIVE_MISSION_STATES] } },
+        },
+        orderBy: { issuedAt: "desc" },
+        select: { id: true, missionId: true, userId: true, expiresAt: true },
+      });
+      return session ? toActiveSession(session) : null;
+    },
+  };
+}
+
+function toActiveSession(row: {
+  id: string;
+  missionId: string;
+  userId: string;
+  expiresAt: Date;
+}): ActiveSession {
+  return {
+    sessionId: row.id,
+    missionId: row.missionId,
+    userId: row.userId,
+    expiresAt: row.expiresAt,
   };
 }
 
