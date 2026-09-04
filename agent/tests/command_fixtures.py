@@ -68,11 +68,15 @@ def goto_payload(ra_hours: float = 18.0, dec_degrees: float = 40.0) -> dict:
     }
 
 
-def nudge_payload(step_arcminutes: float = 3.0, axis: str = "ALTITUDE") -> dict:
+def nudge_payload(
+    step_arcminutes: float = 3.0,
+    axis: str = "ALTITUDE",
+    direction: str = "POSITIVE",
+) -> dict:
     return {
         "kind": "NUDGE",
         "axis": axis,
-        "direction": "POSITIVE",
+        "direction": direction,
         "stepArcminutes": step_arcminutes,
     }
 
