@@ -31,14 +31,19 @@ export async function listSlotsForDate(isoDate: string, now: Date): Promise<Slot
   // No astronomical darkness at all: an honest empty night, not an error.
   if (!window) return { date: isoDate, items: [] };
 
-  // Only CONFIRMED bookings hold a slot. A booking awaiting payment, cancelled
-  // or expired does not, which is the same rule the partial unique index in
-  // DV-050 enforces in the database.
-  const confirmed = await database.booking.findMany({
+  // A booking holds its slot from the moment it is reserved, not from the moment
+  // it is paid for -- the same rule the partial unique index enforces in the
+  // database (DV-055). An unpaid hold stops holding once it lapses, so the slot
+  // reappears here without anything having to sweep the table first. Cancelled,
+  // expired and refunded bookings never held it.
+  const held = await database.booking.findMany({
     where: {
       observatoryId: observatory.id,
-      status: "CONFIRMED",
       slotStartAt: { gte: window.duskAt, lte: window.dawnAt },
+      OR: [
+        { status: "CONFIRMED" },
+        { status: "PENDING_PAYMENT", holdExpiresAt: { gt: now } },
+      ],
     },
     select: { slotStartAt: true },
   });
@@ -52,7 +57,7 @@ export async function listSlotsForDate(isoDate: string, now: Date): Promise<Slot
         online: observatory.status === "ONLINE",
         weatherHold: observatory.weatherState?.holdActive ?? false,
       },
-      bookedStartAt: new Set(confirmed.map((row) => row.slotStartAt.getTime())),
+      bookedStartAt: new Set(held.map((row) => row.slotStartAt.getTime())),
     }),
   };
 }

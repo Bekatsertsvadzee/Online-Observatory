@@ -50,23 +50,51 @@ describe("every admin route is behind the operator guard", () => {
   });
 
   it("guards every route outside the public allow-list", () => {
-    // Routes that are deliberately reachable without an operator role. Anything
-    // added to the app tree that is not here and not under /admin must still make
-    // its own authentication decision -- this list is the record of that decision.
+    // Routes that are deliberately reachable without a session. Anything added to
+    // the app tree that is not here and not under /admin must call a guard of its
+    // own -- this list is the record of that decision, and the assertion below is
+    // what makes it a decision rather than an oversight.
     //
     //   health   liveness only; reports nothing about the observatory
-    //   me       requires a session, but any role
     //   targets  public by contract (security: []) -- choosing what to look at
     //            does not require an account, and the catalogue is not secret
     //   slots    public by contract (security: []) -- someone deciding whether
     //            to book should not have to sign up to see what is available.
     //            Reserving one is POST /bookings, which is not public.
-    const publicRoutes = new Set(["health", "me", "targets", "slots"]);
+    const publicRoutes = new Set(["health", "targets", "slots"]);
 
-    const topLevel = routeFilesUnder(appDirectory)
-      .map((file) => path.relative(appDirectory, file).split(path.sep)[0])
-      .filter((segment) => segment !== "admin");
+    const unguarded = routeFilesUnder(appDirectory)
+      .filter((file) => {
+        const segment = path.relative(appDirectory, file).split(path.sep)[0];
+        return segment !== "admin" && !publicRoutes.has(segment);
+      })
+      .filter((file) => {
+        const source = readFileSync(file, "utf8");
+        return (
+          !source.includes("requireApiSession") &&
+          !source.includes("requireApiMutation") &&
+          !source.includes("requireOperator")
+        );
+      })
+      .map((file) => path.relative(appDirectory, file));
 
-    expect(topLevel.filter((segment) => !publicRoutes.has(segment))).toEqual([]);
+    expect(unguarded).toEqual([]);
+  });
+
+  it("puts every mutating route behind the same-origin guard", () => {
+    // A session cookie is attached by the browser to a cross-site POST as readily
+    // as to a first-party one. requireApiSession alone therefore proves who the
+    // caller is but not that they meant to call: a mutating route needs
+    // requireApiMutation, which checks Origin first.
+    const mutating = routeFilesUnder(appDirectory).filter((file) => {
+      const source = readFileSync(file, "utf8");
+      return /export async function (POST|PUT|PATCH|DELETE)\b/.test(source);
+    });
+
+    const withoutOriginCheck = mutating
+      .filter((file) => !readFileSync(file, "utf8").includes("requireApiMutation"))
+      .map((file) => path.relative(appDirectory, file));
+
+    expect(withoutOriginCheck).toEqual([]);
   });
 });

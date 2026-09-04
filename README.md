@@ -79,6 +79,17 @@ npm run contracts:check     # must be green before any work starts
 npm run test
 ```
 
+`npm run test` needs no database. Some claims cannot be tested without one — DV-055's
+slot exclusivity is a partial unique index, and a mock has no indexes — so those live
+apart and are run explicitly. The command migrates the database named by `DATABASE_URL`
+before running, so point it at a scratch database, never at development data:
+
+```bash
+DATABASE_URL=postgresql://…/darkview_test npm run test:integration
+```
+
+CI runs both against a `postgres:16` service container.
+
 The Python agent has its own environment:
 
 ```bash
@@ -107,8 +118,9 @@ runs. It is development-only — the seed refuses to run unless `NODE_ENV=develo
 ## State of apps/api
 
 `apps/api/src` holds the server-side modules extracted from the original
-single-application prototype, plus the routes added since: `GET /health` and `GET /me`.
-The booking, mission and admin routes do not exist yet — DV-052 onward add them.
+single-application prototype, plus the routes added since: `GET /health`, `GET /me`,
+`GET /targets/tonight`, `GET /slots` and `POST /bookings`. The mission and admin routes
+do not exist yet — DV-058 onward add them.
 
 ## Where to start
 

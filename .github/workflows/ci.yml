@@ -12,6 +12,25 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+
+    # DV-055 proves that a partial unique index, not application logic, is what
+    # stops two people booking the same half hour. That claim can only be tested
+    # against a real database, so CI runs one.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: darkview_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v7
 
@@ -50,6 +69,15 @@ jobs:
 
       - name: Unit tests
         run: npm test
+
+      # Applies every migration to an empty database, then runs the reservation
+      # concurrency proof against it: N=20 for one slot, and the same race again
+      # with the index dropped, which must double-book.
+      - name: Integration tests (PostgreSQL)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/darkview_test
+          DATABASE_TEST_URL: postgresql://postgres:postgres@localhost:5432/darkview_test
+        run: npm run test:integration
 
       # The agent never commands real hardware in CI. The simulator is the
       # default implementation and these tests run against it, always.

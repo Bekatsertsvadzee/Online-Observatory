@@ -702,9 +702,15 @@ model MissionEvent {
 /// Contract: Booking. A slot is identified by its start instant and duration --
 /// slots are generated (DV-054), not stored, so there is no Slot table.
 ///
-/// Two CONFIRMED bookings may never occupy the same slot. Prisma cannot express a
-/// partial unique index, so it is created as raw SQL in the migration:
-///   booking_confirmed_slot_unique ON (observatoryId, slotStartAt) WHERE status = 'CONFIRMED'
+/// Exclusivity is the database's job, not the application's. Prisma cannot express
+/// a partial unique index, so DV-055 creates it as raw SQL in the migration:
+///   booking_held_slot_unique ON (observatoryId, slotStartAt)
+///     WHERE status IN ('PENDING_PAYMENT', 'CONFIRMED')
+///
+/// A booking holds its slot from the moment it is reserved, not from the moment it
+/// is paid for -- otherwise two people could pay for the same half hour and only
+/// one of them could have it. CANCELLED, EXPIRED and REFUNDED bookings fall out of
+/// the index, so a released slot is immediately bookable again.
 model Booking {
   id              String        @id @default(uuid()) @db.Uuid
   userId          String        @db.Uuid
@@ -716,8 +722,16 @@ model Booking {
   slotStartAt     DateTime
   durationMinutes Int
   status          BookingStatus @default(PENDING_PAYMENT)
+  /// When an unpaid hold lapses and the slot returns to the available list. Set for
+  /// every PENDING_PAYMENT booking -- booking_pending_payment_has_hold_expiry makes
+  /// that the database's rule, so an abandoned checkout cannot hold a slot forever.
+  holdExpiresAt   DateTime?
   priceMinor      Int
   currency        Currency      @default(GEL)
+  /// Contract: the Idempotency-Key header on POST /bookings. Unique per user, so a
+  /// retried request returns the first booking instead of reserving a second slot.
+  /// Null for a request that sent no key; Postgres does not collide on nulls.
+  idempotencyKey  String?
   isDemo          Boolean       @default(false)
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
@@ -729,9 +743,11 @@ model Booking {
   payment         Payment?      @relation(fields: [paymentId], references: [id], onDelete: SetNull)
   privateSession  PrivateSession?
 
+  @@unique([userId, idempotencyKey])
   @@index([observatoryId, slotStartAt])
   @@index([userId, slotStartAt])
   @@index([status])
+  @@index([status, holdExpiresAt])
 }
 
 /// Contract: PaymentIntent. No provider-specific column is modelled, because no

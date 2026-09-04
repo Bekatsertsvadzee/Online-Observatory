@@ -19,6 +19,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
+    "test:integration": "npm run db:deploy --workspace @darkview/db && npm run test:integration --workspace @darkview/api",
     "test:agent": "cd agent && .venv/bin/python -m pytest",
     "lint:agent": "agent/.venv/bin/ruff check agent",
     "db:generate": "npm run db:generate --workspace @darkview/db",
