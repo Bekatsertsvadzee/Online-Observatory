@@ -102,8 +102,14 @@ class CommandValidator:
         envelope: SafetyEnvelope | None = None,
         audit: AuditLog | None = None,
         seen_capacity: int = 4096,
+        attended: bool = False,
     ) -> None:
         self._envelope = envelope or SafetyEnvelope()
+        # Whether an operator is physically at the observatory, from the local
+        # configuration and nothing else. Defaults to False for the same reason
+        # `load_config` refuses to start REAL without it: unattended is the state
+        # to assume when nobody has said otherwise.
+        self._attended = attended
         # Not `audit or AuditLog()`: AuditLog defines __len__, so an empty one is
         # falsy and an injected log would be silently discarded.
         self._audit = AuditLog() if audit is None else audit
@@ -222,6 +228,18 @@ class CommandValidator:
 
         return self._accept(envelope)
 
+    def _operator_override(self, envelope: CommandEnvelope) -> bool:
+        """Whether this command may lift the daylight lock.
+
+        The override exists for attended terrestrial testing, so the operator has
+        to be here. `issuedByOperatorId` is a claim made by the cloud, and this
+        validator exists to withhold exactly that trust: a compromised or simply
+        buggy cloud must not be able to slew the mount in daylight with nobody at
+        the observatory. The cloud's claim is a necessary condition, never a
+        sufficient one; the local attended flag decides.
+        """
+        return self._attended and envelope.issued_by_operator_id is not None
+
     def _check_pointing(self, envelope: CommandEnvelope, payload, at_time: datetime) -> Ack | None:
         if payload.kind == "GOTO":
             if self._envelope.site is None:
@@ -241,7 +259,7 @@ class CommandValidator:
                 at_time,
                 horizontal.altitude_degrees,
                 horizontal.azimuth_degrees,
-                operator_override=envelope.issued_by_operator_id is not None,
+                operator_override=self._operator_override(envelope),
             )
             if not verdict.permitted:
                 assert verdict.reason is not None

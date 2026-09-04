@@ -24,10 +24,12 @@ from tests.command_fixtures import (
     nudge_payload,
     park,
 )
-from tests.envelope_fixtures import TBILISI, build_config
+from tests.envelope_fixtures import NOON, TBILISI, build_config
 
 
-def validator(*, measured: bool = True, owned: bool = True, **config) -> CommandValidator:
+def validator(
+    *, measured: bool = True, owned: bool = True, attended: bool = False, **config
+) -> CommandValidator:
     safety = SafetyEnvelope(
         config=build_config(
             max_altitude_degrees=68.0 if measured else None,
@@ -36,7 +38,7 @@ def validator(*, measured: bool = True, owned: bool = True, **config) -> Command
         ),
         site=TBILISI,
     )
-    instance = CommandValidator(envelope=safety)
+    instance = CommandValidator(envelope=safety, attended=attended)
     if owned:
         instance.set_ownership(OWNERSHIP)
     return instance
@@ -279,6 +281,71 @@ def test_a_goto_above_max_alt_safe_is_refused():
     subject = validator(min_altitude_degrees=20.0)
     ack = subject.validate(goto(payload=goto_payload(ra_hours=18.0, dec_degrees=40.0)), NOW)
     assert ack.rejection_reason is CommandRejectionReason.safety_above_max_altitude
+
+
+# --------------------------------------------------------------------------
+# The daylight lock is lifted by the operator being here, not by the cloud
+# saying so
+# --------------------------------------------------------------------------
+
+# A target the Sun cannot object to at local noon: 30 degrees up in the north,
+# 77 degrees from the Sun, inside both altitude limits. Only the daylight lock
+# can refuse it.
+DAYLIGHT_SAFE = dict(ra_hours=15.0, dec_degrees=75.0)
+
+
+def test_the_cloud_cannot_lift_the_daylight_lock_on_an_unattended_agent():
+    """The second validation exists to withhold exactly this trust.
+
+    `issuedByOperatorId` is a claim the cloud makes. A compromised or simply
+    buggy cloud must not be able to slew the mount in full daylight with nobody
+    at the observatory.
+    """
+    subject = validator(attended=False)
+    command = goto(payload=goto_payload(**DAYLIGHT_SAFE), issued_by_operator_id=uuid4())
+
+    ack = subject.validate(command, NOON)
+
+    assert ack.status is CommandAcceptanceStatus.rejected
+    assert ack.rejection_reason is CommandRejectionReason.safety_daylight_lock
+
+
+def test_an_attended_agent_accepts_the_same_command():
+    """Attended terrestrial testing is what the override is for."""
+    subject = validator(attended=True)
+    command = goto(payload=goto_payload(**DAYLIGHT_SAFE), issued_by_operator_id=uuid4())
+
+    ack = subject.validate(command, NOON)
+
+    assert ack.accepted is True, ack.detail
+
+
+def test_being_attended_alone_does_not_lift_the_lock():
+    """Both conditions, always: an operator here AND an operator-issued command.
+
+    An attended agent still refuses an ordinary customer GOTO in daylight.
+    """
+    subject = validator(attended=True)
+
+    ack = subject.validate(goto(payload=goto_payload(**DAYLIGHT_SAFE)), NOON)
+
+    assert ack.rejection_reason is CommandRejectionReason.safety_daylight_lock
+
+
+def test_the_sun_exclusion_survives_an_attended_operator_override():
+    """No flag, override or configuration value widens the Sun exclusion.
+
+    RA 6h Dec +23 is roughly where the Sun itself is on this date.
+    """
+    subject = validator(attended=True)
+    command = goto(
+        payload=goto_payload(ra_hours=6.0, dec_degrees=23.0),
+        issued_by_operator_id=uuid4(),
+    )
+
+    ack = subject.validate(command, NOON)
+
+    assert ack.rejection_reason is CommandRejectionReason.safety_sun_exclusion
 
 
 def test_a_nudge_beyond_the_cumulative_limit_is_refused():
