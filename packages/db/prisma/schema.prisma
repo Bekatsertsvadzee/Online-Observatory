@@ -171,11 +171,19 @@ enum PrivateSessionStatus {
   CANCELLED
 }
 
-enum ObservatoryCommandOperation {
-  START_MISSION
-  ABORT_MISSION
-  PARK
+/// Contract: CommandType. The complete set of instructions the cloud may send.
+///
+/// This row is the record of what actually crossed the process boundary, so it
+/// carries the contract's vocabulary and not a second one of its own. The subset a
+/// customer may cause to be minted is ClientCommandType, enforced in the API.
+enum CommandType {
+  GOTO
+  NUDGE
   CAPTURE
+  FOCUS
+  ABORT
+  PARK
+  SET_PROFILE
 }
 
 enum ObservatoryCommandStatus {
@@ -339,6 +347,7 @@ model User {
   auditLogs           AuditLog[]               @relation("AuditActor")
   missionPresences    MissionPresence[]
   missionParticipants MissionParticipant[]
+  missionSessions     MissionSession[]
   captureAccess       CaptureAccess[]
   networkNodes        ObservatoryNetworkNode[] @relation("NetworkNodeOwner")
 }
@@ -644,11 +653,51 @@ model Mission {
   presences           MissionPresence[]
   participants        MissionParticipant[]
   captureAccess       CaptureAccess[]
+  sessions            MissionSession[]
 
   @@index([userId, requestedAt])
   @@index([observatoryId, state, scheduledFor])
   @@index([targetId])
   @@index([telescopeId])
+}
+
+/// Contract: MissionSession. Who currently holds the telescope.
+///
+/// `CLAUDE.md`: one active mission at a time, one active session owner at a time.
+/// Both are partial unique indexes rather than application checks, because two
+/// simultaneous requests cannot be separated by a read followed by a write. DV-058
+/// creates them as raw SQL in the migration; Prisma cannot express either.
+///
+///   MissionSession_active_owner_unique  ON (missionId) WHERE revokedAt IS NULL
+///   Mission_active_per_observatory_unique  ON (observatoryId) WHERE state is live
+///
+/// A session leaves the index the moment it is revoked, so handing the telescope to
+/// the next customer is a status change and nothing more. Expiry is swept inside the
+/// same transaction that opens the next session -- an index predicate cannot compare
+/// against now().
+model MissionSession {
+  id         String    @id @default(uuid()) @db.Uuid
+  missionId  String    @db.Uuid
+  userId     String    @db.Uuid
+  issuedAt   DateTime  @default(now())
+  expiresAt  DateTime
+  /// Set when the session ends, expires, or is taken by an operator. Null means
+  /// this row is the current owner, and the partial unique index above allows
+  /// exactly one such row per mission.
+  revokedAt  DateTime?
+  /// Contract: CommandRejectionReason vocabulary is the agent's; this is for the
+  /// operator reading the audit trail. Free text, never shown to a customer.
+  revokedFor String?
+  isDemo     Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  mission    Mission   @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  commands   ObservatoryCommand[]
+
+  @@index([missionId, issuedAt])
+  @@index([userId, issuedAt])
+  @@index([revokedAt, expiresAt])
 }
 
 model MissionPresence {
@@ -934,29 +983,47 @@ model PrivateSession {
   @@index([userId, startsAt])
 }
 
+/// One minted CommandEnvelope, as a durable row.
+///
+/// ADR-009: the orchestrator writes this row and issues NOTIFY in the same
+/// transaction; the realtime service reads it and sends it down the agent socket.
+/// The row is the source of truth and the notification is only a wake-up, so a
+/// notification lost while realtime was reconnecting costs latency, never a command.
+///
+/// `id` is the contract's `commandId`, which is also the agent's idempotency key --
+/// hence a real UUID column. A value the agent's CommandEnvelope could not parse
+/// must not be storable here.
 model ObservatoryCommand {
-  id            String                      @id
-  missionId     String                      @db.Uuid
-  userId        String                      @db.Uuid
-  observatoryId String                      @db.Uuid
-  operation     ObservatoryCommandOperation
-  status        ObservatoryCommandStatus    @default(RECEIVED)
+  id            String                   @id @db.Uuid
+  missionId     String                   @db.Uuid
+  sessionId     String                   @db.Uuid
+  userId        String                   @db.Uuid
+  observatoryId String                   @db.Uuid
+  type          CommandType
+  status        ObservatoryCommandStatus @default(RECEIVED)
   issuedAt      DateTime
   expiresAt     DateTime
+  /// When the realtime service put it on the wire. Null means it is still waiting,
+  /// which is what the ADR-009 fallback sweep looks for.
+  relayedAt     DateTime?
   completedAt   DateTime?
+  /// The contract CommandPayload, exactly as sent. Never rebuilt from columns: the
+  /// audit has to show what crossed the boundary, not an approximation of it.
   payload       Json?
   result        Json?
-  simulated     Boolean                     @default(false)
-  isDemo        Boolean                     @default(false)
-  createdAt     DateTime                    @default(now())
-  updatedAt     DateTime                    @updatedAt
-  mission       Mission                     @relation(fields: [missionId], references: [id], onDelete: Restrict)
-  user          User                        @relation(fields: [userId], references: [id], onDelete: Restrict)
-  observatory   Observatory                 @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
+  simulated     Boolean                  @default(false)
+  isDemo        Boolean                  @default(false)
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  mission       Mission                  @relation(fields: [missionId], references: [id], onDelete: Restrict)
+  session       MissionSession           @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  user          User                     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  observatory   Observatory              @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
   auditLogs     AuditLog[]
 
   @@index([missionId, issuedAt])
   @@index([observatoryId, status, issuedAt])
+  @@index([observatoryId, relayedAt])
   @@index([userId])
 }
 
@@ -968,7 +1035,7 @@ model AuditLog {
   actorHash   String?
   entityType  String?
   entityId    String?
-  commandId   String?
+  commandId   String?             @db.Uuid
   metadata    Json?
   isDemo      Boolean             @default(false)
   createdAt   DateTime            @default(now())

@@ -4,6 +4,8 @@ import { WebSocketServer, type WebSocket } from "ws";
 
 import { authenticateAgent } from "@/auth/device-token";
 import { AgentLink } from "@/link/agent-link";
+import { AgentRelay } from "@/link/agent-relay";
+import { CommandListener } from "@/link/command-listener";
 import { createPrismaStore } from "@/link/prisma-store";
 import { AgentLinkRegistry } from "@/link/registry";
 import { HEARTBEAT_INTERVAL_SECONDS } from "@/link/protocol";
@@ -24,6 +26,7 @@ const AGENT_PATH = "/ws/agent";
  */
 export function createRealtimeServer(store: LinkStore) {
   const registry = new AgentLinkRegistry();
+  const relay = new AgentRelay(store, registry);
   const httpServer = createServer((_request, response) => {
     response.writeHead(404).end();
   });
@@ -76,7 +79,14 @@ export function createRealtimeServer(store: LinkStore) {
     }
 
     connection.on("message", (data) => {
-      void link.receive(data.toString());
+      void link
+        .receive(data.toString())
+        // An agent that has just said hello may have missed notifications while it
+        // was away. ADR-009: the row is the source of truth, so anything unrelayed
+        // for this observatory goes out now.
+        .then(() => {
+          if (link.currentState === "ONLINE") void relay.sweep(observatory.id);
+        });
     });
     connection.on("close", () => {
       registry.release(observatory.id, link);
@@ -84,15 +94,16 @@ export function createRealtimeServer(store: LinkStore) {
     });
   }
 
-  const sweep = setInterval(() => {
+  const heartbeatSweep = setInterval(() => {
     void registry.expireSilent(Date.now());
   }, HEARTBEAT_INTERVAL_SECONDS * 1000);
 
   return {
     registry,
+    relay,
     listen: (port: number) => httpServer.listen(port),
     close: async () => {
-      clearInterval(sweep);
+      clearInterval(heartbeatSweep);
       sockets.close();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     },
@@ -105,6 +116,17 @@ if (process.env.NODE_ENV !== "test") {
   const environment = getEnvironment();
   const server = createRealtimeServer(createPrismaStore(environment.DATABASE_URL));
   server.listen(environment.REALTIME_PORT);
+
+  // ADR-009. The listener is an optimisation over the sweep, so a failure to
+  // connect it is logged and retried rather than fatal: commands still reach the
+  // agent, just on reconnect instead of immediately.
+  const listener = new CommandListener({
+    connectionString: environment.DATABASE_URL,
+    relay: server.relay,
+    onError: (error) => console.error("darkview realtime: listener", error),
+  });
+  void listener.start();
+
   console.log(
     `darkview realtime listening on :${environment.REALTIME_PORT}${AGENT_PATH}`,
   );

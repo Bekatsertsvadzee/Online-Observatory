@@ -557,18 +557,41 @@ async function seedDevelopmentDatabase() {
       update: { status: "CONFIRMED", isDemo: true },
     });
 
-    const commandId = "CMD-DEMO-START-SATURN";
+    // The session this demo command was issued under. Revoked, because the mission
+    // it belongs to is COMPLETE -- an active session on a finished mission would be
+    // a state the orchestrator can never produce.
+    const demoSessionId = "00000000-0000-4000-8000-000000000601";
+    await database.missionSession.upsert({
+      where: { id: demoSessionId },
+      create: {
+        id: demoSessionId,
+        missionId: DEMO_MISSIONS[0].id,
+        userId: DEMO_IDS.operator,
+        issuedAt: new Date("2026-08-20T18:30:00.000Z"),
+        expiresAt: new Date("2026-08-20T19:00:00.000Z"),
+        revokedAt: new Date("2026-08-20T18:52:00.000Z"),
+        revokedFor: "MISSION_COMPLETE",
+        isDemo: true,
+      },
+      update: { revokedAt: new Date("2026-08-20T18:52:00.000Z"), isDemo: true },
+    });
+
+    // A real commandId: it is the agent's idempotency key and the agent parses it
+    // as a UUID, so demo data may not demonstrate a shape that could never be sent.
+    const commandId = "00000000-0000-4000-8000-000000000611";
     await database.observatoryCommand.upsert({
       where: { id: commandId },
       create: {
         id: commandId,
         missionId: DEMO_MISSIONS[0].id,
+        sessionId: demoSessionId,
         userId: DEMO_IDS.operator,
         observatoryId: DEMO_IDS.observatory,
-        operation: "START_MISSION",
+        type: "GOTO",
         status: "COMPLETED",
         issuedAt: new Date("2026-08-20T18:34:00.000Z"),
         expiresAt: new Date("2026-08-20T18:35:00.000Z"),
+        relayedAt: new Date("2026-08-20T18:34:01.000Z"),
         completedAt: new Date("2026-08-20T18:35:00.000Z"),
         payload: { mode: "SIMULATOR", target: "DEMO-SATURN" },
         result: { accepted: true, simulated: true },

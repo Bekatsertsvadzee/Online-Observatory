@@ -1,4 +1,4 @@
-import type { ObservatoryMode } from "@darkview/contracts";
+import type { CommandEnvelope, ObservatoryMode } from "@darkview/contracts";
 
 /**
  * Everything the agent link needs from storage, and nothing else.
@@ -26,7 +26,30 @@ export interface LinkStore {
 
   markLinkUp(observatoryId: string): Promise<void>;
   markLinkLost(observatoryId: string, at: Date): Promise<void>;
+
+  /** One minted command, by its commandId. Null when it is gone or not ours. */
+  loadCommand(commandId: string): Promise<RelayableCommand | null>;
+
+  /**
+   * Commands written but never put on the wire.
+   *
+   * ADR-009's fallback: `NOTIFY` is not delivered to a listener that was
+   * disconnected at that instant, so the row -- which is the source of truth --
+   * is swept for. Expired commands are excluded; the agent would refuse them and
+   * relaying one would only produce a confusing ack.
+   */
+  pendingCommands(observatoryId: string, now: Date): Promise<RelayableCommand[]>;
+
+  markCommandRelayed(commandId: string, at: Date): Promise<void>;
+
+  /** The session that currently owns a mission, for re-deriving after a reconnect. */
+  activeSessionId(missionId: string, now: Date): Promise<string | null>;
 }
+
+export type RelayableCommand = {
+  observatoryId: string;
+  envelope: CommandEnvelope;
+};
 
 export type ObservatoryRecord = {
   id: string;

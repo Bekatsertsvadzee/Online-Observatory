@@ -2,9 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import type {
   AgentToCloudMessage,
+  CloudCommand,
   CloudError,
+  CloudSessionUpdate,
   CloudToAgentMessage,
   CloudWelcome,
+  CommandEnvelope,
   ErrorCode,
 } from "@darkview/contracts";
 import { zAgentToCloudMessage } from "@darkview/contracts/zod";
@@ -29,8 +32,7 @@ export const HEARTBEAT_INTERVAL_SECONDS = 5;
 export const HEARTBEAT_GRACE_SECONDS = HEARTBEAT_INTERVAL_SECONDS * 3;
 
 export type ParsedMessage =
-  | { ok: true; message: AgentToCloudMessage }
-  | { ok: false; reason: string };
+  { ok: true; message: AgentToCloudMessage } | { ok: false; reason: string };
 
 /**
  * Parse and validate one inbound frame against the generated contract schema.
@@ -70,12 +72,28 @@ export function cloudWelcome(expectedMissionId: string | null): CloudWelcome {
   };
 }
 
-export function cloudError(
-  code: ErrorCode,
-  message: string,
-  fatal = false,
-): CloudError {
+export function cloudError(code: ErrorCode, message: string, fatal = false): CloudError {
   return { type: "CLOUD_ERROR", ...envelope(), code, message, fatal };
+}
+
+/**
+ * Wrap an envelope the orchestrator minted. Nothing is added to it and nothing is
+ * rewritten: this service transports, it does not decide (architecture §2), and an
+ * envelope altered in transit would not be the one the audit row records.
+ */
+export function cloudCommand(command: CommandEnvelope): CloudCommand {
+  return { type: "CLOUD_COMMAND", ...envelope(), command };
+}
+
+/**
+ * Tell the agent who owns the mission. A null sessionId revokes it, after which
+ * the agent accepts no client-originated command for that mission at all.
+ */
+export function cloudSessionUpdate(
+  missionId: string,
+  sessionId: string | null,
+): CloudSessionUpdate {
+  return { type: "CLOUD_SESSION_UPDATE", ...envelope(), missionId, sessionId };
 }
 
 export type Send = (message: CloudToAgentMessage) => void;
