@@ -42,9 +42,31 @@ export interface LinkStore {
 
   markCommandRelayed(commandId: string, at: Date): Promise<void>;
 
-  /** The session that currently owns a mission, for re-deriving after a reconnect. */
-  activeSessionId(missionId: string, now: Date): Promise<string | null>;
+  /**
+   * One session by id, or null when it is gone, revoked or lapsed.
+   *
+   * ADR-009 again: the notification is a wake-up and the row is the truth. A
+   * session revoked between the NOTIFY and this read must reach the agent as a
+   * revocation, not as the grant the notification was written for.
+   */
+  loadSession(sessionId: string): Promise<ActiveSession | null>;
+
+  /**
+   * Whoever owns this observatory's live mission right now.
+   *
+   * Re-sent on reconnect. The agent holds ownership in memory, so an agent that
+   * restarted or dropped its link has forgotten who owns it, and would refuse
+   * every command until the customer noticed and reopened their session.
+   */
+  activeSession(observatoryId: string, now: Date): Promise<ActiveSession | null>;
 }
+
+export type ActiveSession = {
+  sessionId: string;
+  missionId: string;
+  userId: string;
+  expiresAt: Date;
+};
 
 export type RelayableCommand = {
   observatoryId: string;

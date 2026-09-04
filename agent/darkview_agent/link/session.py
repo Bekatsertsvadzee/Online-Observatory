@@ -140,6 +140,18 @@ class LinkSession:
     def set_resume_mission(self, mission_id: uuid.UUID | None) -> None:
         self._resume_mission_id = mission_id
 
+    def drop(self, reason: str) -> None:
+        """Close the current connection and re-dial after the usual backoff.
+
+        The contract's answer to a fatal CLOUD_ERROR: "the agent closes the link,
+        backs off and re-dials. It does not stop enforcing safety while
+        disconnected." Queued messages survive, because they belong to the
+        session rather than to the socket.
+        """
+        if self._state is LinkState.DISCONNECTED:
+            return
+        self._handle_disconnection(reason)
+
     def take_received(self) -> list[dict]:
         """Hand over everything that arrived since the last call."""
         received, self._received = self._received, []

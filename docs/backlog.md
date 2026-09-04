@@ -1,6 +1,6 @@
 # Darkview Platform — backlog
 
-56 issues. IDs are stable across both repositories and never reused. Gaps in the
+57 issues. IDs are stable across both repositories and never reused. Gaps in the
 numbering are intentional headroom.
 
 Detailed acceptance criteria and evidence requirements for each issue are held in the
@@ -40,6 +40,7 @@ dependency order.
 | DV-025 | Command envelope validation | M |
 | DV-026 | `mission/runner.py` — the state machine on the simulator | L |
 | DV-027 | `state/store.py` — local state and restart replay | M |
+| DV-040 | Agent supervisor — command intake and the run loop | M |
 | DV-028 | `AlpacaMount` over ASCOM Alpaca HTTP | L |
 | DV-029 | `ZwoCamera` via the ZWO ASI SDK | L |
 | DV-030 | `solve/astap.py` — plate solving | M |
@@ -53,8 +54,8 @@ dependency order.
 | DV-038 | `[ATTENDED]` Evidence run accumulation | M |
 | DV-039 | Weather state handling in the agent | M |
 
-DV-026 carries an obligation from work already merged — see **Wiring owed to DV-026**
-below. Read it before starting that issue.
+DV-026 shipped without the validator wiring it owed; DV-040 paid it. See **What DV-040
+wired, and what it deferred** below before touching command intake.
 
 ## API, data and realtime
 
@@ -121,7 +122,7 @@ DV-025 command validation        DV-057 agent link service
 DV-024 watchdog                  DV-058 orchestrator
 DV-027 local state store         DV-059 cloud safety
 DV-026 mission runner (sim)      DV-062 audit log
-                                 DV-060 mission channel
+DV-040 supervisor + run loop     DV-060 mission channel
 ```
 
 **Milestone S1 — simulated end to end.** A command traverses API → WSS → agent →
@@ -148,31 +149,59 @@ DV-112, DV-115.
 
 ## Critical path
 
-DV-003 → DV-020/021/022 → DV-023/025 → DV-026 → DV-057/058 → DV-060 → **Milestone S1** →
-DV-034 (where `MAX_ALT_SAFE` is measured) → DV-028/029/030 → DV-036.
+DV-003 → DV-020/021/022 → DV-023/025 → DV-026 → DV-057/058 → DV-040 → DV-060 →
+**Milestone S1** → DV-034 (where `MAX_ALT_SAFE` is measured) → DV-028/029/030 → DV-036.
+
+DV-040 is on the path because nothing before it made a command reach a device. Until it
+landed, every component of the chain existed and the chain did not.
 
 Everything else hangs off that path and must not be scheduled ahead of it.
 
-## Wiring owed to DV-026
+## What DV-040 wired, and what it deferred
 
-Safety fixes have added constructor arguments to `CommandValidator` that **nothing
-constructs yet**. No production code in `darkview_agent/` builds a validator today — the
-mission runner does, and DV-026 is where it gets built. Both arguments default to the
-safe answer, so the omission is silent rather than dangerous. Silent is the problem: it
-will look like a bug when a nudge is refused for no visible reason.
+DV-026 built the mission runner and DV-057/058 built the link and the orchestrator,
+but nothing joined them: a command minted by the cloud reached the agent's socket and
+was dropped. `darkview_agent/supervisor.py` is that join, and `python -m darkview_agent`
+is the process that runs it.
 
-| Argument | Default | What DV-026 must pass | If it is forgotten |
-| --- | --- | --- | --- |
-| `pointing` | `None` | `lambda: (s.altitude_degrees, s.azimuth_degrees)` from `MountDriver.status()` | Every NUDGE is refused with `DEVICE_UNAVAILABLE` |
-| `attended` | `False` | `AgentConfig.attended` | The daylight lock can never be lifted, so attended terrestrial testing is impossible |
+**Paid.** `CommandValidator` was constructed nowhere in production code. Both of its
+fail-closed arguments are now passed by `build_supervisor`, and each is proved by a test
+that fails if the wiring is removed — a unit test of the validator passes either way.
 
-Both defaults are deliberate. Fail closed is the right behaviour for an unwired
-validator, so the fix is always to wire it and never to default it open. Issues #10 and
-#12 record why each exists.
+| Argument | What it is now | Proved by |
+| --- | --- | --- |
+| `pointing` | `MountDriver.status()` altitude and azimuth | `test_a_nudge_is_judged_on_where_it_would_land` |
+| `attended` | `AgentConfig.attended`, from local configuration only | `test_the_daylight_lock_answers_to_the_local_attended_flag` |
 
-DV-026's acceptance criteria should include a NUDGE accepted end to end through the
-runner. That is the only thing that proves `pointing` was actually connected — a unit
-test of the validator passes either way.
+`MissionRequest.operator_override` was added in the same work. Without it a daylight
+GOTO from an attended operator was accepted by the validator and then refused by the
+runner a moment later, which would have made the attended terrestrial testing DV-034 and
+DV-035 depend on impossible.
+
+**Deferred, and refused loudly meanwhile.** Three command types the contract defines have
+no implementation behind them. The supervisor refuses each with `DEVICE_UNAVAILABLE` and a
+detail naming the issue that owes it, because an ACCEPTED ack for a command nothing
+performs tells the customer the telescope did something it did not do.
+
+| Command | Owed to | What is missing |
+| --- | --- | --- |
+| `CAPTURE` | DV-033, DV-061 | The live stack, the upload and somewhere to keep the result |
+| `FOCUS` | DV-031 | The focuser driver and the autofocus routine |
+| `SET_PROFILE` | DV-033 | The table mapping an imaging profile to exposure, gain and ROI |
+
+`CAPTURE` is a `ClientCommandType`. Until DV-033 lands, the Capture control has nothing
+behind it and the web UI must not offer it as though it did.
+
+**A question DV-028 must answer, not copy.** The supervisor performs a nudge as an
+absolute alt/az slew to the projected position. That is exactly a nudge against
+`SimMount`. Against a tracking Celestron it is a real question — whether the offset
+belongs on the target or on the axes — and DV-028 has to decide it from the mount's
+behaviour rather than from the line the simulator made look correct.
+
+**The mission profile is still the runner's defaults.** A `GotoPayload` carries an
+`opticalConfig` and an `imagingProfile`; nothing yet maps either to an exposure, a gain or
+a frame count, so a mission runs on `DEFAULT_EXPOSURE_MILLISECONDS`, `DEFAULT_GAIN` and
+`DEFAULT_CAPTURE_FRAMES`. DV-033 replaces them with measured figures per profile.
 
 ## Blocking external dependencies
 

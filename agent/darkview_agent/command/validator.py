@@ -165,6 +165,17 @@ class CommandValidator:
     def set_envelope(self, envelope: SafetyEnvelope) -> None:
         self._envelope = envelope
 
+    def reset_nudge_offset(self) -> None:
+        """Forget how far the customer has nudged from the booked target.
+
+        Called after a recentring GOTO puts the mount back on target. The offset
+        measures drift away from what was booked, so once the drift is undone the
+        allowance is spent on nothing and must be returned — otherwise the
+        recentre control takes the customer's remaining nudges away rather than
+        giving them back, and a session ends unable to move at all.
+        """
+        self._cumulative_nudge_degrees = 0.0
+
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
@@ -246,8 +257,12 @@ class CommandValidator:
 
         return self._accept(envelope)
 
-    def _operator_override(self, envelope: CommandEnvelope) -> bool:
+    def operator_override(self, envelope: CommandEnvelope) -> bool:
         """Whether this command may lift the daylight lock.
+
+        Public because the mission a GOTO starts has to be admitted under the
+        same answer. Two copies of this rule would be two places for it to drift,
+        and the copy that drifted open would be the one nobody noticed.
 
         The override exists for attended terrestrial testing, so the operator has
         to be here. `issuedByOperatorId` is a claim made by the cloud, and this
@@ -292,7 +307,7 @@ class CommandValidator:
                 at_time,
                 horizontal.altitude_degrees,
                 horizontal.azimuth_degrees,
-                operator_override=self._operator_override(envelope),
+                operator_override=self.operator_override(envelope),
             )
             if not verdict.permitted:
                 assert verdict.reason is not None
@@ -335,7 +350,7 @@ class CommandValidator:
             at_time,
             altitude,
             azimuth,
-            operator_override=self._operator_override(envelope),
+            operator_override=self.operator_override(envelope),
         )
         if not verdict.permitted:
             assert verdict.reason is not None

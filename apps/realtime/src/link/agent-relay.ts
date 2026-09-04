@@ -78,6 +78,17 @@ export class AgentRelay {
     return "SENT";
   }
 
+  /**
+   * Tell the agent who owns a mission, reading the session from the database.
+   *
+   * The notification names a sessionId; everything sent is read from the row, so
+   * a session revoked between the NOTIFY and this read reaches the agent as a
+   * revocation rather than as the grant the notification was written for.
+   *
+   * `expiresAt` is carried rather than enforced here. The agent drops a lapsed
+   * owner on its own clock, which is what has to happen anyway when the cloud
+   * has stopped talking.
+   */
   async relaySession(
     observatoryId: string,
     missionId: string,
@@ -86,7 +97,12 @@ export class AgentRelay {
     const link = this.registry.get(observatoryId);
     if (!link) return "NO_LINK";
 
-    return link.dispatch(cloudSessionUpdate(missionId, sessionId)) ? "SENT" : "NO_LINK";
+    let session = sessionId === null ? null : await this.store.loadSession(sessionId);
+    // A session that names a different mission is not this mission's owner.
+    // Sending it would hand the agent an owner for a mission nobody opened.
+    if (session !== null && session.missionId !== missionId) session = null;
+
+    return link.dispatch(cloudSessionUpdate(missionId, session)) ? "SENT" : "NO_LINK";
   }
 
   /**
@@ -102,7 +118,21 @@ export class AgentRelay {
    * it.
    */
   async sweep(observatoryId: string): Promise<number> {
-    const pending = await this.store.pendingCommands(observatoryId, this.now());
+    const now = this.now();
+
+    // Ownership first, and always. The agent holds it in memory, so one that
+    // restarted or reconnected has forgotten who owns the mission and would
+    // refuse every command below with NO_ACTIVE_MISSION. Re-asserting an
+    // unchanged session costs the agent nothing: it only replaces ownership that
+    // genuinely differs, so the customer's nudge allowance survives.
+    const owner = await this.store.activeSession(observatoryId, now);
+    if (owner !== null) {
+      this.registry
+        .get(observatoryId)
+        ?.dispatch(cloudSessionUpdate(owner.missionId, owner));
+    }
+
+    const pending = await this.store.pendingCommands(observatoryId, now);
 
     let sent = 0;
     for (const command of pending) {
