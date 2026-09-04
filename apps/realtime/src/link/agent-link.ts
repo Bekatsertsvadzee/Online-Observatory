@@ -1,4 +1,4 @@
-import type { AgentToCloudMessage } from "@darkview/contracts";
+import type { AgentToCloudMessage, CloudToAgentMessage } from "@darkview/contracts";
 
 import {
   HEARTBEAT_GRACE_SECONDS,
@@ -135,6 +135,22 @@ export class AgentLink {
       type: message.type,
       sentAt: new Date(message.sentAt),
     });
+  }
+
+  /**
+   * Send a cloud-originated message to this agent.
+   *
+   * Only while ONLINE. Before the hello the agent has not yet told us which
+   * observatory it believes it is, and a command sent into that gap could reach an
+   * agent that is about to be refused for claiming the wrong one.
+   *
+   * Returns whether it went. The caller is the relay, and the relay needs to know
+   * so it can leave the command unrelayed for the sweep rather than mark it sent.
+   */
+  dispatch(message: CloudToAgentMessage): boolean {
+    if (this.state !== "ONLINE") return false;
+    this.send(message);
+    return true;
   }
 
   /** True when the agent has been silent past the grace period. */
