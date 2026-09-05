@@ -17,3 +17,10 @@ diff and to feed to both the TypeScript/Zod and the Pydantic generators.
 - Nothing here is hand-edited downstream. Generated artifacts live in
   `packages/contracts/` (TypeScript + Zod) and `agent/contracts/` (Pydantic), are
   committed, and are verified by `npm run contracts:check` in CI.
+- `additionalProperties: false` is a rejection, and the generated Zod enforces it. The
+  zod plugin does not do that on its own -- it emits `z.object`, which strips unknown
+  keys -- so `packages/contracts/openapi-ts.config.ts` supplies an object resolver that
+  emits `z.strictObject` for closed schemas. **A generator upgrade must be checked
+  against this**: if the resolver hook changes shape, generation still succeeds and every
+  validator quietly goes back to stripping. `apps/api/src/lib/validation/contract-strictness.test.ts`
+  is what catches that.

@@ -194,17 +194,27 @@ describe("POST /bookings", () => {
     });
   });
 
-  it("never lets the caller name its own price", async () => {
+  it("refuses a request that names its own price", async () => {
+    getCurrentSession.mockResolvedValueOnce(session);
+
+    const response = await POST(request({ body: { ...validBody, priceMinor: 1 } }));
+
+    // The contract declares additionalProperties: false and the generated Zod now
+    // enforces it, so an undeclared field is refused rather than quietly stripped.
+    // It never reaches the domain at all.
+    expect(response.status).toBe(422);
+    expect(reserveSlot).not.toHaveBeenCalled();
+  });
+
+  it("takes the price from the server, never from the caller", async () => {
     getCurrentSession.mockResolvedValueOnce(session);
     reserveSlot.mockResolvedValueOnce({ ok: true, replayed: false, body: reserved });
 
-    const response = await POST(request({ body: { ...validBody, priceMinor: 1 } }));
+    const response = await POST(request({ body: validBody }));
     const body = (await response.json()) as typeof reserved;
 
-    // The contract declares additionalProperties: false, but the generated Zod
-    // strips unknown keys rather than rejecting them, so the guarantee has to be
-    // asserted where it actually holds: nothing but the declared fields reaches
-    // the domain, and the price on the way out is the server's.
+    // Behind the validator, not instead of it. Only the declared fields reach the
+    // domain, and the price on the way out is the one the server generated.
     expect(reserveSlot).toHaveBeenCalledWith(
       expect.objectContaining({ request: validBody }),
     );
