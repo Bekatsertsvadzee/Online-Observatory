@@ -98,10 +98,79 @@ export function horizontalOf(
  * marginally more permissive than the agent, which is the wrong way round -- and
  * would put a half-degree wedge into the agreement test for no benefit.
  */
+/**
+ * Where a target is, altitude and azimuth, with no refraction applied.
+ *
+ * `horizontalOf` above is what the API *serves*: refracted, because that is where
+ * the observer's eye finds the object. This is what the safety envelope *judges*,
+ * because the agent's envelope applies no refraction at all and the two have to be
+ * deciding about the same number.
+ *
+ * The difference is not decorative. Refraction lifts an object by up to about half
+ * a degree near the horizon, so pre-validating a refracted altitude would make the
+ * cloud quietly more permissive than the agent exactly where the horizon mask and
+ * the minimum altitude matter most: the cloud would approve a pointing the agent
+ * then refuses, and the two audit trails would disagree about the same command.
+ * `sun-exclusion-agreement.test.ts` is what caught that.
+ */
+export function horizontalAirlessOf(
+  coordinates: EquatorialCoordinates,
+  at: Date,
+  site: Site,
+): HorizontalCoordinates {
+  const horizon = Horizon(
+    MakeTime(at),
+    observerOf(site),
+    coordinates.raHours,
+    coordinates.decDegrees,
+  );
+  return { altitudeDegrees: horizon.altitude, azimuthDegrees: horizon.azimuth };
+}
+
 export function sunAltitudeDegrees(at: Date, site: Site): number {
+  return sunHorizontal(at, site).altitudeDegrees;
+}
+
+/**
+ * Where the Sun is, altitude and azimuth, airless.
+ *
+ * The safety envelope needs both: the daylight lock reads the altitude, and the
+ * Sun exclusion is an angular separation between where the telescope would point
+ * and where the Sun is, which needs the bearing too.
+ *
+ * Airless for the same reason as above, and it matters more here. Refraction lifts
+ * the Sun, so a refracted position would put the cloud's Sun a fraction of a degree
+ * away from the agent's, and the two are compared against each other in
+ * `sun-exclusion-agreement.test.ts`.
+ */
+export function sunHorizontal(at: Date, site: Site): HorizontalCoordinates {
   const sun = Equator(Body.Sun, MakeTime(at), observerOf(site), true, true);
   const airless = Horizon(MakeTime(at), observerOf(site), sun.ra, sun.dec);
-  return airless.altitude;
+  return { altitudeDegrees: airless.altitude, azimuthDegrees: airless.azimuth };
+}
+
+/**
+ * Great-circle angle between two horizontal positions, in degrees.
+ *
+ * The equatorial version above works on right ascension and declination. This one
+ * works on altitude and azimuth, which is what the Sun exclusion compares: a
+ * pointing the mount would take against where the Sun actually is in the sky.
+ */
+export function horizontalSeparationDegrees(
+  left: HorizontalCoordinates,
+  right: HorizontalCoordinates,
+): number {
+  const toRadians = Math.PI / 180;
+  const alt1 = left.altitudeDegrees * toRadians;
+  const alt2 = right.altitudeDegrees * toRadians;
+  const az1 = left.azimuthDegrees * toRadians;
+  const az2 = right.azimuthDegrees * toRadians;
+
+  const cosine =
+    Math.sin(alt1) * Math.sin(alt2) +
+    Math.cos(alt1) * Math.cos(alt2) * Math.cos(az2 - az1);
+
+  return Math.acos(Math.min(1, Math.max(-1, cosine))) / toRadians;
 }
 
 /** Great-circle angle between two equatorial positions, in degrees. */

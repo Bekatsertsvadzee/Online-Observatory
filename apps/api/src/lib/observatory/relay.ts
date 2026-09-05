@@ -33,7 +33,17 @@ export type AgentNotification =
       missionId: string;
       /** Null revokes the session: the agent then accepts no client command for it. */
       sessionId: string | null;
-    };
+    }
+  /**
+   * The safety envelope changed and the agent's copy is now stale.
+   *
+   * Carries no envelope, on purpose and for more than the usual reason. The agent
+   * keeps enforcing its local copy after the link dies, so what it holds decides
+   * whether a telescope moves. That value is read from the row by the service that
+   * owns the socket, never lifted out of a notification payload that anything able
+   * to reach the database could have written.
+   */
+  | { kind: "ENVELOPE"; observatoryId: string };
 
 /**
  * `$executeRaw`, not `$queryRaw`: `pg_notify` returns void, and Prisma refuses to

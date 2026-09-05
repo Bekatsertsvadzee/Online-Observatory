@@ -2,7 +2,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "@darkview/db";
 
-import type { CommandEnvelope } from "@darkview/contracts";
+import type { CommandEnvelope, SafetyEnvelopeConfig } from "@darkview/contracts";
 
 import {
   COMMAND_STATUS_FOR,
@@ -248,6 +248,48 @@ export function createPrismaStore(connectionString: string): LinkStore {
       });
 
       return count === 1 ? "RECORDED" : "IGNORED_STALE";
+    },
+
+    async loadSafetyEnvelope(
+      observatoryId: string,
+    ): Promise<SafetyEnvelopeConfig | null> {
+      const row = await database.safetyEnvelope.findUnique({
+        where: { observatoryId },
+        include: {
+          horizonMask: { orderBy: { azimuthDegrees: "asc" } },
+          forbiddenAzimuthSectors: true,
+        },
+      });
+      if (!row) return null;
+
+      // The same mapping exists in apps/api's safety store. Duplicated for the
+      // same reason as LIVE_MISSION_STATES: this service does not depend on the
+      // Next.js app. If the contract changes, both change.
+      return {
+        observatoryId: row.observatoryId,
+        minAltitudeDegrees: row.minAltitudeDegrees,
+        maxAltitudeDegrees: row.maxAltitudeDegrees,
+        maxAltitudeMeasuredAt: row.maxAltitudeMeasuredAt?.toISOString() ?? null,
+        maxAltitudeMeasuredBy: row.maxAltitudeMeasuredBy,
+        maxAltitudeMeasurementNote: row.maxAltitudeMeasurementNote,
+        horizonMask: row.horizonMask.map((entry) => ({
+          azimuthDegrees: entry.azimuthDegrees,
+          minAltitudeDegrees: entry.minAltitudeDegrees,
+        })),
+        forbiddenAzimuthSectors: row.forbiddenAzimuthSectors.map((sector) => ({
+          fromDegrees: sector.fromDegrees,
+          toDegrees: sector.toDegrees,
+        })),
+        sunExclusionDegrees: row.sunExclusionDegrees,
+        daylightLockSunAltitudeDegrees: row.daylightLockSunAltitudeDegrees,
+        nudgeMaxDegrees: row.nudgeMaxDegrees,
+        nudgeRateDegreesPerSecond: row.nudgeRateDegreesPerSecond,
+        slewTimeoutSeconds: row.slewTimeoutSeconds,
+        heartbeatLossSeconds: row.heartbeatLossSeconds,
+        linkDeadSeconds: row.linkDeadSeconds,
+        refocusTemperatureDeltaC: row.refocusTemperatureDeltaC,
+        updatedAt: row.updatedAt.toISOString(),
+      };
     },
 
     async liveMissionId(observatoryId: string): Promise<string | null> {

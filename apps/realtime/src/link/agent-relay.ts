@@ -1,5 +1,9 @@
 import type { AgentLinkRegistry } from "@/link/registry";
-import { cloudCommand, cloudSessionUpdate } from "@/link/protocol";
+import {
+  cloudCommand,
+  cloudSafetyEnvelopeUpdate,
+  cloudSessionUpdate,
+} from "@/link/protocol";
 import type { LinkStore } from "@/link/store";
 
 /**
@@ -22,7 +26,8 @@ export type NotificationPayload =
       observatoryId: string;
       missionId: string;
       sessionId: string | null;
-    };
+    }
+  | { kind: "ENVELOPE"; observatoryId: string };
 
 export type RelayOutcome = "SENT" | "NO_LINK" | "NOT_FOUND" | "MALFORMED";
 
@@ -57,6 +62,9 @@ export class AgentRelay {
         notification.missionId,
         notification.sessionId,
       );
+    }
+    if (notification?.kind === "ENVELOPE") {
+      return this.relayEnvelope(notification.observatoryId);
     }
     return "MALFORMED";
   }
@@ -106,6 +114,26 @@ export class AgentRelay {
   }
 
   /**
+   * Hand the agent the stored safety envelope.
+   *
+   * Read from the row, never from the notification: the payload is a wake-up that
+   * anything able to reach the database could have written, and these are the
+   * numbers that decide whether a telescope moves. An observatory with no envelope
+   * row sends nothing rather than something permissive -- the agent's own default
+   * is already refuse-everything, and overwriting it with an invented envelope is
+   * the one way this could make things worse.
+   */
+  async relayEnvelope(observatoryId: string): Promise<RelayOutcome> {
+    const link = this.registry.get(observatoryId);
+    if (!link) return "NO_LINK";
+
+    const envelope = await this.store.loadSafetyEnvelope(observatoryId);
+    if (!envelope) return "NOT_FOUND";
+
+    return link.dispatch(cloudSafetyEnvelopeUpdate(envelope)) ? "SENT" : "NO_LINK";
+  }
+
+  /**
    * Send anything written but never put on the wire.
    *
    * Run on every reconnect and on a slow timer. `NOTIFY` is not delivered to a
@@ -125,6 +153,12 @@ export class AgentRelay {
     // refuse every command below with NO_ACTIVE_MISSION. Re-asserting an
     // unchanged session costs the agent nothing: it only replaces ownership that
     // genuinely differs, so the customer's nudge allowance survives.
+    // The envelope first of all. An agent that has just reconnected is holding
+    // whatever it recovered locally, and an operator may have measured
+    // MAX_ALT_SAFE while it was away. Everything below this line is about letting
+    // the telescope move, so the limits it moves within go first.
+    await this.relayEnvelope(observatoryId);
+
     const owner = await this.store.activeSession(observatoryId, now);
     if (owner !== null) {
       this.registry

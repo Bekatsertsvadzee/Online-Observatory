@@ -37,8 +37,29 @@ const CONNECTION_STRING =
 const ACTIVE_SESSION_INDEX = "MissionSession_active_owner_unique";
 const CONCURRENCY = 20;
 
-/** Fixed instant. Nothing here may depend on when the suite runs. */
-const NOW = new Date("2026-12-15T20:00:00.000Z");
+/**
+ * Fixed instant. Nothing here may depend on when the suite runs.
+ *
+ * It also has to be an instant at which the fixture's target is actually
+ * observable. It was 2026-12-15T20:00Z until DV-059, when the cloud started
+ * checking the envelope before minting and refused the RECENTER below -- M13 is
+ * 11.8 degrees *under* the horizon from Tbilisi at that moment, so the test had
+ * been minting a slew to a target beneath the ground and nothing had noticed.
+ * Here M13 is at 67.7 degrees with the Sun at -25.
+ */
+const NOW = new Date("2026-07-15T20:00:00.000Z");
+
+/**
+ * A stand-in for MAX_ALT_SAFE, which is measured from the assembled optical train
+ * during mount qualification (DV-034) and does not exist yet.
+ *
+ * NAMED A FAKE BECAUSE IT IS ONE. The Build Plan prints a provisional 72 degrees
+ * in a table cell; that number is not a measurement and must never be seeded,
+ * shipped, or defaulted anywhere. This exists only so tests of *other* rules are
+ * not all swallowed by the unmeasured refusal, and the unmeasured behaviour has
+ * its own tests below.
+ */
+const FAKE_MEASURED_MAX_ALTITUDE_DEGREES = 78;
 
 let database: PrismaClient;
 let listener: Client;
@@ -63,6 +84,46 @@ async function createUser(): Promise<string> {
 
 function actor(id: string, role: "USER" | "OPERATOR" = "USER") {
   return { id, role };
+}
+
+/** Open a live session as the mission owner, and drain its notification. */
+async function openSession() {
+  const result = await startMissionSession({
+    missionId,
+    actor: actor(ownerId),
+    now: NOW,
+  });
+  if (!result.ok) throw new Error("could not open a session");
+  await nextNotification("SESSION");
+  return result.session;
+}
+
+/**
+ * Install a safety envelope for the fixture observatory.
+ *
+ * `maxAltitude` of null is the UNMEASURED state, which is the shipped state of
+ * every real observatory until DV-034 measures it. Passing a number is a test
+ * fake -- see FAKE_MEASURED_MAX_ALTITUDE_DEGREES.
+ */
+async function createSafetyEnvelope(maxAltitude: number | null) {
+  await database.safetyEnvelope.deleteMany({ where: { observatoryId } });
+  await database.safetyEnvelope.create({
+    data: {
+      observatoryId,
+      minAltitudeDegrees: 20,
+      maxAltitudeDegrees: maxAltitude,
+      maxAltitudeMeasuredAt: maxAltitude === null ? null : NOW,
+      maxAltitudeMeasuredBy: maxAltitude === null ? null : "integration-test fake",
+      sunExclusionDegrees: 30,
+      daylightLockSunAltitudeDegrees: -6,
+      nudgeMaxDegrees: 1,
+      nudgeRateDegreesPerSecond: 0.25,
+      slewTimeoutSeconds: 120,
+      heartbeatLossSeconds: 15,
+      linkDeadSeconds: 60,
+      refocusTemperatureDeltaC: 1.5,
+    },
+  });
 }
 
 /**
@@ -115,6 +176,7 @@ beforeEach(async () => {
 
   await database.observatoryCommand.deleteMany();
   await database.missionSession.deleteMany();
+  await database.safetyEnvelope.deleteMany();
   await database.booking.deleteMany();
   await database.mission.deleteMany();
   await database.payment.deleteMany();
@@ -169,6 +231,8 @@ beforeEach(async () => {
     },
   });
   targetId = target.id;
+
+  await createSafetyEnvelope(FAKE_MEASURED_MAX_ALTITUDE_DEGREES);
 
   ownerId = await createUser();
 
@@ -470,17 +534,6 @@ describe("telling the agent who owns the mission", () => {
 });
 
 describe("minting a command", () => {
-  async function openSession() {
-    const result = await startMissionSession({
-      missionId,
-      actor: actor(ownerId),
-      now: NOW,
-    });
-    if (!result.ok) throw new Error("could not open a session");
-    await nextNotification("SESSION");
-    return result.session;
-  }
-
   /** DV-058 acceptance criterion 6. */
   it("sets a short, configured expiry that the client cannot influence", async () => {
     const session = await openSession();
@@ -625,5 +678,126 @@ describe("minting a command", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.status).toBe(422);
+  });
+});
+
+/**
+ * DV-059 — the cloud's half of the two independent safety checks.
+ *
+ * `CLAUDE.md`: "The cloud validates commands; the local agent validates them
+ * again." Until this landed only the second half existed, and the cloud minted
+ * envelopes it had never examined. What is proved here is that a command the
+ * envelope forbids never becomes a row and never reaches the relay — the agent
+ * refusing it later is the backstop, not the only stop.
+ */
+describe("cloud-side safety pre-validation", () => {
+  async function nudge(stepArcminutes: number) {
+    return mintMissionCommand({
+      missionId,
+      request: {
+        type: "NUDGE",
+        nudge: {
+          kind: "NUDGE",
+          axis: "ALTITUDE",
+          direction: "POSITIVE",
+          stepArcminutes,
+        },
+      },
+      actor: actor(ownerId),
+      now: NOW,
+    });
+  }
+
+  // criterion 3
+  it("refuses a slew while MAX_ALT_SAFE is unmeasured, and mints nothing", async () => {
+    await createSafetyEnvelope(null);
+    await openSession();
+
+    const result = await mintMissionCommand({
+      missionId,
+      request: { type: "RECENTER" },
+      actor: actor(ownerId),
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.details?.rejectionReason).toBe("SAFETY_ENVELOPE_UNMEASURED");
+    expect(await database.observatoryCommand.count()).toBe(0);
+  });
+
+  it("refuses a nudge while MAX_ALT_SAFE is unmeasured", async () => {
+    await createSafetyEnvelope(null);
+    await openSession();
+
+    const result = await nudge(3);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.details?.rejectionReason).toBe("SAFETY_ENVELOPE_UNMEASURED");
+    expect(await database.observatoryCommand.count()).toBe(0);
+  });
+
+  /**
+   * The other half of criterion 3, and the more important half. "Slew-bearing"
+   * is the qualifier: refusing an ABORT because the envelope is unmeasured would
+   * leave a customer unable to stop a mission on exactly the system least fit to
+   * be running one.
+   */
+  it("still accepts ABORT while unmeasured, because it moves nothing", async () => {
+    await createSafetyEnvelope(null);
+    await openSession();
+
+    const result = await mintMissionCommand({
+      missionId,
+      request: { type: "ABORT", reason: "stop" },
+      actor: actor(ownerId),
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(await database.observatoryCommand.count()).toBe(1);
+  });
+
+  // criterion 1
+  it("refuses a pointing above the measured MAX_ALT_SAFE", async () => {
+    // M13 is at 67.7 degrees at NOW, so an envelope measured at 60 puts the
+    // booked target out of reach -- which is a real state a real mount can be in.
+    await createSafetyEnvelope(60);
+    await openSession();
+
+    const result = await mintMissionCommand({
+      missionId,
+      request: { type: "RECENTER" },
+      actor: actor(ownerId),
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.details?.rejectionReason).toBe("SAFETY_ABOVE_MAX_ALTITUDE");
+    expect(result.message).toContain("67.");
+    expect(await database.observatoryCommand.count()).toBe(0);
+  });
+
+  it("refuses a nudge step larger than the envelope permits", async () => {
+    await openSession();
+
+    // The fixture permits 0.25 degrees; 30 arcminutes is 0.5.
+    const result = await nudge(30);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.details?.rejectionReason).toBe("SAFETY_SLEW_RATE");
+    expect(await database.observatoryCommand.count()).toBe(0);
+  });
+
+  it("permits a nudge inside the envelope", async () => {
+    await openSession();
+
+    const result = await nudge(3);
+
+    expect(result.ok).toBe(true);
+    expect(await database.observatoryCommand.count()).toBe(1);
   });
 });

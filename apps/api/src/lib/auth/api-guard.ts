@@ -49,6 +49,25 @@ export async function requireApiMutation(): Promise<GuardResult> {
 }
 
 /**
+ * An operator, plus proof the request did not come from another site.
+ *
+ * `requireOperator` is built on `requireApiSession`, which is right for a GET and
+ * not enough for a PUT: the session lives in a cookie, so a form anywhere on the
+ * internet could submit to an admin route and the browser would attach it. Every
+ * mutating admin route uses this instead, and `admin-routes-guarded.test.ts`
+ * asserts both that the route uses one of them and that this one is defined in
+ * terms of `requireApiMutation`.
+ */
+export async function requireOperatorMutation(): Promise<GuardResult> {
+  const guard = await requireApiMutation();
+  if (!guard.ok) return guard;
+  if (guard.session.user.role !== "OPERATOR") {
+    return { ok: false, response: forbidden() };
+  }
+  return guard;
+}
+
+/**
  * OPERATOR is the only administrative role. Every `/admin/*` route must call this
  * before it does anything else; `admin-routes-guarded.test.ts` enforces that.
  */

@@ -91,10 +91,31 @@ describe("every admin route is behind the operator guard", () => {
       return /export async function (POST|PUT|PATCH|DELETE)\b/.test(source);
     });
 
+    // requireOperatorMutation is requireApiMutation plus a role check -- asserted
+    // below, so accepting it here does not widen what this test permits.
     const withoutOriginCheck = mutating
-      .filter((file) => !readFileSync(file, "utf8").includes("requireApiMutation"))
+      .filter((file) => {
+        const source = readFileSync(file, "utf8");
+        return (
+          !source.includes("requireApiMutation") &&
+          !source.includes("requireOperatorMutation")
+        );
+      })
       .map((file) => path.relative(appDirectory, file));
 
     expect(withoutOriginCheck).toEqual([]);
+  });
+
+  it("builds the operator mutation guard on the same-origin guard", () => {
+    const guardSource = readFileSync(
+      path.resolve(import.meta.dirname, "api-guard.ts"),
+      "utf8",
+    );
+    const body = guardSource.slice(
+      guardSource.indexOf("export async function requireOperatorMutation"),
+    );
+
+    // Whatever else it does, the first thing it does is the origin check.
+    expect(body).toContain("const guard = await requireApiMutation();");
   });
 });

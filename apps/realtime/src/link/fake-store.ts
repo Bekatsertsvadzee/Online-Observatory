@@ -5,6 +5,7 @@ import type {
   MissionFailureReason,
   MissionState,
   ObservatoryMode,
+  SafetyEnvelopeConfig,
 } from "@darkview/contracts";
 
 import {
@@ -64,6 +65,7 @@ export class FakeLinkStore implements LinkStore {
   readonly revoked: { sessionId: string; reason: string }[] = [];
   readonly completedAt = new Map<string, Date>();
 
+  private readonly envelopes = new Map<string, SafetyEnvelopeConfig>();
   private readonly commandStatuses = new Map<string, ObservatoryCommandStatus>();
   private readonly verdicts = new Map<string, FakeCommandVerdict>();
 
@@ -255,6 +257,15 @@ export class FakeLinkStore implements LinkStore {
       decidedAt: verdict.decidedAt,
     });
     return "RECORDED";
+  }
+
+  setSafetyEnvelope(observatoryId: string, envelope: SafetyEnvelopeConfig | null) {
+    if (envelope === null) this.envelopes.delete(observatoryId);
+    else this.envelopes.set(observatoryId, envelope);
+  }
+
+  async loadSafetyEnvelope(observatoryId: string): Promise<SafetyEnvelopeConfig | null> {
+    return this.envelopes.get(observatoryId) ?? null;
   }
 
   async liveMissionId(observatoryId: string): Promise<string | null> {
