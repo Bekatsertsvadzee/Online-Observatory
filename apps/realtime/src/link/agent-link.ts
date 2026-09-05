@@ -4,6 +4,7 @@ import {
   HEARTBEAT_GRACE_SECONDS,
   PROTOCOL_VERSION,
   cloudError,
+  cloudSessionUpdate,
   cloudWelcome,
   parseAgentMessage,
   type Close,
@@ -86,7 +87,106 @@ export class AgentLink {
       return;
     }
 
-    await this.record(message);
+    // Record first, act only on the first sighting. The primary key on
+    // AgentMessage is what makes every effect in `apply` idempotent, so a replayed
+    // queue after an outage is acknowledged once and applied once, and nothing
+    // downstream needs a replay guard of its own.
+    if (await this.record(message)) await this.apply(message);
+  }
+
+  /**
+   * What an inbound message means.
+   *
+   * One place, dispatching by type. Before this existed the cloud stored the
+   * identity of every agent message -- messageId, type, sentAt -- and discarded
+   * the body, so the agent ran the full mission state machine and reported every
+   * transition into nothing.
+   */
+  private async apply(message: AgentToCloudMessage): Promise<void> {
+    switch (message.type) {
+      case "AGENT_MISSION_EVENT":
+        await this.applyMissionEvent(message);
+        return;
+
+      case "AGENT_COMMAND_ACK":
+        await this.applyCommandAck(message);
+        return;
+
+      // AGENT_HEARTBEAT is liveness, and `lastActivityAt` above is what consumes
+      // it. AGENT_STATE_DELTA, AGENT_LIVE_FRAME and AGENT_CAPTURE_READY carry
+      // state this service does not own yet -- DV-060, DV-032 and DV-061 own
+      // them -- so they are recorded and go no further, deliberately rather than
+      // by omission.
+      default:
+        return;
+    }
+  }
+
+  /**
+   * A transition the agent's state machine made.
+   *
+   * The mission moves, or -- if it has already finished -- the event is filed and
+   * the mission is left alone. The link does not guarantee order: `OutboundQueue`
+   * replays FIFO, but a reconnect mid-drain plus its oldest-first drop policy
+   * means a COMPLETE can arrive behind a FAILED, and reviving a finished mission
+   * would put the observatory back into the state this whole path exists to end.
+   */
+  private async applyMissionEvent(
+    message: Extract<AgentToCloudMessage, { type: "AGENT_MISSION_EVENT" }>,
+  ): Promise<void> {
+    const outcome = await this.store.applyMissionEvent({
+      observatoryId: this.observatory.id,
+      missionId: message.missionId,
+      state: message.state,
+      failureReason: message.failureReason ?? null,
+      occurredAt: new Date(message.occurredAt),
+      detail: message.detail ?? null,
+    });
+
+    if (outcome === "WRONG_OBSERVATORY" || outcome === "NOT_FOUND") {
+      this.refuse(`Mission ${message.missionId} is not this observatory's to move.`);
+    }
+  }
+
+  /**
+   * The agent's verdict on a command.
+   *
+   * A REJECTED ack carrying a SAFETY_ reason after the cloud approved the command
+   * is the two-independent-validations design working, and it has to survive
+   * somewhere other than the observatory's own disk.
+   */
+  private async applyCommandAck(
+    message: Extract<AgentToCloudMessage, { type: "AGENT_COMMAND_ACK" }>,
+  ): Promise<void> {
+    const outcome = await this.store.recordCommandVerdict({
+      observatoryId: this.observatory.id,
+      commandId: message.commandId,
+      status: message.status,
+      rejectionReason: message.rejectionReason ?? null,
+      detail: message.detail ?? null,
+      // The ack's own sentAt: the agent's account of when it decided. Never
+      // replaced with the moment the cloud happened to hear about it.
+      decidedAt: new Date(message.sentAt),
+    });
+
+    if (outcome === "WRONG_OBSERVATORY" || outcome === "NOT_FOUND") {
+      this.refuse(`Command ${message.commandId} is not this observatory's to answer.`);
+    }
+  }
+
+  /**
+   * Refuse one message without taking the link down.
+   *
+   * Answered on the wire rather than written to a log, because these classes are
+   * deliberately transport-free -- logging lives in `server.ts` -- and because the
+   * party that needs to know is the agent. It stays connected: everything else it
+   * has to say is still about the observatory it authenticated as.
+   *
+   * The message never distinguishes "not yours" from "does not exist", for the
+   * same reason `startMissionSession` returns 404 to a stranger probing ids.
+   */
+  private refuse(detail: string): void {
+    this.send(cloudError("FORBIDDEN", detail));
   }
 
   private async handleHello(
@@ -118,18 +218,48 @@ export class AgentLink {
     await this.store.markLinkUp(this.observatory.id);
 
     // resumeMissionId is the agent telling us what it recovered from its local
-    // state store. Deciding which mission it should hold is the orchestrator's
-    // job (DV-058); until that exists the cloud expects nothing.
-    this.send(cloudWelcome(null));
+    // state store (DV-027). It has already parked the mount, because it lost the
+    // state machine's progress and will not guess where a telescope is pointing.
+    // What is left is bookkeeping -- and until it is done, the mission sits in a
+    // live state and Mission_active_per_observatory_unique holds the observatory
+    // shut against every later booking.
+    const resumeMissionId = message.resumeMissionId ?? null;
+    const resumed =
+      resumeMissionId === null
+        ? null
+        : await this.store.resolveResumedMission({
+            observatoryId: this.observatory.id,
+            missionId: resumeMissionId,
+            now: new Date(this.now()),
+          });
+
+    // Read after the recovery above, not assumed. After one it is null -- stated,
+    // which is not the same as defaulted.
+    this.send(cloudWelcome(await this.store.liveMissionId(this.observatory.id)));
+
+    if (resumed === "WRONG_OBSERVATORY" || resumed === "NOT_FOUND") {
+      this.refuse(`Mission ${resumeMissionId} is not this observatory's to resume.`);
+      return;
+    }
+
+    // Whether this call ended the mission or found it already ended, the agent is
+    // holding a mission that is over. Told explicitly, because ownership is the
+    // difference between a command being obeyed and refused, and an agent left
+    // believing in a revoked session is exactly what this message prevents.
+    if (resumed !== null && resumeMissionId !== null) {
+      this.send(cloudSessionUpdate(resumeMissionId, null));
+    }
   }
 
   /**
-   * Persist the message identity. A repeat is the agent replaying its queue after
-   * an outage, which is the recovery path working: acknowledged, not stored twice,
-   * not treated as an error.
+   * Persist the message identity, and say whether this is the first sighting.
+   *
+   * A repeat is the agent replaying its queue after an outage, which is the
+   * recovery path working: acknowledged, not stored twice, not treated as an
+   * error -- and, since `apply` is gated on the answer, not acted on twice.
    */
-  private async record(message: AgentToCloudMessage): Promise<void> {
-    await this.store.recordInboundMessage({
+  private async record(message: AgentToCloudMessage): Promise<boolean> {
+    return this.store.recordInboundMessage({
       messageId: message.messageId,
       observatoryId: this.observatory.id,
       type: message.type,
