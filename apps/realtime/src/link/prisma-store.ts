@@ -4,30 +4,23 @@ import { PrismaClient } from "@darkview/db";
 
 import type { CommandEnvelope } from "@darkview/contracts";
 
-import type {
-  ActiveSession,
-  InboundMessageRecord,
-  LinkStore,
-  ObservatoryRecord,
-  RelayableCommand,
+import {
+  COMMAND_STATUS_FOR,
+  LIVE_MISSION_STATES,
+  TERMINAL_COMMAND_STATUSES,
+  TERMINAL_MISSION_STATES,
+  isTerminalCommandStatus,
+  type ActiveSession,
+  type CommandVerdictOutcome,
+  type CommandVerdictRecord,
+  type InboundMessageRecord,
+  type LinkStore,
+  type MissionEventOutcome,
+  type MissionEventRecord,
+  type ObservatoryRecord,
+  type RelayableCommand,
+  type ResumeOutcome,
 } from "@/link/store";
-
-/**
- * The mission states during which a session may command the mount.
- *
- * The same list as `LIVE_MISSION_STATES` in the API's mission orchestrator and
- * as the predicate of Mission_active_per_observatory_unique. Duplicated rather
- * than imported because this service does not depend on the Next.js app; if one
- * changes, all three change.
- */
-const LIVE_MISSION_STATES = [
-  "PREPARING",
-  "SLEWING",
-  "VERIFYING",
-  "CENTERING",
-  "OBSERVING",
-  "CAPTURING",
-] as const;
 
 export function createPrismaStore(connectionString: string): LinkStore {
   const database = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
@@ -117,6 +110,154 @@ export function createPrismaStore(connectionString: string): LinkStore {
         select: { id: true, missionId: true, userId: true, expiresAt: true },
       });
       return session ? toActiveSession(session) : null;
+    },
+
+    async applyMissionEvent(event: MissionEventRecord): Promise<MissionEventOutcome> {
+      return database.$transaction(async (tx) => {
+        const mission = await tx.mission.findUnique({
+          where: { id: event.missionId },
+          select: { observatoryId: true, mode: true, isDemo: true },
+        });
+        if (!mission) return "NOT_FOUND";
+        if (mission.observatoryId !== event.observatoryId) return "WRONG_OBSERVATORY";
+
+        // Written whatever state the mission is in. The event log is an account
+        // of what the agent reported, and an event the guard below declines to
+        // apply was still reported.
+        await tx.missionEvent.create({
+          data: {
+            missionId: event.missionId,
+            state: event.state,
+            source: "AGENT",
+            message: event.detail,
+            occurredAt: event.occurredAt,
+            // `CLAUDE.md`: a mission run against the simulator is permanently
+            // marked SIMULATED and never presented as real telescope output.
+            // Letting these default to false would file simulator events as real.
+            simulated: mission.mode === "SIMULATED",
+            isDemo: mission.isDemo,
+          },
+        });
+
+        // The terminal guard is the WHERE clause rather than a branch on the row
+        // read above. Two events for one mission can be in flight at once -- the
+        // socket handler does not serialise them -- and a read-then-write would
+        // let whichever arrived second win.
+        const { count } = await tx.mission.updateMany({
+          where: {
+            id: event.missionId,
+            observatoryId: event.observatoryId,
+            state: { notIn: [...TERMINAL_MISSION_STATES] },
+          },
+          data: { state: event.state, failureReason: event.failureReason },
+        });
+
+        return count === 1 ? "APPLIED" : "RECORDED";
+      });
+    },
+
+    async resolveResumedMission(input: {
+      observatoryId: string;
+      missionId: string;
+      now: Date;
+    }): Promise<ResumeOutcome> {
+      const { observatoryId, missionId, now } = input;
+
+      return database.$transaction(async (tx) => {
+        const mission = await tx.mission.findUnique({
+          where: { id: missionId },
+          select: { observatoryId: true, mode: true, isDemo: true },
+        });
+        if (!mission) return "NOT_FOUND";
+        if (mission.observatoryId !== observatoryId) return "WRONG_OBSERVATORY";
+
+        const { count } = await tx.mission.updateMany({
+          where: {
+            id: missionId,
+            observatoryId,
+            state: { in: [...LIVE_MISSION_STATES] },
+          },
+          data: { state: "FAILED", failureReason: "AGENT_LINK_LOST" },
+        });
+        // Already finished. The agent reports the same id on every attempt until
+        // the link is genuinely online, so a second restart before it got through
+        // arrives here twice; that is the recovery path working, not an error.
+        if (count === 0) return "NOT_LIVE";
+
+        // CLOUD, not AGENT: the agent reported which mission it was holding, the
+        // cloud decided the outcome. Who resolved a mission belongs in the trail.
+        await tx.missionEvent.create({
+          data: {
+            missionId,
+            state: "FAILED",
+            source: "CLOUD",
+            message:
+              "Agent restarted holding this mission. The mount parked locally and the cloud closed the mission out.",
+            occurredAt: now,
+            simulated: mission.mode === "SIMULATED",
+            isDemo: mission.isDemo,
+          },
+        });
+
+        // The mission is over, so nobody owns it. Leaving the session alive would
+        // leave the agent holding an owner for a mission that no longer exists.
+        await tx.missionSession.updateMany({
+          where: { missionId, revokedAt: null },
+          data: { revokedAt: now, revokedFor: "AGENT_LINK_LOST" },
+        });
+
+        return "RESOLVED";
+      });
+    },
+
+    async recordCommandVerdict(
+      verdict: CommandVerdictRecord,
+    ): Promise<CommandVerdictOutcome> {
+      const command = await database.observatoryCommand.findUnique({
+        where: { id: verdict.commandId },
+        select: { observatoryId: true },
+      });
+      // Logged and dropped, never created. A row here is a command the cloud
+      // minted; an agent that could insert one could invent its own authority.
+      if (!command) return "NOT_FOUND";
+      if (command.observatoryId !== verdict.observatoryId) return "WRONG_OBSERVATORY";
+
+      const status = COMMAND_STATUS_FOR[verdict.status];
+      if (status === null) return "DUPLICATE_ACK";
+
+      const { count } = await database.observatoryCommand.updateMany({
+        where: {
+          id: verdict.commandId,
+          observatoryId: verdict.observatoryId,
+          status: { notIn: [...TERMINAL_COMMAND_STATUSES] },
+        },
+        data: {
+          status,
+          completedAt: isTerminalCommandStatus(status) ? verdict.decidedAt : undefined,
+          // JSON rather than columns. `CommandRejectionReason` is the agent's
+          // vocabulary and several of its values are not `ErrorCode` values; a
+          // Postgres enum here would have to be migrated in step with the
+          // contract, and a reason it had not learned yet would be unstorable.
+          result: {
+            status: verdict.status,
+            rejectionReason: verdict.rejectionReason,
+            detail: verdict.detail,
+            decidedAt: verdict.decidedAt.toISOString(),
+          },
+        },
+      });
+
+      return count === 1 ? "RECORDED" : "IGNORED_STALE";
+    },
+
+    async liveMissionId(observatoryId: string): Promise<string | null> {
+      // At most one can exist: Mission_active_per_observatory_unique is a partial
+      // unique index over exactly these states.
+      const mission = await database.mission.findFirst({
+        where: { observatoryId, state: { in: [...LIVE_MISSION_STATES] } },
+        select: { id: true },
+      });
+      return mission?.id ?? null;
     },
   };
 }
