@@ -34,13 +34,13 @@ export const zErrorCode = z.enum([
     'INTERNAL'
 ]);
 
-export const zApiError = z.object({
+export const zApiError = z.strictObject({
     code: zErrorCode,
     message: z.string(),
     details: z.record(z.string(), z.unknown()).optional()
 });
 
-export const zPageMeta = z.object({
+export const zPageMeta = z.strictObject({
     hasMore: z.boolean(),
     nextCursor: z.string().nullish()
 });
@@ -48,18 +48,18 @@ export const zPageMeta = z.object({
 /**
  * J2000 equatorial coordinates. Conversion to apparent coordinates happens at the device boundary inside the agent, never in a client.
  */
-export const zEquatorialCoordinates = z.object({
+export const zEquatorialCoordinates = z.strictObject({
     raHours: z.number().gte(0).lt(24),
     decDegrees: z.number().gte(-90).lte(90),
     epoch: z.enum(['J2000'])
 });
 
-export const zHorizontalCoordinates = z.object({
+export const zHorizontalCoordinates = z.strictObject({
     altitudeDegrees: z.number().gte(-90).lte(90),
     azimuthDegrees: z.number().gte(0).lt(360)
 });
 
-export const zUser = z.object({
+export const zUser = z.strictObject({
     id: z.uuid(),
     email: z.email(),
     displayName: z.string().nullish(),
@@ -144,7 +144,7 @@ export const zImagingProfile = z.enum([
  * body, an EPHEMERIS target has a body and no coordinates.
  *
  */
-export const zTarget = z.object({
+export const zTarget = z.strictObject({
     id: z.uuid(),
     slug: z.string().regex(/^[a-z0-9-]+$/),
     catalogId: z.string().nullish(),
@@ -166,7 +166,7 @@ export const zTarget = z.object({
     enabled: z.boolean()
 });
 
-export const zTargetPage = z.object({
+export const zTargetPage = z.strictObject({
     items: z.array(zTarget),
     page: zPageMeta
 });
@@ -190,7 +190,7 @@ export const zVisibilityBlockReason = z.enum([
 /**
  * Computed at request time from live ephemeris. Never cached as a static list.
  */
-export const zTargetVisibility = z.object({
+export const zTargetVisibility = z.strictObject({
     observable: z.boolean(),
     evaluatedAt: z.iso.datetime(),
     horizontal: zHorizontalCoordinates,
@@ -201,12 +201,12 @@ export const zTargetVisibility = z.object({
     blockReasons: z.array(zVisibilityBlockReason)
 });
 
-export const zTonightTarget = z.object({
+export const zTonightTarget = z.strictObject({
     target: zTarget,
     visibility: zTargetVisibility
 });
 
-export const zTonightTargetList = z.object({
+export const zTonightTargetList = z.strictObject({
     items: z.array(zTonightTarget),
     evaluatedAt: z.iso.datetime()
 });
@@ -242,7 +242,7 @@ export const zWeatherStatus = z.enum([
  */
 export const zWeatherSource = z.enum(['OPERATOR', 'SENSOR']);
 
-export const zWeatherState = z.object({
+export const zWeatherState = z.strictObject({
     status: zWeatherStatus,
     source: zWeatherSource,
     holdActive: z.boolean(),
@@ -258,7 +258,7 @@ export const zDeviceHealth = z.enum([
     'NOT_CONFIGURED'
 ]);
 
-export const zDeviceStatus = z.object({
+export const zDeviceStatus = z.strictObject({
     health: zDeviceHealth,
     detail: z.string().nullish()
 });
@@ -268,7 +268,7 @@ export const zDeviceStatus = z.object({
  * enough to be actionable, device identity, driver state and any address.
  *
  */
-export const zPublicObservatoryStatus = z.object({
+export const zPublicObservatoryStatus = z.strictObject({
     observatoryId: z.uuid(),
     mode: zObservatoryMode,
     link: zObservatoryLinkState,
@@ -282,7 +282,7 @@ export const zPublicObservatoryStatus = z.object({
 /**
  * Operator-grade telemetry. Delivered to the operator console and to the mission channel in reduced form.
  */
-export const zObservatoryTelemetry = z.object({
+export const zObservatoryTelemetry = z.strictObject({
     mode: zObservatoryMode,
     link: zObservatoryLinkState,
     mount: zDeviceStatus,
@@ -300,7 +300,7 @@ export const zObservatoryTelemetry = z.object({
     reportedAt: z.iso.datetime()
 });
 
-export const zSetObservatoryModeRequest = z.object({
+export const zSetObservatoryModeRequest = z.strictObject({
     mode: zObservatoryMode,
     reason: z.string().min(8),
     attendedOperatorPresent: z.boolean()
@@ -309,7 +309,7 @@ export const zSetObservatoryModeRequest = z.object({
 /**
  * One bearing from the compass survey of the installation site.
  */
-export const zHorizonMaskEntry = z.object({
+export const zHorizonMaskEntry = z.strictObject({
     azimuthDegrees: z.number().gte(0).lt(360),
     minAltitudeDegrees: z.number().gte(0).lte(90)
 });
@@ -317,7 +317,7 @@ export const zHorizonMaskEntry = z.object({
 /**
  * Inclusive-start, exclusive-end sector, measured clockwise from north.
  */
-export const zAzimuthSector = z.object({
+export const zAzimuthSector = z.strictObject({
     fromDegrees: z.number().gte(0).lt(360),
     toDegrees: z.number().gte(0).lt(360)
 });
@@ -330,7 +330,7 @@ export const zAzimuthSector = z.object({
  * move.
  *
  */
-export const zSafetyEnvelopeConfig = z.object({
+export const zSafetyEnvelopeConfig = z.strictObject({
     observatoryId: z.uuid(),
     minAltitudeDegrees: z.number().gte(0).lte(90),
     maxAltitudeDegrees: z.number().gte(0).lte(90).nullable(),
@@ -350,7 +350,7 @@ export const zSafetyEnvelopeConfig = z.object({
     updatedAt: z.iso.datetime()
 });
 
-export const zOperatorObservatoryState = z.object({
+export const zOperatorObservatoryState = z.strictObject({
     observatoryId: z.uuid(),
     telemetry: zObservatoryTelemetry,
     safetyEnvelope: zSafetyEnvelopeConfig,
@@ -361,7 +361,7 @@ export const zOperatorObservatoryState = z.object({
     updatedAt: z.iso.datetime()
 });
 
-export const zSetWeatherHoldRequest = z.object({
+export const zSetWeatherHoldRequest = z.strictObject({
     holdActive: z.boolean(),
     status: zWeatherStatus,
     note: z.string().nullish()
@@ -376,7 +376,7 @@ export const zSlotUnavailableReason = z.enum([
     'IN_THE_PAST'
 ]);
 
-export const zSlot = z.object({
+export const zSlot = z.strictObject({
     startAt: z.iso.datetime(),
     endAt: z.iso.datetime(),
     durationMinutes: z.int().gt(0),
@@ -386,7 +386,7 @@ export const zSlot = z.object({
     unavailableReason: zSlotUnavailableReason.nullish()
 });
 
-export const zSlotList = z.object({
+export const zSlotList = z.strictObject({
     date: z.iso.date(),
     items: z.array(zSlot)
 });
@@ -399,7 +399,7 @@ export const zBookingStatus = z.enum([
     'REFUNDED'
 ]);
 
-export const zBooking = z.object({
+export const zBooking = z.strictObject({
     id: z.uuid(),
     userId: z.uuid(),
     targetId: z.uuid(),
@@ -413,14 +413,14 @@ export const zBooking = z.object({
     createdAt: z.iso.datetime()
 });
 
-export const zCreateBookingRequest = z.object({
+export const zCreateBookingRequest = z.strictObject({
     targetId: z.uuid(),
     slotStartAt: z.iso.datetime(),
     durationMinutes: z.int().gt(0),
     locale: zLocale.optional()
 });
 
-export const zCancelBookingRequest = z.object({
+export const zCancelBookingRequest = z.strictObject({
     reason: z.string().optional()
 });
 
@@ -445,7 +445,7 @@ export const zPaymentStatus = z.enum([
  * confirmed against provider documentation.
  *
  */
-export const zPaymentIntent = z.object({
+export const zPaymentIntent = z.strictObject({
     paymentId: z.uuid(),
     provider: zPaymentProvider,
     status: zPaymentStatus,
@@ -453,12 +453,12 @@ export const zPaymentIntent = z.object({
     expiresAt: z.iso.datetime().nullish()
 });
 
-export const zBookingWithPaymentIntent = z.object({
+export const zBookingWithPaymentIntent = z.strictObject({
     booking: zBooking,
     paymentIntent: zPaymentIntent
 });
 
-export const zBookingPage = z.object({
+export const zBookingPage = z.strictObject({
     items: z.array(zBooking),
     page: zPageMeta
 });
@@ -470,12 +470,12 @@ export const zBookingPage = z.object({
  * published documentation.
  *
  */
-export const zPaymentWebhookEnvelope = z.object({
+export const zPaymentWebhookEnvelope = z.strictObject({
     provider: zPaymentProvider,
     payload: z.record(z.string(), z.unknown())
 });
 
-export const zPaymentWebhookAck = z.object({
+export const zPaymentWebhookAck = z.strictObject({
     received: z.boolean()
 });
 
@@ -541,7 +541,7 @@ export const zMissionFailureReason = z.enum([
     'PAYMENT_FAILED'
 ]);
 
-export const zMission = z.object({
+export const zMission = z.strictObject({
     id: z.uuid(),
     userId: z.uuid(),
     bookingId: z.uuid(),
@@ -560,7 +560,7 @@ export const zMission = z.object({
     observerCount: z.int().gte(0).optional()
 });
 
-export const zMissionPage = z.object({
+export const zMissionPage = z.strictObject({
     items: z.array(zMission),
     page: zPageMeta
 });
@@ -577,7 +577,7 @@ export const zSessionRole = z.enum(['CONTROLLER', 'OBSERVER']);
 /**
  * A paid, view-only seat on a session somebody else controls (ADR-007).
  */
-export const zMissionObserver = z.object({
+export const zMissionObserver = z.strictObject({
     id: z.uuid(),
     missionId: z.uuid(),
     userId: z.uuid(),
@@ -585,7 +585,7 @@ export const zMissionObserver = z.object({
     leftAt: z.iso.datetime().nullish()
 });
 
-export const zMissionObserverList = z.object({
+export const zMissionObserverList = z.strictObject({
     items: z.array(zMissionObserver),
     capacity: z.int().gte(0).lte(5)
 });
@@ -595,7 +595,7 @@ export const zMissionObserverList = z.object({
  * Sessions are private by default and become observable only by this call.
  *
  */
-export const zMissionObservationSettings = z.object({
+export const zMissionObservationSettings = z.strictObject({
     observable: z.boolean()
 });
 
@@ -608,7 +608,7 @@ export const zMissionEventSource = z.enum([
 /**
  * One correlated entry in the mission audit trail. Never fabricated or backdated.
  */
-export const zMissionEvent = z.object({
+export const zMissionEvent = z.strictObject({
     id: z.uuid(),
     missionId: z.uuid(),
     at: z.iso.datetime(),
@@ -619,7 +619,7 @@ export const zMissionEvent = z.object({
     detail: z.string().nullish()
 });
 
-export const zMissionEventPage = z.object({
+export const zMissionEventPage = z.strictObject({
     items: z.array(zMissionEvent),
     page: zPageMeta
 });
@@ -659,7 +659,7 @@ export const zClientCommandType = z.enum([
  * is not a device credential and gives no access to hardware.
  *
  */
-export const zMissionSession = z.object({
+export const zMissionSession = z.strictObject({
     sessionId: z.uuid(),
     missionId: z.uuid(),
     userId: z.uuid(),
@@ -675,14 +675,14 @@ export const zNudgeDirection = z.enum(['POSITIVE', 'NEGATIVE']);
 
 export const zFocusMode = z.enum(['AUTOFOCUS', 'ABSOLUTE']);
 
-export const zRegionOfInterest = z.object({
+export const zRegionOfInterest = z.strictObject({
     x: z.int().gte(0),
     y: z.int().gte(0),
     width: z.int().gt(0),
     height: z.int().gt(0)
 });
 
-export const zGotoPayload = z.object({
+export const zGotoPayload = z.strictObject({
     kind: z.enum(['GOTO']),
     targetId: z.uuid(),
     coordinates: zEquatorialCoordinates,
@@ -694,7 +694,7 @@ export const zGotoPayload = z.object({
 /**
  * One discrete bounded step. Never a continuous slew.
  */
-export const zNudgePayload = z.object({
+export const zNudgePayload = z.strictObject({
     kind: z.enum(['NUDGE']),
     axis: zNudgeAxis,
     direction: zNudgeDirection,
@@ -706,20 +706,20 @@ export const zNudgePayload = z.object({
  * The requested integration is bounded by the imaging profile.
  *
  */
-export const zCapturePayload = z.object({
+export const zCapturePayload = z.strictObject({
     kind: z.enum(['CAPTURE']),
     imagingProfile: zImagingProfile,
     requestedFrames: z.int().gt(0).nullish(),
     targetIntegrationSeconds: z.number().gt(0).nullish()
 });
 
-export const zFocusPayload = z.object({
+export const zFocusPayload = z.strictObject({
     kind: z.enum(['FOCUS']),
     mode: zFocusMode,
     absolutePosition: z.int().nullish()
 });
 
-export const zAbortPayload = z.object({
+export const zAbortPayload = z.strictObject({
     kind: z.enum(['ABORT']),
     reason: z.string().nullish()
 });
@@ -727,12 +727,12 @@ export const zAbortPayload = z.object({
 /**
  * Park is the answer to every unresolved condition.
  */
-export const zParkPayload = z.object({
+export const zParkPayload = z.strictObject({
     kind: z.enum(['PARK']),
     reason: z.string().nullish()
 });
 
-export const zSetProfilePayload = z.object({
+export const zSetProfilePayload = z.strictObject({
     kind: z.enum(['SET_PROFILE']),
     imagingProfile: zImagingProfile,
     exposureMilliseconds: z.number().gt(0).nullish(),
@@ -770,7 +770,7 @@ export const zCommandPayload = z.discriminatedUnion('kind', [
  * - rejected if the safety envelope refuses it, even when the cloud approved it.
  *
  */
-export const zCommandEnvelope = z.object({
+export const zCommandEnvelope = z.strictObject({
     commandId: z.uuid(),
     missionId: z.uuid(),
     sessionId: z.uuid(),
@@ -789,7 +789,7 @@ export const zCommandEnvelope = z.object({
  * is rejected.
  *
  */
-export const zMissionCommandRequest = z.object({
+export const zMissionCommandRequest = z.strictObject({
     type: zClientCommandType,
     nudge: zNudgePayload.nullish(),
     capture: zCapturePayload.nullish(),
@@ -837,7 +837,7 @@ export const zCommandRejectionReason = z.enum([
     'OBSERVATORY_OFFLINE'
 ]);
 
-export const zMissionCommandAccepted = z.object({
+export const zMissionCommandAccepted = z.strictObject({
     commandId: z.uuid(),
     missionId: z.uuid(),
     type: zCommandType,
@@ -852,7 +852,7 @@ export const zMissionCommandAccepted = z.object({
  * overridable. Requires a stated reason, which is stored in the audit log.
  *
  */
-export const zOperatorOverrideRequest = z.object({
+export const zOperatorOverrideRequest = z.strictObject({
     missionId: z.uuid().nullish(),
     type: zCommandType,
     payload: zCommandPayload,
@@ -876,7 +876,7 @@ export const zCaptureAssetKind = z.enum([
  */
 export const zCaptureVisibility = z.enum(['PRIVATE', 'GALLERY']);
 
-export const zCapture = z.object({
+export const zCapture = z.strictObject({
     id: z.uuid(),
     missionId: z.uuid(),
     userId: z.uuid(),
@@ -897,12 +897,12 @@ export const zCapture = z.object({
     thumbnailUrl: z.url().nullish()
 });
 
-export const zCapturePage = z.object({
+export const zCapturePage = z.strictObject({
     items: z.array(zCapture),
     page: zPageMeta
 });
 
-export const zCaptureDownload = z.object({
+export const zCaptureDownload = z.strictObject({
     kind: zCaptureAssetKind,
     url: z.url(),
     expiresAt: z.iso.datetime()
@@ -923,7 +923,7 @@ export const zAuditCategory = z.enum([
 /**
  * Append-only. Never edited, never backdated, never fabricated.
  */
-export const zAuditEvent = z.object({
+export const zAuditEvent = z.strictObject({
     id: z.uuid(),
     at: z.iso.datetime(),
     category: zAuditCategory,
@@ -934,7 +934,7 @@ export const zAuditEvent = z.object({
     detail: z.record(z.string(), z.unknown()).optional()
 });
 
-export const zAuditEventPage = z.object({
+export const zAuditEventPage = z.strictObject({
     items: z.array(zAuditEvent),
     page: zPageMeta
 });
@@ -947,7 +947,7 @@ export const zWebSocketProtocolVersion = z.enum(['1']);
 /**
  * First message after the agent dials out and authenticates.
  */
-export const zAgentHello = z.object({
+export const zAgentHello = z.strictObject({
     type: z.enum(['AGENT_HELLO']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -963,7 +963,7 @@ export const zAgentHello = z.object({
 /**
  * Sent every 5 seconds. Its absence is what triggers the watchdog.
  */
-export const zAgentHeartbeat = z.object({
+export const zAgentHeartbeat = z.strictObject({
     type: z.enum(['AGENT_HEARTBEAT']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -976,7 +976,7 @@ export const zAgentHeartbeat = z.object({
  * reason after the cloud approved the command is the safety design working.
  *
  */
-export const zAgentCommandAck = z.object({
+export const zAgentCommandAck = z.strictObject({
     type: z.enum(['AGENT_COMMAND_ACK']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -990,7 +990,7 @@ export const zAgentCommandAck = z.object({
 /**
  * Emitted on the agent control loop. Carries telemetry and, if a mission is held, its state.
  */
-export const zAgentStateDelta = z.object({
+export const zAgentStateDelta = z.strictObject({
     type: z.enum(['AGENT_STATE_DELTA']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1005,7 +1005,7 @@ export const zAgentStateDelta = z.object({
 /**
  * A state transition the agent wants written to the mission audit trail.
  */
-export const zAgentMissionEvent = z.object({
+export const zAgentMissionEvent = z.strictObject({
     type: z.enum(['AGENT_MISSION_EVENT']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1028,7 +1028,7 @@ export const zLiveFrameEncoding = z.enum(['JPEG']);
  * base64-encoded into JSON.
  *
  */
-export const zLiveFrameHeader = z.object({
+export const zLiveFrameHeader = z.strictObject({
     type: z.enum(['AGENT_LIVE_FRAME']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1048,7 +1048,7 @@ export const zLiveFrameHeader = z.object({
 /**
  * A finished capture has been uploaded by the agent and is ready for the cloud to record.
  */
-export const zAgentCaptureReady = z.object({
+export const zAgentCaptureReady = z.strictObject({
     type: z.enum(['AGENT_CAPTURE_READY']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1076,7 +1076,7 @@ export const zAgentErrorSeverity = z.enum([
     'FATAL'
 ]);
 
-export const zAgentError = z.object({
+export const zAgentError = z.strictObject({
     type: z.enum(['AGENT_ERROR']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1104,7 +1104,7 @@ export const zAgentToCloudMessage = z.discriminatedUnion('type', [
 /**
  * Cloud response to AgentHello. Establishes the mission the agent is expected to hold, if any.
  */
-export const zCloudWelcome = z.object({
+export const zCloudWelcome = z.strictObject({
     type: z.enum(['CLOUD_WELCOME']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1117,14 +1117,14 @@ export const zCloudWelcome = z.object({
 /**
  * The only way the cloud instructs the observatory.
  */
-export const zCloudCommand = z.object({
+export const zCloudCommand = z.strictObject({
     type: z.enum(['CLOUD_COMMAND']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
     command: zCommandEnvelope
 });
 
-export const zCloudHeartbeatAck = z.object({
+export const zCloudHeartbeatAck = z.strictObject({
     type: z.enum(['CLOUD_HEARTBEAT_ACK']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1137,7 +1137,7 @@ export const zCloudHeartbeatAck = z.object({
  * what stops a stale browser tab.
  *
  */
-export const zCloudSessionUpdate = z.object({
+export const zCloudSessionUpdate = z.strictObject({
     type: z.enum(['CLOUD_SESSION_UPDATE']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1153,14 +1153,14 @@ export const zCloudSessionUpdate = z.object({
  * maxAltitudeDegrees is null puts the agent in the refuse-all-slews state.
  *
  */
-export const zCloudSafetyEnvelopeUpdate = z.object({
+export const zCloudSafetyEnvelopeUpdate = z.strictObject({
     type: z.enum(['CLOUD_SAFETY_ENVELOPE_UPDATE']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
     envelope: zSafetyEnvelopeConfig
 });
 
-export const zCloudError = z.object({
+export const zCloudError = z.strictObject({
     type: z.enum(['CLOUD_ERROR']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1181,7 +1181,7 @@ export const zCloudToAgentMessage = z.discriminatedUnion('type', [
     zCloudError.extend({ type: z.literal('CLOUD_ERROR') })
 ]);
 
-export const zMissionStateUpdate = z.object({
+export const zMissionStateUpdate = z.strictObject({
     type: z.enum(['MISSION_STATE']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1196,7 +1196,7 @@ export const zMissionStateUpdate = z.object({
  * device identity, no driver state, no address.
  *
  */
-export const zMissionTelemetryUpdate = z.object({
+export const zMissionTelemetryUpdate = z.strictObject({
     type: z.enum(['MISSION_TELEMETRY']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1213,7 +1213,7 @@ export const zMissionTelemetryUpdate = z.object({
 /**
  * Where the client reads the live view. A short-expiry signed URL, never a device address.
  */
-export const zMissionStreamInfo = z.object({
+export const zMissionStreamInfo = z.strictObject({
     type: z.enum(['MISSION_STREAM']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1224,7 +1224,7 @@ export const zMissionStreamInfo = z.object({
     expiresAt: z.iso.datetime()
 });
 
-export const zMissionCaptureReady = z.object({
+export const zMissionCaptureReady = z.strictObject({
     type: z.enum(['MISSION_CAPTURE_READY']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1235,7 +1235,7 @@ export const zMissionCaptureReady = z.object({
 /**
  * The outcome of a command the client submitted over HTTP, delivered asynchronously.
  */
-export const zMissionCommandResult = z.object({
+export const zMissionCommandResult = z.strictObject({
     type: z.enum(['MISSION_COMMAND_RESULT']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1245,7 +1245,7 @@ export const zMissionCommandResult = z.object({
     rejectionReason: zCommandRejectionReason.nullish()
 });
 
-export const zMissionChannelError = z.object({
+export const zMissionChannelError = z.strictObject({
     type: z.enum(['MISSION_ERROR']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1265,7 +1265,7 @@ export const zMissionChannelMessage = z.discriminatedUnion('type', [
     zMissionChannelError.extend({ type: z.literal('MISSION_ERROR') })
 ]);
 
-export const zMissionClientSubscribe = z.object({
+export const zMissionClientSubscribe = z.strictObject({
     type: z.enum(['CLIENT_SUBSCRIBE']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
@@ -1273,7 +1273,7 @@ export const zMissionClientSubscribe = z.object({
     sessionId: z.uuid()
 });
 
-export const zMissionClientPing = z.object({
+export const zMissionClientPing = z.strictObject({
     type: z.enum(['CLIENT_PING']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime()
@@ -1290,7 +1290,7 @@ export const zMissionClientMessage = z.discriminatedUnion('type', [
     zMissionClientPing.extend({ type: z.literal('CLIENT_PING') })
 ]);
 
-export const zAdminCancelMissionRequest = z.object({
+export const zAdminCancelMissionRequest = z.strictObject({
     reason: z.string().min(4),
     resolution: z.enum([
         'REFUND',
@@ -1299,7 +1299,7 @@ export const zAdminCancelMissionRequest = z.object({
     ])
 });
 
-export const zAdminUpdateTargetRequest = z.object({
+export const zAdminUpdateTargetRequest = z.strictObject({
     enabled: z.boolean().optional(),
     imagingProfile: zImagingProfile.optional(),
     opticalConfig: zOpticalConfig.optional(),

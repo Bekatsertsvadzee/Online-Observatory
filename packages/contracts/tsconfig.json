@@ -8,7 +8,8 @@
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "types": ["node"]
   },
-  "include": ["generated/**/*.ts"]
+  "include": ["generated/**/*.ts", "openapi-ts.config.ts"]
 }
