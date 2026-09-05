@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -123,3 +124,15 @@ def test_dialling_out_needs_all_three_of_id_url_and_token():
     for missing in complete:
         partial = {key: value for key, value in complete.items() if key != missing}
         assert load_config(partial).can_dial_out is False
+
+
+def test_the_state_path_defaults_under_the_home_directory():
+    """Not the working directory. A service started from a different folder must
+    not come back with an empty memory of which commands it has already run."""
+    default = load_config({}).state_path
+    assert default == Path.home() / ".darkview" / "agent-state.sqlite3"
+
+
+def test_the_state_path_can_be_set_and_expands_a_tilde():
+    config = load_config({"DARKVIEW_AGENT_STATE_PATH": "~/observatory/state.sqlite3"})
+    assert config.state_path == Path.home() / "observatory" / "state.sqlite3"

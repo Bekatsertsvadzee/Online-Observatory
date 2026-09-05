@@ -11,7 +11,11 @@ from uuid import uuid4
 import pytest
 
 from contracts.models import CommandAcceptanceStatus, CommandRejectionReason
-from darkview_agent.command.validator import CommandValidator, SessionOwnership
+from darkview_agent.command.validator import (
+    BoundedSeenCommands,
+    CommandValidator,
+    SessionOwnership,
+)
 from darkview_agent.safety.envelope import SafetyEnvelope
 from tests.command_fixtures import (
     NOW,
@@ -115,8 +119,8 @@ def test_different_command_ids_are_evaluated_independently():
     assert subject.validate(park(), NOW).accepted is True
 
 
-def test_the_seen_set_is_bounded():
-    subject = CommandValidator(seen_capacity=3)
+def test_the_in_memory_seen_set_is_bounded():
+    subject = CommandValidator(seen=BoundedSeenCommands(capacity=3))
     subject.set_ownership(OWNERSHIP)
 
     commands = [park() for _ in range(5)]

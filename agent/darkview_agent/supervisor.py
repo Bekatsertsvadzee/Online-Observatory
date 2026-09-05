@@ -64,6 +64,7 @@ from darkview_agent.runtime import Devices
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
 from darkview_agent.safety.envelope import SafetyEnvelope, normalise_azimuth
 from darkview_agent.safety.watchdog import Watchdog
+from darkview_agent.state.store import StateStore, StoredMission, StoredOwnership
 
 logger = logging.getLogger("darkview.agent.supervisor")
 
@@ -120,6 +121,7 @@ class Supervisor:
         validator: CommandValidator,
         envelope: SafetyEnvelope,
         outbox: list[MissionEvent],
+        store: StateStore | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._config = config
@@ -135,9 +137,14 @@ class Supervisor:
         # up a Park. Required rather than defaulted: a Supervisor whose outbox is
         # not the one the runner writes to would silently lose every event.
         self._outbox = outbox
+        self._store = store
         self._now = now or (lambda: datetime.now(UTC))
 
         self._owner: _Owner | None = None
+        # A mission this agent was holding when it stopped. Reported to the cloud
+        # and then forgotten -- see `recover`.
+        self._recovered_mission: StoredMission | None = None
+        self._saved_mission_state: str | None = None
         self._link.set_safety_envelope_configured(envelope.is_measured)
 
     # ------------------------------------------------------------------
@@ -168,6 +175,89 @@ class Supervisor:
     def owner(self) -> SessionOwnership | None:
         return self._owner.ownership if self._owner else None
 
+    @property
+    def recovered_mission(self) -> StoredMission | None:
+        return self._recovered_mission
+
+    # ------------------------------------------------------------------
+    # Coming back
+    # ------------------------------------------------------------------
+
+    def recover(self) -> None:
+        """Pick up what the last run left behind. Called once, before pumping.
+
+        Two things come back and one deliberately does not.
+
+        **Ownership comes back**, with the customer's spent nudge allowance. A
+        restart that refilled the allowance would hand back the drift budget the
+        limit exists to bound, and an agent that dropped ownership would refuse
+        every command until the customer noticed and reopened their session.
+
+        **A mission is reported, not resumed.** The agent has lost the state
+        machine's progress -- which frame, which centring iteration, whether the
+        slew had settled -- so continuing would be guessing about where a
+        telescope is pointing. The mount is parked, the cloud is told through
+        `AgentHello.resumeMissionId`, and the mission is the cloud's to close.
+        """
+        if self._store is None:
+            return
+
+        now = self._now()
+        self._store.prune(now)
+        self._restore_ownership(now)
+        self._restore_mission()
+
+    def _restore_ownership(self, now: datetime) -> None:
+        assert self._store is not None
+        stored = self._store.load_ownership()
+        if stored is None:
+            return
+
+        if stored.expires_at is not None and stored.expires_at <= now:
+            logger.info("the stored session had already expired; starting with no owner")
+            self._store.clear_ownership()
+            return
+
+        self._owner = _Owner(
+            ownership=SessionOwnership(
+                mission_id=stored.mission_id,
+                session_id=stored.session_id,
+                user_id=stored.user_id,
+            ),
+            expires_at=stored.expires_at,
+        )
+        self._validator.set_ownership(self._owner.ownership)
+        # After set_ownership, which resets it. The allowance is spent and must
+        # stay spent across a restart.
+        self._validator.set_nudge_offset(stored.cumulative_nudge_degrees)
+        logger.info("recovered session %s", stored.session_id)
+
+    def _restore_mission(self) -> None:
+        assert self._store is not None
+        stored = self._store.load_mission()
+        if stored is None:
+            return
+
+        self._recovered_mission = stored
+        self._link.set_resume_mission(stored.mission_id)
+        logger.warning(
+            "restarted holding mission %s (last seen %s); parking",
+            stored.mission_id,
+            stored.state,
+        )
+        self._audit_event(
+            "MISSION_RECOVERED",
+            detail=f"restarted holding mission {stored.mission_id}, last seen "
+            f"{stored.state}; parked and reported to the cloud",
+            context={"missionId": str(stored.mission_id), "state": stored.state},
+        )
+
+        with self._watchdog.device_lock:
+            try:
+                self._devices.mount.park()
+            except Exception as error:
+                logger.error("could not park after recovering a mission: %s", error)
+
     # ------------------------------------------------------------------
     # The pump
     # ------------------------------------------------------------------
@@ -188,6 +278,11 @@ class Supervisor:
             # Only ever called from a link that is genuinely online, because this
             # is the single fact standing between a dead link and a Park.
             self._watchdog.link_is_online()
+            # The hello that brought the link up carried the recovered mission.
+            # It has been reported, so it stops being this agent's problem --
+            # kept until now so a restart before reaching the cloud still reports
+            # it on the next attempt.
+            self._forget_recovered_mission()
 
         for message in self._link.take_received():
             self._handle(message, at_time)
@@ -201,12 +296,17 @@ class Supervisor:
         while self._outbox:
             self._link.send(self._outbox.pop(0).to_message())
 
+        self._persist_mission()
+
         # Told at every pass, read only at the next hello. An agent that
         # reconnects mid-mission has to say which mission it still holds, or the
         # cloud will believe the observatory came back idle.
-        self._link.set_resume_mission(
-            uuid.UUID(self._runner.mission_id) if self._runner.is_active else None
-        )
+        if self._runner.is_active:
+            self._link.set_resume_mission(uuid.UUID(self._runner.mission_id))
+        elif self._recovered_mission is not None:
+            self._link.set_resume_mission(self._recovered_mission.mission_id)
+        else:
+            self._link.set_resume_mission(None)
 
     # ------------------------------------------------------------------
     # Inbound messages
@@ -286,10 +386,12 @@ class Supervisor:
         previous = self._owner
         if previous is not None and owner is not None and previous.ownership == owner.ownership:
             self._owner = owner
+            self._persist_owner()
             return
 
         self._owner = owner
         self._validator.set_ownership(owner.ownership if owner else None)
+        self._persist_owner()
 
     def _expire_owner(self, at_time: datetime) -> None:
         """Drop an owner whose session has run out, without waiting to be told.
@@ -327,6 +429,8 @@ class Supervisor:
             return
 
         self._envelope = SafetyEnvelope(config=config, site=self._config.site)
+        if self._store is not None:
+            self._store.save_envelope(config)
         self._validator.set_envelope(self._envelope)
         self._runner.set_envelope(self._envelope)
         self._watchdog.set_config(config)
@@ -364,6 +468,10 @@ class Supervisor:
             refusal = self._execute(raw, at_time)
             if refusal is not None:
                 ack = self._downgrade(ack, refusal)
+
+        # The nudge allowance moves when a nudge is accepted, and it has to
+        # survive a restart with the session that spent it.
+        self._persist_owner()
 
         if _parse_uuid(ack.command_id) is None:
             # An envelope so malformed it had no readable commandId. The refusal
@@ -579,6 +687,52 @@ class Supervisor:
     # Plumbing
     # ------------------------------------------------------------------
 
+    def _forget_recovered_mission(self) -> None:
+        if self._recovered_mission is None:
+            return
+        self._recovered_mission = None
+        if self._store is not None:
+            self._store.clear_mission()
+
+    def _persist_mission(self) -> None:
+        """Keep the held mission on disk, and only when it changed.
+
+        A write per state transition, not per pass. `is_active` is false once the
+        mission reaches a terminal state, so a finished mission is cleared rather
+        than recovered -- only an unfinished one comes back after a restart.
+        """
+        if self._store is None:
+            return
+
+        if self._runner.is_active:
+            state = self._runner.state.value
+            if state != self._saved_mission_state:
+                assert self._runner.mission_id is not None
+                self._store.save_mission(
+                    uuid.UUID(self._runner.mission_id), state, self._now()
+                )
+                self._saved_mission_state = state
+        elif self._saved_mission_state is not None:
+            self._store.clear_mission()
+            self._saved_mission_state = None
+
+    def _persist_owner(self) -> None:
+        if self._store is None:
+            return
+        owner = self._owner
+        if owner is None:
+            self._store.clear_ownership()
+            return
+        self._store.save_ownership(
+            StoredOwnership(
+                mission_id=owner.ownership.mission_id,
+                session_id=owner.ownership.session_id,
+                user_id=owner.ownership.user_id,
+                expires_at=owner.expires_at,
+                cumulative_nudge_degrees=self._validator.cumulative_nudge_degrees,
+            )
+        )
+
     def _audit_event(self, kind: str, **fields) -> None:
         self.audit.record(AuditEvent(occurred_at=self._now(), kind=kind, **fields))
 
@@ -610,6 +764,7 @@ def build_supervisor(
     connect,
     envelope: SafetyEnvelope | None = None,
     solver: PlateSolver | None = None,
+    store: StateStore | None = None,
     clock: Clock | None = None,
     now: Callable[[], datetime] | None = None,
 ) -> Supervisor:
@@ -619,6 +774,11 @@ def build_supervisor(
     defaults, so forgetting either produces an agent that refuses every nudge for
     no visible reason rather than one that moves when it should not — which is
     why this function, and not a comment, is what guarantees it.
+
+    A `store` makes three things durable in the same stroke: the audit log gains a
+    sink, the idempotency set moves out of memory so a command retried across a
+    restart is still refused, and a measured safety envelope survives a reboot
+    during a network outage instead of coming back UNMEASURED.
     """
     from darkview_agent import __version__
 
@@ -630,7 +790,18 @@ def build_supervisor(
 
     clock = clock or SystemClock()
     envelope = envelope if envelope is not None else SafetyEnvelope(site=config.site)
-    audit = AuditLog()
+
+    # Only when the caller has not supplied measured limits. A stored envelope
+    # must never quietly replace one that was passed in deliberately, and it can
+    # only ever fill the unmeasured case -- which refuses every slew anyway, so
+    # there is nothing it can relax.
+    if store is not None and not envelope.is_measured:
+        stored_config = store.load_envelope()
+        if stored_config is not None:
+            envelope = SafetyEnvelope(config=stored_config, site=config.site)
+            logger.info("recovered the measured safety envelope from local state")
+
+    audit = AuditLog(sink=store.append_audit if store else None)
     outbox: list[MissionEvent] = []
 
     link = LinkSession(
@@ -651,6 +822,7 @@ def build_supervisor(
     validator = CommandValidator(
         envelope=envelope,
         audit=audit,
+        seen=store,
         attended=config.attended,
         pointing=lambda: _mount_pointing(devices),
     )
@@ -664,6 +836,7 @@ def build_supervisor(
         validator=validator,
         envelope=envelope,
         outbox=outbox,
+        store=store,
         now=now,
     )
 

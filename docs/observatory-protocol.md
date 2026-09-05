@@ -55,7 +55,7 @@ An envelope is invalid when a required identifier is blank, a timestamp is malfo
 - Reusing a `commandId` for a different operation or payload fails with `IDEMPOTENCY_CONFLICT`.
 - Failed commands are not retained, allowing a corrected command with a new valid envelope to be attempted.
 
-The in-memory simulator ledger is development-only. A production observatory agent must persist idempotency records and command receipts across restarts before hardware integration is enabled.
+The in-memory simulator ledger is development-only. A production observatory agent must persist idempotency records and command receipts across restarts before hardware integration is enabled. The Python agent does this as of DV-027: decided command ids and its audit log are held in a local SQLite store (ADR-010), so a command retried across a restart is refused rather than performed a second time.
 
 ## Simulator behavior
 

@@ -36,6 +36,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Protocol
 
 from contracts.models import (
     CommandAcceptanceStatus,
@@ -55,6 +56,46 @@ POINTING_COMMANDS = {"GOTO", "NUDGE"}
 RECOVERY_COMMANDS = {"PARK", "ABORT"}
 
 ARCMINUTES_PER_DEGREE = 60.0
+
+
+class SeenCommands(Protocol):
+    """Which commands have already been decided.
+
+    An interface because where it lives decides what a restart costs. In memory
+    it is bounded and forgotten on reboot; in the local state store (DV-027) a
+    command retried across a restart is still refused, which is the guarantee
+    `docs/observatory-protocol.md` requires before hardware is enabled.
+    """
+
+    def has(self, command_id: str) -> bool: ...
+
+    def remember(self, command_id: str, at: datetime) -> None: ...
+
+
+class BoundedSeenCommands:
+    """The default: the most recent decisions, in memory.
+
+    Bounded, because an agent runs for months. When it overflows the oldest go,
+    which means a very old command could in principle be accepted twice -- but
+    the window is far longer than any `expiresAt`, so expiry catches that first.
+    """
+
+    def __init__(self, capacity: int = 4096) -> None:
+        if capacity <= 0:
+            raise ValueError("capacity must be positive")
+        self._capacity = capacity
+        self._seen: OrderedDict[str, datetime] = OrderedDict()
+
+    def __len__(self) -> int:
+        return len(self._seen)
+
+    def has(self, command_id: str) -> bool:
+        return command_id in self._seen
+
+    def remember(self, command_id: str, at: datetime) -> None:
+        self._seen[command_id] = at
+        while len(self._seen) > self._capacity:
+            self._seen.popitem(last=False)
 
 
 @dataclass(frozen=True)
@@ -99,17 +140,17 @@ class Ack:
 class CommandValidator:
     """Validates commands and remembers what it has already decided.
 
-    The seen-set is what makes retries safe. It is bounded, because an agent runs
-    for months; when it overflows the oldest entries go, which means a very old
-    command could in principle be accepted twice. The window is far longer than
-    any `expiresAt`, so expiry catches that case first.
+    The seen-set is what makes retries safe. Where it is kept is injected: in
+    memory by default, in the local state store when one is open, and that choice
+    is the difference between a restart forgetting a slew it already performed
+    and refusing it a second time.
     """
 
     def __init__(
         self,
         envelope: SafetyEnvelope | None = None,
         audit: AuditLog | None = None,
-        seen_capacity: int = 4096,
+        seen: SeenCommands | None = None,
         attended: bool = False,
         pointing: Callable[[], tuple[float, float]] | None = None,
     ) -> None:
@@ -131,8 +172,7 @@ class CommandValidator:
         # Not `audit or AuditLog()`: AuditLog defines __len__, so an empty one is
         # falsy and an injected log would be silently discarded.
         self._audit = AuditLog() if audit is None else audit
-        self._seen: OrderedDict[str, Ack] = OrderedDict()
-        self._seen_capacity = seen_capacity
+        self._seen: SeenCommands = BoundedSeenCommands() if seen is None else seen
         self._ownership: SessionOwnership | None = None
         self._cumulative_nudge_degrees = 0.0
 
@@ -165,6 +205,15 @@ class CommandValidator:
     def set_envelope(self, envelope: SafetyEnvelope) -> None:
         self._envelope = envelope
 
+    def set_nudge_offset(self, degrees: float) -> None:
+        """Restore an allowance already spent, after a restart.
+
+        Only `StateStore` has a reason to call this. Everything else either
+        spends the allowance a step at a time or returns it with
+        `reset_nudge_offset`.
+        """
+        self._cumulative_nudge_degrees = max(0.0, degrees)
+
     def reset_nudge_offset(self) -> None:
         """Forget how far the customer has nudged from the booked target.
 
@@ -174,7 +223,7 @@ class CommandValidator:
         recentre control takes the customer's remaining nudges away rather than
         giving them back, and a session ends unable to move at all.
         """
-        self._cumulative_nudge_degrees = 0.0
+        self.set_nudge_offset(0.0)
 
     # ------------------------------------------------------------------
     # Validation
@@ -193,11 +242,11 @@ class CommandValidator:
         command_id = str(envelope.command_id)
 
         # 2. Idempotency. Before anything else with a side effect.
-        if command_id in self._seen:
+        if self._seen.has(command_id):
             return self._duplicate(envelope)
 
         ack = self._evaluate(envelope, at_time)
-        self._remember(command_id, ack)
+        self._seen.remember(command_id, at_time)
         return ack
 
     def _evaluate(self, envelope: CommandEnvelope, at_time: datetime) -> Ack:
@@ -458,10 +507,5 @@ class CommandValidator:
             detail="this commandId has already been decided",
         )
 
-    def _remember(self, command_id: str, ack: Ack) -> None:
-        self._seen[command_id] = ack
-        while len(self._seen) > self._seen_capacity:
-            self._seen.popitem(last=False)
-
     def has_seen(self, command_id: str) -> bool:
-        return command_id in self._seen
+        return self._seen.has(command_id)
