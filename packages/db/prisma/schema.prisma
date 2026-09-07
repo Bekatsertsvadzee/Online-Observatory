@@ -629,8 +629,23 @@ model Mission {
   /// Contract: MissionFailureReason. Detail for a failure or hold state.
   failureReason       MissionFailureReason?
   sharingMode         MissionSharingMode   @default(PRIVATE)
+  /// Contract: Mission.observable. DISABLED is not observable, OPEN is.
+  ///
+  /// ADR-007: sessions are private by default and become observable only when the
+  /// controller opts in. This column is that opt-in. No separate `observable`
+  /// boolean exists, because two columns meaning one thing can disagree.
   joinPolicy          MissionJoinPolicy    @default(DISABLED)
+  /// ADR-007: observers receive no captures, and CaptureAccess stays frozen. This
+  /// must remain false for every mission Phase 1 creates.
   allowSharedCaptures Boolean              @default(false)
+  /// Contract: Mission.observerCapacity. Seats available to observers, over and
+  /// above the one controller.
+  ///
+  /// ADR-007 caps it at five, and Mission_observer_capacity_within_adr007 makes
+  /// that the database's rule rather than a number the application promises to
+  /// check. The cap is per mission so an operator can lower it; nothing may raise
+  /// it above five without amending the decision record.
+  observerCapacity    Int                  @default(5)
   /// Contract: ObservatoryMode. A mission run against the simulator is permanently
   /// marked SIMULATED and is never presented as real telescope output.
   mode                ObservatoryMode      @default(SIMULATED)
