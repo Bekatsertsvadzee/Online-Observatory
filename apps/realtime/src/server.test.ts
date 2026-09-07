@@ -67,6 +67,60 @@ afterEach(async () => {
   await server.close();
 });
 
+describe("what a heartbeat costs", () => {
+  const PROTOCOL_VERSION = "1";
+
+  function hello(overrides: Record<string, unknown> = {}) {
+    return JSON.stringify({
+      type: "AGENT_HELLO",
+      messageId: randomUUID(),
+      sentAt: new Date().toISOString(),
+      protocolVersion: PROTOCOL_VERSION,
+      observatoryId: realObservatory.id,
+      agentVersion: "0.1.0",
+      mode: "REAL",
+      bootedAt: new Date().toISOString(),
+      safetyEnvelopeConfigured: false,
+      resumeMissionId: null,
+      ...overrides,
+    });
+  }
+
+  function heartbeat(sequence: number) {
+    return JSON.stringify({
+      type: "AGENT_HEARTBEAT",
+      messageId: randomUUID(),
+      sentAt: new Date().toISOString(),
+      sequence,
+      uptimeSeconds: sequence * 5,
+    });
+  }
+
+  /** Let the server finish the work it kicked off for the frames just sent. */
+  async function settle() {
+    for (let index = 0; index < 20; index += 1) await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  it("sweeps once when the link comes online, and not again per message", async () => {
+    const client = await connect(DEVICE_TOKEN);
+
+    client.send(hello());
+    await settle();
+    const afterHello = store.envelopeReads.length;
+
+    for (let sequence = 1; sequence <= 5; sequence += 1) client.send(heartbeat(sequence));
+    await settle();
+
+    // The sweep re-sends the safety envelope, the session owner and any unrelayed
+    // command. Running it per frame meant a heartbeat every five seconds pushed
+    // all of that at an observatory doing nothing, forever. It belongs on the
+    // transition into ONLINE, which happens once.
+    expect(afterHello).toBe(1);
+    expect(store.envelopeReads.length).toBe(afterHello);
+  });
+});
+
 describe("the record the server hands the link", () => {
   it("is the observatory the device token resolved to", async () => {
     await connect(DEVICE_TOKEN);

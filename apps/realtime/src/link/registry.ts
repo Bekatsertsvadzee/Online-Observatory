@@ -43,6 +43,11 @@ export class AgentLinkRegistry {
     return this.links.size;
   }
 
+  /** Every observatory that currently holds a link. */
+  observatoryIds(): string[] {
+    return [...this.links.keys()];
+  }
+
   /**
    * Close every link that has gone silent past the grace period and mark its
    * observatory as having lost the link. Driven by a timer in the server; called

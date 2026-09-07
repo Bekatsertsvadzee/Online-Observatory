@@ -134,16 +134,16 @@ export class AgentRelay {
   }
 
   /**
-   * Send anything written but never put on the wire.
+   * Everything an agent needs after it has just come online.
    *
-   * Run on every reconnect and on a slow timer. `NOTIFY` is not delivered to a
-   * listener that was disconnected at that instant, and the row is the source of
-   * truth, so this is what makes a lost notification cost latency rather than a
-   * command.
+   * Run once, on the transition to ONLINE -- not on every message. It used to run
+   * after every inbound frame, which meant a heartbeat every five seconds pushed
+   * the whole safety envelope back down the wire and cost three queries, forever,
+   * on an idle observatory. What it is actually for is the agent that has just
+   * reconnected and missed notifications while it was away.
    *
-   * Returns how many were sent, so a caller can log when the fallback is doing
-   * work. If it routinely is, the notification path is broken and this is masking
-   * it.
+   * The periodic half of ADR-009's fallback is `sweepPendingCommands`, which
+   * looks for unrelayed rows and nothing else.
    */
   async sweep(observatoryId: string): Promise<number> {
     const now = this.now();
@@ -166,7 +166,26 @@ export class AgentRelay {
         ?.dispatch(cloudSessionUpdate(owner.missionId, owner));
     }
 
-    const pending = await this.store.pendingCommands(observatoryId, now);
+    return this.sweepPendingCommands(observatoryId);
+  }
+
+  /**
+   * Send commands written but never put on the wire.
+   *
+   * ADR-009's fallback, and only that: `NOTIFY` is not delivered to a listener
+   * that was disconnected at that instant, and the row is the source of truth, so
+   * this is what makes a lost notification cost latency rather than a command.
+   *
+   * Deliberately narrower than `sweep`. A timer that re-sent the safety envelope
+   * and the session owner on every tick would be pushing unchanged state at an
+   * idle observatory, which is the fault this replaced.
+   *
+   * Returns how many were sent, so a caller can log when the fallback is doing
+   * work. If it routinely is, the notification path is broken and this is masking
+   * it.
+   */
+  async sweepPendingCommands(observatoryId: string): Promise<number> {
+    const pending = await this.store.pendingCommands(observatoryId, this.now());
 
     let sent = 0;
     for (const command of pending) {
