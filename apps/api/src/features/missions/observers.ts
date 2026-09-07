@@ -2,9 +2,11 @@ import "server-only";
 
 import type {
   ErrorCode,
+  Mission,
   MissionObserver,
   MissionObserverList,
 } from "@darkview/contracts";
+import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
 
 import { getDatabase } from "@/lib/db/client";
@@ -282,6 +284,127 @@ export async function releaseObserverSeat(input: {
 
     return { ok: true, value: null };
   });
+}
+
+/**
+ * The controller's consent, and the only way a session becomes observable.
+ *
+ * ADR-007 rule 5: sessions are private by default and become observable only when
+ * their owner chooses to open one. Nobody is watched without agreeing, so this is
+ * owner-only -- an operator does not get to open somebody's session on their
+ * behalf, which is why the role check below is an equality test on the owner and
+ * not the usual `actor.role === "OPERATOR" ||` escape hatch.
+ *
+ * Closing detaches everyone currently watching, in the same transaction. The
+ * contract says "closing a session detaches any attached observers", and consent
+ * withdrawn has to stop the watching now rather than for the next person to ask.
+ */
+export async function setMissionObservation(input: {
+  missionId: string;
+  actor: { id: string; role: "USER" | "OPERATOR" };
+  observable: boolean;
+  now: Date;
+}): Promise<ObserverResult<Mission>> {
+  const database = getDatabase();
+  const { missionId, actor, observable, now } = input;
+
+  const mission = await database.mission.findUnique({
+    where: { id: missionId },
+    select: { userId: true, state: true, isDemo: true },
+  });
+
+  // Existence stays private, and "not yours" is not a distinction a stranger gets
+  // to make -- the same 404 the rest of the mission surface gives.
+  if (!mission || mission.userId !== actor.id) return NO_SUCH_MISSION;
+
+  if (
+    !LIVE_MISSION_STATES.includes(
+      mission.state as (typeof LIVE_MISSION_STATES)[number],
+    )
+  ) {
+    return {
+      ok: false,
+      status: 409,
+      code: "MISSION_NOT_ACTIVE",
+      message: `A mission in ${mission.state} has no session to open.`,
+    };
+  }
+
+  return database.$transaction(async (tx) => {
+    await tx.mission.update({
+      where: { id: missionId },
+      data: { joinPolicy: observable ? "OPEN" : "DISABLED" },
+    });
+
+    const detached = observable
+      ? 0
+      : (
+          await tx.missionParticipant.updateMany({
+            where: { missionId, status: "JOINED" },
+            data: { status: "LEFT", leftAt: now },
+          })
+        ).count;
+
+    await recordAuditEvent(
+      {
+        category: "MISSION",
+        action: observable ? "MISSION_OPENED_TO_OBSERVERS" : "MISSION_CLOSED_TO_OBSERVERS",
+        actorUserId: actor.id,
+        missionId,
+        entityType: "Mission",
+        entityId: missionId,
+        detail: { observable, detached },
+        isDemo: mission.isDemo,
+      },
+      tx,
+    );
+
+    return { ok: true, value: await readContractMission(tx, missionId) };
+  });
+}
+
+/**
+ * A mission as the contract describes one.
+ *
+ * `observerCount` is counted here rather than stored. `bookingId` is null for a
+ * mission nobody bought -- an operator or demo mission -- which is what the
+ * contract's nullable `bookingId` is for; inventing one would put a fiction in
+ * the payment tables.
+ */
+export async function readContractMission(
+  tx: Pick<Prisma.TransactionClient, "mission" | "missionParticipant">,
+  missionId: string,
+): Promise<Mission> {
+  const row = await tx.mission.findUniqueOrThrow({
+    where: { id: missionId },
+    include: {
+      booking: { select: { id: true } },
+      captures: { select: { id: true } },
+    },
+  });
+
+  const observerCount = await tx.missionParticipant.count({
+    where: { missionId, status: "JOINED" },
+  });
+
+  return {
+    id: row.id,
+    userId: row.userId,
+    bookingId: row.booking?.id ?? null,
+    targetId: row.targetId,
+    observatoryId: row.observatoryId,
+    state: row.state,
+    failureReason: row.failureReason,
+    mode: row.mode,
+    scheduledStartAt: row.scheduledFor?.toISOString() ?? null,
+    requestedAt: row.requestedAt.toISOString(),
+    startedAt: row.startedAt?.toISOString() ?? null,
+    endedAt: row.completedAt?.toISOString() ?? null,
+    captureIds: row.captures.map((capture) => capture.id),
+    observable: row.joinPolicy === "OPEN",
+    observerCapacity: row.observerCapacity,
+    observerCount,
+  };
 }
 
 /**

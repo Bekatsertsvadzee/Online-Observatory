@@ -758,7 +758,14 @@ export type MissionFailureReason = typeof MissionFailureReason[keyof typeof Miss
 export type Mission = {
     id: string;
     userId: string;
-    bookingId: string;
+    /**
+     * The booking this mission was sold from, or null. Required so it is always
+     * stated, nullable because not every mission is sold: an operator mission and
+     * a demo mission have no booking, and inventing one for them would put a
+     * fiction in the payment tables.
+     *
+     */
+    bookingId: string | null;
     targetId: string;
     observatoryId: string;
     state: MissionState;
