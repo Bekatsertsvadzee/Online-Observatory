@@ -147,7 +147,6 @@ beforeEach(async () => {
     data: {
       email: `operator-${randomUUID()}@example.test`,
       name: "Test Operator",
-      passwordHash: "not-a-real-hash",
       role: "OPERATOR",
       emailVerifiedAt: NOW,
     },
