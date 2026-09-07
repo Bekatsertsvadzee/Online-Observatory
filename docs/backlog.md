@@ -262,6 +262,41 @@ handler here.
 
 **DV-063 does not rebuild `/admin/logs`.** It exists, it is guarded, and it is tested.
 
+## What Milestone S1 found
+
+The first run of the real agent against the real realtime service, on 2026-09-07.
+
+**The agent had never connected.** Python's `isoformat()` writes `+00:00`; the
+generated validators accept only `Z`. RFC 3339 permits both, so neither half was
+wrong alone — they did not agree, and every message the agent sent was refused at the
+parse step. Four merged pull requests and nine hundred passing tests did not catch it,
+because the Python suite checks the agent against its own fakes, the TypeScript suite
+builds fixtures with `toISOString()`, and nothing had ever run the two halves against
+each other. One command ack was stamped in the observatory's local zone.
+
+Fixed by `wire_timestamp` in the agent, and the rule is now stated in the contract's
+TIMESTAMPS section rather than left as an accident of the generator. The strictness is
+deliberate: one spelling, on a wire where an instant decides when a telescope moves.
+
+**The cloud re-pushed the safety envelope every five seconds.** The reconnect sweep was
+wired to every inbound frame rather than to the transition into ONLINE, so each
+heartbeat re-read the envelope, the session and the pending commands, and pushed two
+messages at an idle observatory. Fixed, and splitting it exposed that ADR-009's slow
+fallback timer had never existed — the per-message sweep had been standing in for it,
+which meant the fallback disappeared exactly when an agent went quiet.
+
+**What S1 could not prove.** No mount motion and no mission state machine, because
+`MAX_ALT_SAFE` is UNMEASURED and both the cloud and the agent independently refuse
+every slew, nudges included. That is the safety envelope working. Closing it is DV-034,
+attended, against the real optical train.
+
+**What S1 did prove.** The link reaches ONLINE and stays up on heartbeats; a session is
+owned over HTTP with real cookies; a nudge is refused by the cloud with
+`SAFETY_ENVELOPE_UNMEASURED`; and an `ABORT` minted over HTTP travels API → database →
+`NOTIFY` → realtime → WSS → agent → `SimMount` and returns ACCEPTED. The DV-062 audit
+trail records all of it, including the three `AGENT_LINK_LOST` rows from the failed
+attempts.
+
 ## Critical path
 
 DV-003 → DV-020/021/022 → DV-023/025 → DV-026 → DV-057/058 → DV-040 → DV-060 →

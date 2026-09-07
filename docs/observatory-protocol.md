@@ -43,6 +43,8 @@ Queries are side-effect free and do not use command envelopes. Every mutating op
 | `issuedAt`  | ISO 8601 issuance time                                          |
 | `expiresAt` | ISO 8601 deadline after which a new command must be issued      |
 
+Every timestamp on this link is UTC with a `Z` suffix, and a numeric offset is malformed — see TIMESTAMPS in `contracts/openapi.yaml`. Python's `isoformat()` does not write that spelling; `darkview_agent.clock.wire_timestamp` does, and it is the only way an instant reaches the wire.
+
 An envelope is invalid when a required identifier is blank, a timestamp is malformed, `expiresAt <= issuedAt`, or `issuedAt` is in the future. A previously unseen command is rejected with `COMMAND_EXPIRED` when `expiresAt` is at or before the adapter clock.
 
 ## Idempotency
