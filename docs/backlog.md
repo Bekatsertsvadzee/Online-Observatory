@@ -181,6 +181,11 @@ or what signs the URL. That is an architecture decision and it is owed an ADR be
 code implements it. DV-032 has not produced a frame yet, so nothing is blocked meanwhile;
 a fabricated `streamUrl` would have been.
 
+**ADR-011 answers this and is APPROVED.** The realtime service terminates the frame
+stream, keeps the latest frame per mission in memory, and serves it as multipart MJPEG
+from the same origin at a signed short-expiry path. DV-032 and DV-033 build against that
+and are no longer blocked. The stream-signing key is a new required secret.
+
 **New required environment variable: `APP_URL` on the realtime service.** The only origin
 a mission-channel handshake may come from. It has no default on purpose — a permissive
 fallback would silently disable the check that stops another site opening a subscription
