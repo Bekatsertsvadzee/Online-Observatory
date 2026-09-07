@@ -181,6 +181,10 @@ or what signs the URL. That is an architecture decision and it is owed an ADR be
 code implements it. DV-032 has not produced a frame yet, so nothing is blocked meanwhile;
 a fabricated `streamUrl` would have been.
 
+**ADR-011 now proposes an answer and is awaiting the maintainer's decision.** It is
+PROPOSED, not approved, so it authorises nothing yet. DV-032 and DV-033 stay blocked on
+that approval rather than on the absence of a proposal.
+
 **New required environment variable: `APP_URL` on the realtime service.** The only origin
 a mission-channel handshake may come from. It has no default on purpose — a permissive
 fallback would silently disable the check that stops another site opening a subscription
