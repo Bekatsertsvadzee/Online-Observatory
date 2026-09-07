@@ -84,6 +84,8 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   readonly missions = new Map<string, FakeMission>();
   readonly missionEvents: FakeMissionEvent[] = [];
   readonly auditEvents: FakeAuditEvent[] = [];
+  /** Every envelope read, so a test can count how often it is pushed at an agent. */
+  readonly envelopeReads: string[] = [];
   readonly revoked: { sessionId: string; reason: string }[] = [];
   readonly completedAt = new Map<string, Date>();
 
@@ -366,6 +368,7 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   }
 
   async loadSafetyEnvelope(observatoryId: string): Promise<SafetyEnvelopeConfig | null> {
+    this.envelopeReads.push(observatoryId);
     return this.envelopes.get(observatoryId) ?? null;
   }
 

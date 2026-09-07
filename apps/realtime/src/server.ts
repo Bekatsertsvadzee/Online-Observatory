@@ -20,6 +20,13 @@ import { getEnvironment } from "@/env";
 
 const AGENT_PATH = "/ws/agent";
 
+/**
+ * How often the ADR-009 fallback looks for commands the notification never
+ * delivered. A command's own TTL is 30 seconds, so a sweep slower than that would
+ * only ever find expired work.
+ */
+const PENDING_SWEEP_INTERVAL_SECONDS = 15;
+
 /** `/ws/mission/{missionId}`, as the contract's missionClient channel names it. */
 const MISSION_PATH = /^\/ws\/mission\/([0-9a-fA-F-]{36})$/;
 
@@ -121,14 +128,20 @@ export function createRealtimeServer(store: RealtimeStore, appUrl: string) {
     }
 
     connection.on("message", (data) => {
-      void link
-        .receive(data.toString())
-        // An agent that has just said hello may have missed notifications while it
-        // was away. ADR-009: the row is the source of truth, so anything unrelayed
-        // for this observatory goes out now.
-        .then(() => {
-          if (link.currentState === "ONLINE") void relay.sweep(observatory.id);
-        });
+      // Only on the transition. An agent that has just said hello may have missed
+      // notifications while it was away, and ADR-009 makes the row the source of
+      // truth -- so anything unrelayed goes out once, here.
+      //
+      // This used to fire on every inbound frame, which is every heartbeat: the
+      // safety envelope and the session owner were pushed back down the wire every
+      // five seconds, at three queries a time, on an observatory doing nothing.
+      // The periodic half of the fallback is the timer below.
+      const before = link.currentState;
+      void link.receive(data.toString()).then(() => {
+        if (before !== "ONLINE" && link.currentState === "ONLINE") {
+          void relay.sweep(observatory.id);
+        }
+      });
     });
     connection.on("close", () => {
       registry.release(observatory.id, link);
@@ -175,6 +188,31 @@ export function createRealtimeServer(store: RealtimeStore, appUrl: string) {
     missions.expireSilent(Date.now());
   }, HEARTBEAT_INTERVAL_SECONDS * 1000);
 
+  /**
+   * ADR-009's fallback poll, which the ADR describes and which did not exist.
+   *
+   * A `NOTIFY` is not delivered to a listener that was disconnected at that
+   * instant, so the unrelayed row has to be swept for. Until now the only thing
+   * doing that was the per-message sweep, which was both far too often and gone
+   * the moment an agent stopped talking.
+   *
+   * Slow on purpose: it is a fail-safe, not a schedule. If it routinely finds
+   * work, the notification path is broken and this is masking it, which is why it
+   * says so.
+   */
+  const pendingSweep = setInterval(() => {
+    for (const observatoryId of registry.observatoryIds()) {
+      void relay.sweepPendingCommands(observatoryId).then((sent) => {
+        if (sent > 0) {
+          console.warn(
+            `relay fallback sent ${sent} command(s) for ${observatoryId}; ` +
+              "the notification path did not deliver them",
+          );
+        }
+      });
+    }
+  }, PENDING_SWEEP_INTERVAL_SECONDS * 1000);
+
   return {
     registry,
     relay,
@@ -182,6 +220,7 @@ export function createRealtimeServer(store: RealtimeStore, appUrl: string) {
     listen: (port: number) => httpServer.listen(port),
     close: async () => {
       clearInterval(heartbeatSweep);
+      clearInterval(pendingSweep);
       sockets.close();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     },

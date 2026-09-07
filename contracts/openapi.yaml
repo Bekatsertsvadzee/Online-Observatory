@@ -36,6 +36,18 @@ info:
     submit intent; the cloud mints the authenticated CommandEnvelope; the agent
     re-validates it locally and may refuse it.
 
+    TIMESTAMPS
+    Every `format: date-time` field is an instant in UTC, written with a `Z` suffix.
+    RFC 3339 also permits a numeric offset; this contract does not. The generated
+    validators enforce it, and that strictness is deliberate rather than incidental.
+
+    One spelling, because an instant on this wire decides when a telescope moves and
+    a reader should never have to normalise before comparing. The rule was written
+    down after Milestone S1 found the Python agent emitting `+00:00` on every
+    message and the cloud refusing all of them -- and, worse, one message stamped in
+    the observatory's local zone, which a permissive reader would have accepted
+    without anyone noticing.
+
     PHASE 1 SCOPE
     Live-view / EAA using short exposures and live stacking. This contract deliberately
     contains no long-exposure astrophotography concepts.
