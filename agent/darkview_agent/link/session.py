@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from contracts.models import ObservatoryMode
-from darkview_agent.clock import Clock, SystemClock
+from darkview_agent.clock import Clock, SystemClock, wire_timestamp
 from darkview_agent.link.queue import OutboundQueue
 from darkview_agent.link.transport import Transport, TransportError
 
@@ -234,12 +234,12 @@ class LinkSession:
         return {
             "type": "AGENT_HELLO",
             "messageId": str(uuid.uuid4()),
-            "sentAt": datetime.now(UTC).isoformat(),
+            "sentAt": wire_timestamp(),
             "protocolVersion": PROTOCOL_VERSION,
             "observatoryId": str(self._observatory_id),
             "agentVersion": self._agent_version,
             "mode": self._mode.value,
-            "bootedAt": self._booted_at.isoformat(),
+            "bootedAt": wire_timestamp(self._booted_at),
             "safetyEnvelopeConfigured": self._safety_envelope_configured,
             "resumeMissionId": (
                 str(self._resume_mission_id) if self._resume_mission_id else None
@@ -322,7 +322,7 @@ class LinkSession:
         heartbeat = {
             "type": "AGENT_HEARTBEAT",
             "messageId": str(uuid.uuid4()),
-            "sentAt": datetime.now(UTC).isoformat(),
+            "sentAt": wire_timestamp(),
             "sequence": self._heartbeat_sequence,
             "uptimeSeconds": int(now - self._booted_monotonic),
         }

@@ -43,6 +43,7 @@ from contracts.models import (
     CommandEnvelope,
     CommandRejectionReason,
 )
+from darkview_agent.clock import wire_timestamp
 from darkview_agent.command.audit import AuditEvent, AuditLog
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
 from darkview_agent.safety.envelope import SafetyEnvelope, normalise_azimuth
@@ -126,7 +127,7 @@ class Ack:
         return {
             "type": "AGENT_COMMAND_ACK",
             "messageId": str(uuid.uuid4()),
-            "sentAt": datetime.now(tz=None).astimezone().isoformat(),
+            "sentAt": wire_timestamp(),
             "commandId": self.command_id,
             "missionId": self.mission_id,
             "status": self.status.value,
