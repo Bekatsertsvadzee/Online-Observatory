@@ -150,6 +150,13 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  // Rows that reference a Mission, cleared before the missions they point at.
+  // This suite shares one database with the others and must not depend on what
+  // the file before it happened to leave behind: Mission has Restrict deletes, so
+  // one stray command row from another suite fails every test in this one.
+  await database.observatoryCommand.deleteMany();
+  await database.missionSession.deleteMany();
+  await database.missionEvent.deleteMany();
   await database.booking.deleteMany();
   await database.mission.deleteMany();
   await database.payment.deleteMany();

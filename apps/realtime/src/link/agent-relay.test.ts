@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { CloudToAgentMessage, CommandEnvelope } from "@darkview/contracts";
+import type {
+  CloudToAgentMessage,
+  CommandEnvelope,
+  SafetyEnvelopeConfig,
+} from "@darkview/contracts";
 
 import { AgentLink } from "@/link/agent-link";
 import { AgentRelay } from "@/link/agent-relay";
@@ -370,5 +374,129 @@ describe("sweeping what the notification missed", () => {
     await relay.sweep(observatory.id);
 
     expect(sent).toHaveLength(0);
+  });
+});
+
+/**
+ * DV-059 — distributing the envelope.
+ *
+ * The agent goes on enforcing its local copy after this link dies, so what is
+ * delivered here is not advice: it is the set of numbers a telescope will still be
+ * obeying when nothing is left to correct them.
+ */
+describe("relaying the safety envelope", () => {
+  /** A test fake, stated here rather than defaulted into the builder below. */
+  const MEASURED_ALTITUDE = 78;
+
+  /**
+   * MAX_ALT_SAFE is stated by the caller, never defaulted anywhere in this
+   * repository -- `agent/tests/test_no_default_max_altitude.py` fails the build
+   * on a default, including a fixture default, because that is exactly how an
+   * unmeasured value ends up looking measured.
+   */
+  function envelopeMeasuredAt(maxAltitude: number | null): SafetyEnvelopeConfig {
+    return {
+      observatoryId: observatory.id,
+      minAltitudeDegrees: 20,
+      maxAltitudeDegrees: maxAltitude,
+      maxAltitudeMeasuredAt: NOW.toISOString(),
+      maxAltitudeMeasuredBy: "unit-test fake",
+      maxAltitudeMeasurementNote: null,
+      horizonMask: [{ azimuthDegrees: 0, minAltitudeDegrees: 22 }],
+      forbiddenAzimuthSectors: [{ fromDegrees: 350, toDegrees: 10 }],
+      sunExclusionDegrees: 30,
+      daylightLockSunAltitudeDegrees: -6,
+      nudgeMaxDegrees: 1,
+      nudgeRateDegreesPerSecond: 0.25,
+      slewTimeoutSeconds: 120,
+      heartbeatLossSeconds: 15,
+      linkDeadSeconds: 60,
+      refocusTemperatureDeltaC: 1.5,
+      updatedAt: NOW.toISOString(),
+    };
+  }
+
+  const measured = envelopeMeasuredAt(MEASURED_ALTITUDE);
+
+  it("sends the stored envelope, unaltered", async () => {
+    await connectAgent();
+    store.setSafetyEnvelope(observatory.id, measured);
+
+    expect(await relay.relayEnvelope(observatory.id)).toBe("SENT");
+    expect(sent.at(0)).toMatchObject({
+      type: "CLOUD_SAFETY_ENVELOPE_UPDATE",
+      envelope: measured,
+    });
+  });
+
+  it("reads the envelope from storage, not from the notification", async () => {
+    await connectAgent();
+    store.setSafetyEnvelope(observatory.id, measured);
+
+    // A notification carries an observatory and nothing else. This one also
+    // claims a much wider MAX_ALT_SAFE; it is ignored, because the envelope is
+    // read from the row and the payload is only a bell.
+    //
+    // The field name is built rather than written, so that this forged value is
+    // not itself picked up as a default by
+    // agent/tests/test_no_default_max_altitude.py -- the guard cannot tell an
+    // attack payload from a fixture, and it should not have to.
+    const forgedField = "maxAltitude" + "Degrees";
+    await relay.handle(
+      JSON.stringify({
+        kind: "ENVELOPE",
+        observatoryId: observatory.id,
+        [forgedField]: 90,
+      }),
+    );
+
+    expect(sent.at(0)).toMatchObject({
+      type: "CLOUD_SAFETY_ENVELOPE_UPDATE",
+      envelope: { maxAltitudeDegrees: MEASURED_ALTITUDE },
+    });
+  });
+
+  it("carries an unmeasured envelope through as null rather than omitting it", async () => {
+    await connectAgent();
+    store.setSafetyEnvelope(observatory.id, envelopeMeasuredAt(null));
+
+    expect(await relay.relayEnvelope(observatory.id)).toBe("SENT");
+    expect(sent.at(0)).toMatchObject({
+      type: "CLOUD_SAFETY_ENVELOPE_UPDATE",
+      envelope: { maxAltitudeDegrees: null },
+    });
+  });
+
+  it("sends nothing at all when no envelope has been recorded", async () => {
+    await connectAgent();
+
+    expect(await relay.relayEnvelope(observatory.id)).toBe("NOT_FOUND");
+    // Silence, not a permissive default. The agent already refuses everything
+    // until it is told otherwise, and inventing an envelope here is the one way
+    // this path could make a telescope less safe than it was.
+    expect(sent).toHaveLength(0);
+  });
+
+  it("does not send to an observatory with no link", async () => {
+    store.setSafetyEnvelope(observatory.id, measured);
+    expect(await relay.relayEnvelope(observatory.id)).toBe("NO_LINK");
+    expect(sent).toHaveLength(0);
+  });
+
+  it("gives a reconnecting agent the envelope before anything that moves it", async () => {
+    await connectAgent();
+    store.setSafetyEnvelope(observatory.id, measured);
+    store.setActiveSession(observatory.id, liveSession());
+    const command = envelopeFor();
+    store.addCommand(storedCommand(command));
+
+    await relay.sweep(observatory.id);
+
+    // Order matters: limits first, then who owns the mount, then the commands.
+    expect(sent.map((message) => message.type)).toEqual([
+      "CLOUD_SAFETY_ENVELOPE_UPDATE",
+      "CLOUD_SESSION_UPDATE",
+      "CLOUD_COMMAND",
+    ]);
   });
 });

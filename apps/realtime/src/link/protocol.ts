@@ -4,11 +4,13 @@ import type {
   AgentToCloudMessage,
   CloudCommand,
   CloudError,
+  CloudSafetyEnvelopeUpdate,
   CloudSessionUpdate,
   CloudToAgentMessage,
   CloudWelcome,
   CommandEnvelope,
   ErrorCode,
+  SafetyEnvelopeConfig,
 } from "@darkview/contracts";
 import { zAgentToCloudMessage } from "@darkview/contracts/zod";
 
@@ -57,14 +59,15 @@ export function parseAgentMessage(raw: string): ParsedMessage {
   return { ok: true, message: result.data as AgentToCloudMessage };
 }
 
-function envelope() {
+/** The messageId and sentAt every cloud-to-agent message carries. */
+function messageHeader() {
   return { messageId: randomUUID(), sentAt: new Date().toISOString() };
 }
 
 export function cloudWelcome(expectedMissionId: string | null): CloudWelcome {
   return {
     type: "CLOUD_WELCOME",
-    ...envelope(),
+    ...messageHeader(),
     protocolVersion: PROTOCOL_VERSION,
     serverTime: new Date().toISOString(),
     expectedMissionId,
@@ -73,7 +76,7 @@ export function cloudWelcome(expectedMissionId: string | null): CloudWelcome {
 }
 
 export function cloudError(code: ErrorCode, message: string, fatal = false): CloudError {
-  return { type: "CLOUD_ERROR", ...envelope(), code, message, fatal };
+  return { type: "CLOUD_ERROR", ...messageHeader(), code, message, fatal };
 }
 
 /**
@@ -82,7 +85,7 @@ export function cloudError(code: ErrorCode, message: string, fatal = false): Clo
  * envelope altered in transit would not be the one the audit row records.
  */
 export function cloudCommand(command: CommandEnvelope): CloudCommand {
-  return { type: "CLOUD_COMMAND", ...envelope(), command };
+  return { type: "CLOUD_COMMAND", ...messageHeader(), command };
 }
 
 /**
@@ -100,12 +103,27 @@ export function cloudSessionUpdate(
 ): CloudSessionUpdate {
   return {
     type: "CLOUD_SESSION_UPDATE",
-    ...envelope(),
+    ...messageHeader(),
     missionId,
     sessionId: session?.sessionId ?? null,
     userId: session?.userId ?? null,
     expiresAt: session?.expiresAt.toISOString() ?? null,
   };
+}
+
+/**
+ * Hand the agent the stored safety envelope.
+ *
+ * The agent keeps enforcing its own copy after this link dies, so this is not
+ * advice -- it is the numbers a telescope will still be obeying when nothing is
+ * left to correct them. An envelope whose `maxAltitudeDegrees` is null puts the
+ * agent into the refuse-all-slews state, which is the correct reading of "nobody
+ * has measured where this optical train collides with the mount yet".
+ */
+export function cloudSafetyEnvelopeUpdate(
+  envelope: SafetyEnvelopeConfig,
+): CloudSafetyEnvelopeUpdate {
+  return { type: "CLOUD_SAFETY_ENVELOPE_UPDATE", ...messageHeader(), envelope };
 }
 
 export type Send = (message: CloudToAgentMessage) => void;

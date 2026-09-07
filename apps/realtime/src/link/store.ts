@@ -1,6 +1,7 @@
 import type { ObservatoryCommandStatus } from "@darkview/db/enums";
 
 import type {
+  SafetyEnvelopeConfig,
   CommandAcceptanceStatus,
   CommandEnvelope,
   CommandRejectionReason,
@@ -176,6 +177,15 @@ export interface LinkStore {
    * is still a mission the agent should be holding.
    */
   liveMissionId(observatoryId: string): Promise<string | null>;
+
+  /**
+   * The stored safety envelope for this observatory, or null when none exists.
+   *
+   * Null and an envelope whose `maxAltitudeDegrees` is null mean the same thing to
+   * the agent: UNMEASURED, refuse every slew. There is no permissive default and
+   * this must never invent one.
+   */
+  loadSafetyEnvelope(observatoryId: string): Promise<SafetyEnvelopeConfig | null>;
 }
 
 /** A state transition the agent reported, as it reported it. */

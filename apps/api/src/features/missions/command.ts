@@ -12,8 +12,11 @@ import type {
 } from "@darkview/contracts";
 
 import { getDatabase } from "@/lib/db/client";
+import { horizontalAirlessOf } from "@/lib/ephemeris/engine";
 import { equatorialFor } from "@/lib/ephemeris/visibility";
 import { notifyAgent } from "@/lib/observatory/relay";
+import { evaluateNudgeStep, evaluatePointing } from "@/lib/safety/envelope";
+import { loadSafetyEnvelope, siteOf } from "@/lib/safety/store";
 import { LIVE_MISSION_STATES } from "@/features/missions/session";
 
 /**
@@ -30,11 +33,11 @@ export const COMMAND_TTL_SECONDS = 30;
 /**
  * Fields the cloud mints and a client may never send.
  *
- * The contract marks MissionCommandRequest `additionalProperties: false`, but the
- * generated Zod strips unknown keys instead of rejecting them (issue #15). Stripping
- * is exactly wrong here: a client that sent its own `sessionId` would be quietly
- * ignored and told it succeeded, when what it attempted was to command as somebody
- * else. So the raw body is checked for these before it is parsed.
+ * The generated Zod now rejects an undeclared field outright (#15), so a body
+ * carrying one of these no longer reaches the domain either way. This check stays
+ * in front of it because the two answers are not the same: a client that sent its
+ * own `sessionId` attempted to command as somebody else, and "you may not mint your
+ * own envelope" is a better account of that than "the request failed validation".
  */
 export const CLOUD_MINTED_FIELDS = [
   "commandId",
@@ -184,6 +187,13 @@ export async function mintMissionCommand(input: {
   const payload = buildPayload(request, mission, now);
   if ("error" in payload) return payload.error;
 
+  // The cloud's half of the two independent safety checks. Until this existed the
+  // cloud minted commands it had never examined and the whole safety argument
+  // rested on the agent alone. The agent still checks again, and its refusal still
+  // wins: this narrows what reaches the observatory, it does not authorise anything.
+  const refusal = await preValidate(payload, mission, now);
+  if (refusal) return refusal;
+
   const commandId = randomUUID();
   const expiresAt = new Date(now.getTime() + COMMAND_TTL_SECONDS * 1000);
 
@@ -233,6 +243,66 @@ export async function mintMissionCommand(input: {
       expiresAt: envelope.expiresAt,
       status: "ACCEPTED",
     },
+  };
+}
+
+/**
+ * Refuse a command the cloud can already prove unsafe.
+ *
+ * Only the commands that move the mount are examined. CAPTURE and ABORT are not
+ * slew-bearing: refusing an ABORT because the envelope is unmeasured would leave a
+ * customer unable to stop a mission on exactly the system least fit to be running
+ * one.
+ *
+ * A refusal here is 409 with the agent's own `CommandRejectionReason` in the
+ * details, so a command refused by the cloud and the same command refused by the
+ * agent are described in one vocabulary rather than two.
+ */
+async function preValidate(
+  payload: { type: CommandEnvelope["type"]; payload: CommandPayload },
+  mission: {
+    observatoryId: string;
+    observatory: { latitude: number; longitude: number };
+  },
+  now: Date,
+): Promise<MintFailure | null> {
+  if (payload.type !== "GOTO" && payload.type !== "NUDGE") return null;
+
+  const config = await loadSafetyEnvelope(mission.observatoryId);
+  const site = siteOf(mission.observatory);
+
+  if (payload.type === "NUDGE" && payload.payload.kind === "NUDGE") {
+    // The step only. The cumulative offset belongs to the agent, which is the only
+    // party that knows where the mount actually is.
+    const verdict = evaluateNudgeStep(config, payload.payload.stepArcminutes / 60);
+    return verdict.permitted ? null : unsafe(verdict.reason, verdict.detail);
+  }
+
+  if (payload.type === "GOTO" && payload.payload.kind === "GOTO") {
+    // Airless, because that is the convention the agent's envelope uses. A
+    // refracted altitude would make the cloud more permissive than the agent near
+    // the horizon, which is the wrong way round for a pre-check.
+    const horizontal = horizontalAirlessOf(payload.payload.coordinates, now, site);
+    const verdict = evaluatePointing({
+      config,
+      site,
+      at: now,
+      altitudeDegrees: horizontal.altitudeDegrees,
+      azimuthDegrees: horizontal.azimuthDegrees,
+    });
+    return verdict.permitted ? null : unsafe(verdict.reason, verdict.detail);
+  }
+
+  return null;
+}
+
+function unsafe(reason: string, detail: string): MintFailure {
+  return {
+    ok: false,
+    status: 409,
+    code: "SAFETY_REFUSED",
+    message: detail,
+    details: { rejectionReason: reason },
   };
 }
 
