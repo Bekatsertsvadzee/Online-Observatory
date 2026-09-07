@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { ErrorCode, SafetyEnvelopeConfig } from "@darkview/contracts";
+import { recordAuditEvent } from "@darkview/db/audit";
 
 import { getDatabase } from "@/lib/db/client";
 import { notifyAgent } from "@/lib/observatory/relay";
@@ -34,8 +35,11 @@ export type EnvelopeResult =
 export async function setSafetyEnvelope(input: {
   observatoryId: string;
   envelope: SafetyEnvelopeConfig;
+  /** The operator who made the call. Not the same fact as maxAltitudeMeasuredBy,
+   *  which names whoever read the number off the optical train. */
+  actorUserId: string;
 }): Promise<EnvelopeResult> {
-  const { observatoryId, envelope } = input;
+  const { observatoryId, envelope, actorUserId } = input;
 
   const missing = provenanceGapsOf(envelope);
   if (missing.length > 0) {
@@ -77,6 +81,20 @@ export async function setSafetyEnvelope(input: {
     refocusTemperatureDeltaC: envelope.refocusTemperatureDeltaC,
   };
 
+  // Read before the upsert overwrites it. Whether MAX_ALT_SAFE went from
+  // UNMEASURED to a value, or from one value to another, is the single most
+  // consequential change anything in this repository can make -- it is what
+  // decides whether the cloud will permit a slew at all -- and an audit row that
+  // records only the new number cannot answer what it replaced.
+  const previous = await database.safetyEnvelope.findUnique({
+    where: { observatoryId },
+    select: {
+      maxAltitudeDegrees: true,
+      maxAltitudeMeasuredAt: true,
+      maxAltitudeMeasuredBy: true,
+    },
+  });
+
   const stored = await database.$transaction(async (tx) => {
     const row = await tx.safetyEnvelope.upsert({
       where: { observatoryId },
@@ -112,6 +130,31 @@ export async function setSafetyEnvelope(input: {
     // never told about an envelope that did not commit.
     await notifyAgent(tx, { kind: "ENVELOPE", observatoryId });
 
+    await recordAuditEvent(
+      {
+        category: "SAFETY",
+        action: "SAFETY_ENVELOPE_RECORDED",
+        actorUserId,
+        entityType: "Observatory",
+        entityId: observatoryId,
+        detail: {
+          previousMaxAltitudeDegrees: previous?.maxAltitudeDegrees ?? null,
+          maxAltitudeDegrees: envelope.maxAltitudeDegrees ?? null,
+          maxAltitudeMeasuredAt: envelope.maxAltitudeMeasuredAt ?? null,
+          maxAltitudeMeasuredBy: envelope.maxAltitudeMeasuredBy ?? null,
+          // Named, rather than left to be inferred from the two numbers above, so
+          // that the transition an operator most needs to find is greppable.
+          measurementTransition: measurementTransitionOf(
+            previous?.maxAltitudeDegrees ?? null,
+            envelope.maxAltitudeDegrees ?? null,
+          ),
+          horizonMaskEntries: envelope.horizonMask.length,
+          forbiddenAzimuthSectors: envelope.forbiddenAzimuthSectors.length,
+        },
+      },
+      tx,
+    );
+
     return tx.safetyEnvelope.findUniqueOrThrow({
       where: { observatoryId },
       include: {
@@ -122,6 +165,24 @@ export async function setSafetyEnvelope(input: {
   });
 
   return { ok: true, envelope: toContractEnvelope(stored) };
+}
+
+/**
+ * How MAX_ALT_SAFE moved.
+ *
+ * UNMEASURED is not a value: while `maxAltitudeDegrees` is null both the cloud and
+ * the agent refuse every slew. So arriving at a number and leaving one are
+ * different events from changing between two, and only the audit row distinguishes
+ * them after the fact.
+ */
+export function measurementTransitionOf(
+  previous: number | null,
+  next: number | null,
+): "UNMEASURED_TO_MEASURED" | "MEASURED_TO_UNMEASURED" | "REMEASURED" | "UNCHANGED" {
+  if (previous === next) return "UNCHANGED";
+  if (previous === null) return "UNMEASURED_TO_MEASURED";
+  if (next === null) return "MEASURED_TO_UNMEASURED";
+  return "REMEASURED";
 }
 
 /** Which pieces of the measurement's provenance are missing. Empty when null. */

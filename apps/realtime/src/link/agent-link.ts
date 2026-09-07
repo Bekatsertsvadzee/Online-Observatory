@@ -154,6 +154,7 @@ export class AgentLink {
       state: message.state,
       failureReason: message.failureReason ?? null,
       occurredAt: new Date(message.occurredAt),
+      commandId: message.commandId ?? null,
       detail: message.detail ?? null,
     });
 

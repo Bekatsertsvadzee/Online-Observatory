@@ -1,6 +1,7 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "@darkview/db";
+import { recordAuditEvent } from "@darkview/db/audit";
 
 import type { CommandEnvelope, SafetyEnvelopeConfig } from "@darkview/contracts";
 
@@ -55,17 +56,49 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       return written.count === 1;
     },
 
+    /**
+     * The link's own history.
+     *
+     * `Observatory.status` and `linkLostAt` hold only the latest state, which
+     * answers "is it up now" and nothing else. An operator reconstructing a night
+     * needs to know that the link dropped four times between 22:10 and 22:40, and
+     * that is what these rows are for. Both writes are in one transaction with the
+     * status change so the account and the state cannot disagree.
+     */
     async markLinkUp(observatoryId: string): Promise<void> {
-      await database.observatory.update({
-        where: { id: observatoryId },
-        data: { status: "ONLINE", linkLostAt: null },
+      await database.$transaction(async (tx) => {
+        await tx.observatory.update({
+          where: { id: observatoryId },
+          data: { status: "ONLINE", linkLostAt: null },
+        });
+        await recordAuditEvent(
+          {
+            category: "AGENT_LINK",
+            action: "AGENT_LINK_UP",
+            entityType: "Observatory",
+            entityId: observatoryId,
+          },
+          tx,
+        );
       });
     },
 
     async markLinkLost(observatoryId: string, at: Date): Promise<void> {
-      await database.observatory.update({
-        where: { id: observatoryId },
-        data: { status: "OFFLINE", linkLostAt: at },
+      await database.$transaction(async (tx) => {
+        await tx.observatory.update({
+          where: { id: observatoryId },
+          data: { status: "OFFLINE", linkLostAt: at },
+        });
+        await recordAuditEvent(
+          {
+            category: "AGENT_LINK",
+            action: "AGENT_LINK_LOST",
+            entityType: "Observatory",
+            entityId: observatoryId,
+            detail: { lostAt: at.toISOString() },
+          },
+          tx,
+        );
       });
     },
 
@@ -176,6 +209,19 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
         if (!mission) return "NOT_FOUND";
         if (mission.observatoryId !== event.observatoryId) return "WRONG_OBSERVATORY";
 
+        // Correlated only to a command this cloud minted for this observatory. An
+        // agent reporting an id the cloud does not recognise -- or one belonging
+        // to somebody else's observatory -- still gets its transition written; the
+        // correlation is simply dropped, because a foreign key to a row that does
+        // not exist would fail the write, and losing a real transition over the id
+        // beside it is the wrong trade.
+        const causedBy = event.commandId
+          ? await tx.observatoryCommand.findFirst({
+              where: { id: event.commandId, observatoryId: event.observatoryId },
+              select: { id: true },
+            })
+          : null;
+
         // Written whatever state the mission is in. The event log is an account
         // of what the agent reported, and an event the guard below declines to
         // apply was still reported.
@@ -183,7 +229,9 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
           data: {
             missionId: event.missionId,
             state: event.state,
+            failureReason: event.failureReason,
             source: "AGENT",
+            commandId: causedBy?.id ?? null,
             message: event.detail,
             occurredAt: event.occurredAt,
             // `CLAUDE.md`: a mission run against the simulator is permanently
@@ -261,6 +309,19 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
           data: { revokedAt: now, revokedFor: "AGENT_LINK_LOST" },
         });
 
+        await recordAuditEvent(
+          {
+            category: "MISSION",
+            action: "MISSION_RESOLVED_AFTER_AGENT_RESTART",
+            missionId,
+            entityType: "Observatory",
+            entityId: observatoryId,
+            detail: { failureReason: "AGENT_LINK_LOST" },
+            isDemo: mission.isDemo,
+          },
+          tx,
+        );
+
         return "RESOLVED";
       });
     },
@@ -301,6 +362,29 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
           },
         },
       });
+
+      if (count === 1) {
+        // Not in a transaction with the update above, because there is none to
+        // join: the guarded updateMany is a single statement, and its own WHERE
+        // clause is what makes a stale ack lose. A verdict audited here is one
+        // that was actually applied.
+        await recordAuditEvent(
+          {
+            category: "COMMAND",
+            action: "COMMAND_VERDICT_RECORDED",
+            commandId: verdict.commandId,
+            entityType: "Observatory",
+            entityId: verdict.observatoryId,
+            detail: {
+              status: verdict.status,
+              rejectionReason: verdict.rejectionReason,
+              detail: verdict.detail,
+              decidedAt: verdict.decidedAt.toISOString(),
+            },
+          },
+          database,
+        );
+      }
 
       return count === 1 ? "RECORDED" : "IGNORED_STALE";
     },

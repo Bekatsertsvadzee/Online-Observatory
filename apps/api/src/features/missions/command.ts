@@ -10,6 +10,7 @@ import type {
   MissionCommandAccepted,
   MissionCommandRequest,
 } from "@darkview/contracts";
+import { recordAuditEvent } from "@darkview/db/audit";
 
 import { getDatabase } from "@/lib/db/client";
 import { horizontalAirlessOf } from "@/lib/ephemeris/engine";
@@ -192,7 +193,30 @@ export async function mintMissionCommand(input: {
   // rested on the agent alone. The agent still checks again, and its refusal still
   // wins: this narrows what reaches the observatory, it does not authorise anything.
   const refusal = await preValidate(payload, mission, now);
-  if (refusal) return refusal;
+  if (refusal) {
+    // Audited, and not inside a transaction, because a refusal writes nothing
+    // else -- there is no other fact for the row to be atomic with. A command the
+    // cloud refused never becomes an ObservatoryCommand row, so without this the
+    // only trace of it would be an HTTP status nobody kept.
+    await recordAuditEvent(
+      {
+        category: "SAFETY",
+        action: "COMMAND_REFUSED_BY_CLOUD",
+        actorUserId: actor.id,
+        missionId,
+        entityType: "Mission",
+        entityId: missionId,
+        detail: {
+          commandType: payload.type,
+          rejectionReason: refusal.details?.rejectionReason,
+          detail: refusal.message,
+        },
+        isDemo: mission.isDemo,
+      },
+      database,
+    );
+    return refusal;
+  }
 
   const commandId = randomUUID();
   const expiresAt = new Date(now.getTime() + COMMAND_TTL_SECONDS * 1000);
@@ -231,6 +255,25 @@ export async function mintMissionCommand(input: {
       commandId,
       observatoryId: mission.observatoryId,
     });
+
+    await recordAuditEvent(
+      {
+        category: "COMMAND",
+        action: "COMMAND_MINTED",
+        actorUserId: actor.id,
+        missionId,
+        commandId,
+        detail: {
+          commandType: payload.type,
+          requestedType: request.type,
+          sessionId: session.id,
+          expiresAt: expiresAt.toISOString(),
+          simulated: mission.observatory.mode === "SIMULATED",
+        },
+        isDemo: mission.isDemo,
+      },
+      tx,
+    );
   });
 
   return {
