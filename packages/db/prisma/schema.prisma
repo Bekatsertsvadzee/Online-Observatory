@@ -654,6 +654,7 @@ model Mission {
   participants        MissionParticipant[]
   captureAccess       CaptureAccess[]
   sessions            MissionSession[]
+  auditLogs           AuditLog[]
 
   @@index([userId, requestedAt])
   @@index([observatoryId, state, scheduledFor])
@@ -734,18 +735,33 @@ model MissionParticipant {
   @@index([missionId, status])
 }
 
+/// Contract: MissionEvent. The mission's own trail -- one row per reported
+/// transition, append-only, never edited and never backdated.
+///
+/// `occurredAt` is the observatory's clock for an agent-sourced event, replayed
+/// unchanged after a reconnect. It is deliberately not the insert time: an event
+/// rewritten to look contemporaneous is a fabricated timestamp.
+///
+/// `failureReason` and `commandId` are the event's own, not the mission's. The
+/// mission carries only its latest failure; the trail has to show which transition
+/// carried which reason, and which command caused it. Both arrive on
+/// AgentMissionEvent and were discarded until DV-062.
 model MissionEvent {
-  id         String             @id @default(uuid()) @db.Uuid
-  missionId  String             @db.Uuid
-  state      MissionState
-  source     MissionEventSource
-  message    String?
-  occurredAt DateTime           @default(now())
-  simulated  Boolean            @default(false)
-  isDemo     Boolean            @default(false)
-  mission    Mission            @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  id            String                @id @default(uuid()) @db.Uuid
+  missionId     String                @db.Uuid
+  state         MissionState
+  failureReason MissionFailureReason?
+  source        MissionEventSource
+  commandId     String?               @db.Uuid
+  message       String?
+  occurredAt    DateTime              @default(now())
+  simulated     Boolean               @default(false)
+  isDemo        Boolean               @default(false)
+  mission       Mission               @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  command       ObservatoryCommand?   @relation(fields: [commandId], references: [id], onDelete: SetNull)
 
   @@index([missionId, occurredAt])
+  @@index([commandId])
 }
 
 /// Contract: Booking. A slot is identified by its start instant and duration --
@@ -1020,6 +1036,7 @@ model ObservatoryCommand {
   user          User                     @relation(fields: [userId], references: [id], onDelete: Restrict)
   observatory   Observatory              @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
   auditLogs     AuditLog[]
+  missionEvents MissionEvent[]
 
   @@index([missionId, issuedAt])
   @@index([observatoryId, status, issuedAt])
@@ -1027,6 +1044,16 @@ model ObservatoryCommand {
   @@index([userId])
 }
 
+/// Contract: AuditEvent. Append-only. Never edited, never backdated, never
+/// fabricated.
+///
+/// `missionId` is a column rather than an `entityType`/`entityId` pair because
+/// AuditEvent declares it and `GET /admin/logs?missionId=` filters on it. Reading a
+/// mission's trail out of a polymorphic pair would mean a scan, and the one query
+/// an operator runs during an incident is the one that must not be slow.
+///
+/// The mission relation is `SetNull`, not `Cascade`: deleting a mission must not
+/// delete the account of what was done to it.
 model AuditLog {
   id          String              @id @default(uuid()) @db.Uuid
   category    AuditCategory
@@ -1035,16 +1062,19 @@ model AuditLog {
   actorHash   String?
   entityType  String?
   entityId    String?
+  missionId   String?             @db.Uuid
   commandId   String?             @db.Uuid
   metadata    Json?
   isDemo      Boolean             @default(false)
   createdAt   DateTime            @default(now())
   actor       User?               @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  mission     Mission?            @relation(fields: [missionId], references: [id], onDelete: SetNull)
   command     ObservatoryCommand? @relation(fields: [commandId], references: [id], onDelete: SetNull)
 
   @@index([actorUserId, createdAt])
   @@index([category, createdAt])
   @@index([entityType, entityId])
+  @@index([missionId, createdAt])
   @@index([commandId])
 }
 

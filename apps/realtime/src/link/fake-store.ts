@@ -24,11 +24,7 @@ import {
   type RelayableCommand,
   type ResumeOutcome,
 } from "@/link/store";
-import type {
-  ChannelUser,
-  MissionChannelStore,
-  MissionSnapshot,
-} from "@/mission/store";
+import type { ChannelUser, MissionChannelStore, MissionSnapshot } from "@/mission/store";
 
 export type FakeMission = {
   observatoryId: string;
@@ -41,11 +37,30 @@ export type FakeMission = {
 export type FakeMissionEvent = {
   missionId: string;
   state: MissionState;
+  failureReason: MissionFailureReason | null;
   source: MissionEventSource;
+  commandId: string | null;
   message: string | null;
   occurredAt: Date;
   simulated: boolean;
   isDemo: boolean;
+};
+
+/**
+ * An audit row, as the fake keeps it.
+ *
+ * The fake records them so that "the link going down is written down" can be
+ * asserted in CI, which has no database. Without this the only proof would be a
+ * line of code, and issues #25 and #27 are what happens when a line of code is
+ * the proof.
+ */
+export type FakeAuditEvent = {
+  category: string;
+  action: string;
+  missionId: string | null;
+  commandId: string | null;
+  entityId: string | null;
+  detail: Record<string, unknown> | null;
 };
 
 export type FakeCommandVerdict = {
@@ -68,6 +83,7 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   readonly relayed = new Map<string, Date>();
   readonly missions = new Map<string, FakeMission>();
   readonly missionEvents: FakeMissionEvent[] = [];
+  readonly auditEvents: FakeAuditEvent[] = [];
   readonly revoked: { sessionId: string; reason: string }[] = [];
   readonly completedAt = new Map<string, Date>();
 
@@ -102,10 +118,30 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
 
   async markLinkUp(observatoryId: string) {
     this.linkUp.push(observatoryId);
+    this.audit("AGENT_LINK", "AGENT_LINK_UP", { entityId: observatoryId });
   }
 
   async markLinkLost(observatoryId: string, at: Date) {
     this.linkLost.push({ observatoryId, at });
+    this.audit("AGENT_LINK", "AGENT_LINK_LOST", {
+      entityId: observatoryId,
+      detail: { lostAt: at.toISOString() },
+    });
+  }
+
+  private audit(
+    category: string,
+    action: string,
+    fields: Partial<Omit<FakeAuditEvent, "category" | "action">> = {},
+  ) {
+    this.auditEvents.push({
+      category,
+      action,
+      missionId: fields.missionId ?? null,
+      commandId: fields.commandId ?? null,
+      entityId: fields.entityId ?? null,
+      detail: fields.detail ?? null,
+    });
   }
 
   addCommand(command: RelayableCommand) {
@@ -220,7 +256,11 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     this.missionEvents.push({
       missionId: event.missionId,
       state: event.state,
+      failureReason: event.failureReason,
       source: "AGENT",
+      // The same scoping the Prisma store applies: a correlation to a command
+      // this cloud did not mint for this observatory is dropped, not written.
+      commandId: this.commandOf(event.observatoryId, event.commandId),
       message: event.detail,
       occurredAt: event.occurredAt,
       simulated: mission.mode === "SIMULATED",
@@ -250,7 +290,9 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     this.missionEvents.push({
       missionId: input.missionId,
       state: "FAILED",
+      failureReason: "AGENT_LINK_LOST",
       source: "CLOUD",
+      commandId: null,
       message:
         "Agent restarted holding this mission. The mount parked locally and the cloud closed the mission out.",
       occurredAt: input.now,
@@ -263,6 +305,12 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
       this.sessions.delete(session.sessionId);
       this.revoked.push({ sessionId: session.sessionId, reason: "AGENT_LINK_LOST" });
     }
+
+    this.audit("MISSION", "MISSION_RESOLVED_AFTER_AGENT_RESTART", {
+      missionId: input.missionId,
+      entityId: input.observatoryId,
+      detail: { failureReason: "AGENT_LINK_LOST" },
+    });
 
     return "RESOLVED";
   }
@@ -291,7 +339,25 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
       detail: verdict.detail,
       decidedAt: verdict.decidedAt,
     });
+
+    this.audit("COMMAND", "COMMAND_VERDICT_RECORDED", {
+      commandId: verdict.commandId,
+      entityId: verdict.observatoryId,
+      detail: {
+        status: verdict.status,
+        rejectionReason: verdict.rejectionReason,
+        detail: verdict.detail,
+        decidedAt: verdict.decidedAt.toISOString(),
+      },
+    });
     return "RECORDED";
+  }
+
+  /** The command id, if this observatory really owns a command by that id. */
+  private commandOf(observatoryId: string, commandId: string | null): string | null {
+    if (!commandId) return null;
+    const command = this.commands.get(commandId);
+    return command?.observatoryId === observatoryId ? commandId : null;
   }
 
   setSafetyEnvelope(observatoryId: string, envelope: SafetyEnvelopeConfig | null) {

@@ -71,7 +71,11 @@ export async function PUT(request: Request) {
     return apiError(404, "NOT_FOUND", "No observatory is configured.");
   }
 
-  const result = await setSafetyEnvelope({ observatoryId, envelope: parsed.data });
+  const result = await setSafetyEnvelope({
+    observatoryId,
+    envelope: parsed.data,
+    actorUserId: guard.session.user.id,
+  });
   if (!result.ok) {
     return apiError(result.status, result.code, result.message, result.details);
   }
