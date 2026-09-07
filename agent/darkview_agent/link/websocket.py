@@ -108,6 +108,18 @@ class WebSocketTransport(Transport):
             self._open = False
             raise TransportError(redact(str(error), self._token)) from None
 
+    def send_binary(self, payload: bytes) -> None:
+        if self._connection is None or not self._open:
+            raise TransportError("connection is not open")
+        try:
+            # `bytes` rather than `str` is what makes websockets emit a binary
+            # frame. The header that precedes it went out as text on this same
+            # connection, and nothing else may be sent between the two.
+            self._connection.send(payload)
+        except Exception as error:
+            self._open = False
+            raise TransportError(redact(str(error), self._token)) from None
+
     def receive(self) -> str | None:
         try:
             return self._inbox.get_nowait()

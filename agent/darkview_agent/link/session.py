@@ -179,6 +179,34 @@ class LinkSession:
             except TransportError as error:
                 self._handle_disconnection(f"send failed: {error}")
 
+    def send_live_frame(self, header: dict, payload: bytes) -> bool:
+        """Send one live-view frame, or drop it. Returns whether it went.
+
+        **Never queued.** Every other message goes through `send`, which queues
+        first so a state transition survives a reconnect. A live frame is the
+        opposite: it is worth nothing the moment the next one exists, and
+        replaying a backlog of them after an outage would show the customer a
+        minute of the sky as it was rather than as it is. ADR-011 puts the same
+        rule on the cloud side -- latest frame wins, never a queue.
+
+        The header and the bytes go out back to back with nothing between them,
+        which is what the contract's binary convention requires: "A
+        LiveFrameHeader message is immediately followed by exactly one binary
+        WebSocket frame." The agent's loop is single-threaded, so consecutive
+        calls here are adjacent frames on the wire.
+        """
+        if not self.is_online or self._transport is None:
+            return False
+
+        try:
+            self._transport.send(json.dumps(header, separators=(",", ":")))
+            self._transport.send_binary(payload)
+        except TransportError as error:
+            self._handle_disconnection(f"live frame send failed: {error}")
+            return False
+
+        return True
+
     # ------------------------------------------------------------------
     # The pump
     # ------------------------------------------------------------------

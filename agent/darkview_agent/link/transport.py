@@ -32,6 +32,17 @@ class Transport(Protocol):
         """Send one text frame. Raises TransportError if the connection is gone."""
         ...
 
+    def send_binary(self, payload: bytes) -> None:
+        """Send one binary frame. Raises TransportError if the connection is gone.
+
+        The live view is the only thing that uses this. The contract: "A
+        LiveFrameHeader message is immediately followed by exactly one binary
+        WebSocket frame carrying the encoded image bytes. Pixel data is never
+        base64-encoded into JSON." Base64 would cost a third more bandwidth on the
+        one message sent most often, on the link least able to spare it.
+        """
+        ...
+
     def receive(self) -> str | None:
         """Return one pending text frame, or None if nothing has arrived.
 
