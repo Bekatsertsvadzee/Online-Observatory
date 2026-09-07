@@ -132,17 +132,25 @@ async function createSafetyEnvelope(maxAltitude: number | null) {
  * Filtered by kind rather than taken in order: a notification from the previous
  * test can still be in flight when `beforeEach` clears the queue, and a test that
  * fails because of that timing would be telling us nothing about the code.
+ *
+ * Kind alone is not enough when the previous test emitted the same kind. A late
+ * COMMAND from the test before would be handed to the next one, which then
+ * compares it against its own command and fails on a mismatched id -- a real
+ * intermittent failure, and one that says nothing about the code either. So a
+ * caller may also say which notification is its own.
  */
 async function nextNotification(
   kind: "SESSION" | "COMMAND",
+  isMine: (notification: Record<string, unknown>) => boolean = () => true,
   timeoutMs = 3_000,
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs;
 
   for (;;) {
-    const index = notifications.findIndex(
-      (raw) => (JSON.parse(raw) as { kind?: string }).kind === kind,
-    );
+    const index = notifications.findIndex((raw) => {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      return parsed.kind === kind && isMine(parsed);
+    });
     if (index >= 0) {
       return JSON.parse(notifications.splice(index, 1)[0]) as Record<string, unknown>;
     }
@@ -607,7 +615,12 @@ describe("minting a command", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(await nextNotification("COMMAND")).toEqual({
+    expect(
+      await nextNotification(
+        "COMMAND",
+        (notification) => notification.commandId === result.accepted.commandId,
+      ),
+    ).toEqual({
       kind: "COMMAND",
       commandId: result.accepted.commandId,
       observatoryId,

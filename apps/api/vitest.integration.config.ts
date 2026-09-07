@@ -11,6 +11,21 @@ import { defineConfig } from "vitest/config";
  * Single-threaded on purpose: these files share one database, and the
  * concurrency under test is inside a file, not between them.
  */
+/**
+ * Load the repository's `.env`, when there is one.
+ *
+ * CI sets `DATABASE_URL` and `DATABASE_TEST_URL` in the workflow, so this changes
+ * nothing there -- `loadEnvFile` does not overwrite a variable that is already
+ * set. It exists for a local run, where the connection string is in `.env` and
+ * vitest would otherwise never see it and fall through to a default that assumes
+ * a `postgres` role nobody has.
+ */
+try {
+  process.loadEnvFile(path.resolve(import.meta.dirname, "../../.env"));
+} catch {
+  // No .env. CI, or a developer who exports the variables themselves.
+}
+
 export default defineConfig({
   resolve: {
     alias: {

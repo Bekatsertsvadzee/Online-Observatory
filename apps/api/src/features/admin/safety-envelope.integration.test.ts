@@ -79,12 +79,21 @@ function envelopeFor(
   };
 }
 
+/**
+ * Wait for this observatory's ENVELOPE notification.
+ *
+ * Scoped to the observatory, not just the kind. Every test creates a fresh
+ * observatory, so a late notification from the previous one is a different id --
+ * and taking the first ENVELOPE of any observatory would hand a test its
+ * predecessor's and fail on the mismatch.
+ */
 async function nextEnvelopeNotification(timeoutMs = 3_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const index = notifications.findIndex(
-      (raw) => (JSON.parse(raw) as { kind?: string }).kind === "ENVELOPE",
-    );
+    const index = notifications.findIndex((raw) => {
+      const parsed = JSON.parse(raw) as { kind?: string; observatoryId?: string };
+      return parsed.kind === "ENVELOPE" && parsed.observatoryId === observatoryId;
+    });
     if (index >= 0) return JSON.parse(notifications.splice(index, 1)[0]);
     if (Date.now() > deadline) throw new Error("no ENVELOPE notification arrived");
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -141,8 +150,13 @@ beforeEach(async () => {
 
   // The audit row DV-062 writes carries the operator who made the call, and
   // AuditLog.actorUserId is a foreign key, so the operator has to be real.
-  await database.auditLog.deleteMany();
-  await database.user.deleteMany();
+  //
+  // Created, never swept. This suite does not clear Payment, and Payment.user is
+  // onDelete: Restrict -- so a `user.deleteMany()` here fails outright whenever
+  // the booking suite happened to run first and leave a payment behind. Vitest
+  // does not fix the order between files, which made that an intermittent failure
+  // of all nine tests in this file rather than an obvious one. The email is
+  // already unique per run, so there is nothing to sweep.
   const operator = await database.user.create({
     data: {
       email: `operator-${randomUUID()}@example.test`,
