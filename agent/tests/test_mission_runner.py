@@ -12,7 +12,7 @@ from uuid import uuid4
 import pytest
 
 from contracts.models import MissionFailureReason, MissionState
-from darkview_agent.clock import ManualClock
+from darkview_agent.clock import ManualClock, wire_timestamp
 from darkview_agent.devices.base import DeviceError
 from darkview_agent.devices.simulated import SimCamera, SimFocuser, SimMount
 from darkview_agent.mission.runner import (
@@ -177,7 +177,14 @@ def test_every_event_serialises_to_the_contract_shape():
         message = event.to_message()
         assert message["type"] == "AGENT_MISSION_EVENT"
         assert message["state"] in {state.value for state in MissionState}
-        assert message["occurredAt"] == NIGHT.isoformat()
+        assert message["occurredAt"] == wire_timestamp(NIGHT)
+
+        # Spelled with a Z, not with the `+00:00` Python's isoformat() writes.
+        # This assertion used to compare against isoformat() and so agreed with
+        # the agent about a spelling the cloud refuses. Every message the agent
+        # sent was rejected at the cloud's parse step and this test still passed.
+        assert message["occurredAt"].endswith("Z")
+        assert message["sentAt"].endswith("Z")
 
 
 def test_frames_are_actually_captured():

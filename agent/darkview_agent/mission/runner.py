@@ -26,10 +26,10 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 
 from contracts.models import MissionFailureReason, MissionState
-from darkview_agent.clock import Clock, SystemClock
+from darkview_agent.clock import Clock, SystemClock, wire_timestamp
 from darkview_agent.devices.base import DeviceError
 from darkview_agent.mission.solver import PlateSolver
 from darkview_agent.runtime import Devices
@@ -102,13 +102,13 @@ class MissionEvent:
         return {
             "type": "AGENT_MISSION_EVENT",
             "messageId": str(uuid.uuid4()),
-            "sentAt": datetime.now(UTC).isoformat(),
+            "sentAt": wire_timestamp(),
             "missionId": self.mission_id,
             "state": self.state.value,
             "failureReason": (
                 self.failure_reason.value if self.failure_reason else None
             ),
-            "occurredAt": self.occurred_at.isoformat(),
+            "occurredAt": wire_timestamp(self.occurred_at),
             "detail": self.detail or None,
         }
 
