@@ -236,6 +236,25 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     return found.user;
   }
 
+  /** Seats, keyed `missionId:userId`, alongside whether the mission is open. */
+  private readonly seats = new Set<string>();
+  private readonly observable = new Set<string>();
+
+  /** Give `userId` an observer seat on `missionId`, and open the mission. */
+  addObserverSeat(missionId: string, userId: string) {
+    this.seats.add(`${missionId}:${userId}`);
+    this.observable.add(missionId);
+  }
+
+  /** Withdraw the controller's consent without touching the seats. */
+  closeToObservers(missionId: string) {
+    this.observable.delete(missionId);
+  }
+
+  async hasObserverSeat(missionId: string, userId: string): Promise<boolean> {
+    return this.observable.has(missionId) && this.seats.has(`${missionId}:${userId}`);
+  }
+
   async loadMissionSnapshot(missionId: string): Promise<MissionSnapshot | null> {
     const mission = this.missions.get(missionId);
     if (!mission) return null;

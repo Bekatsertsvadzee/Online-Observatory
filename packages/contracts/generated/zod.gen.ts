@@ -1265,12 +1265,17 @@ export const zMissionChannelMessage = z.discriminatedUnion('type', [
     zMissionChannelError.extend({ type: z.literal('MISSION_ERROR') })
 ]);
 
+/**
+ * Ask to watch one mission. Sent by the controller and by an observer, which is
+ * the only difference `sessionId` carries.
+ *
+ */
 export const zMissionClientSubscribe = z.strictObject({
     type: z.enum(['CLIENT_SUBSCRIBE']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
     missionId: z.uuid(),
-    sessionId: z.uuid()
+    sessionId: z.uuid().nullable()
 });
 
 export const zMissionClientPing = z.strictObject({

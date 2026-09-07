@@ -1443,6 +1443,11 @@ class MissionChannelMessage(RootModel[MissionStateUpdate | MissionTelemetryUpdat
 
 
 class MissionClientSubscribe(BaseModel):
+    """
+    Ask to watch one mission. Sent by the controller and by an observer, which is
+    the only difference `sessionId` carries.
+
+    """
     model_config = ConfigDict(
         extra='forbid',
     )
@@ -1450,7 +1455,7 @@ class MissionClientSubscribe(BaseModel):
     message_id: UUID = Field(..., alias='messageId')
     sent_at: AwareDatetime = Field(..., alias='sentAt')
     mission_id: UUID = Field(..., alias='missionId')
-    session_id: UUID = Field(..., alias='sessionId')
+    session_id: UUID | None = Field(..., alias='sessionId', description="The controller's session, or null for an observer (ADR-007).\n\nThe controller states it because a session rotates: reopening replaces the\nold identifier, and a stale browser tab holding the previous one must stop\nbeing able to watch. An observer has no rotating credential -- the seat is\nthe grant and the session cookie verified during the handshake is the\nidentity -- so there is nothing for them to state. Required either way, so\nthat a client says which it is rather than omitting the field.\n\nStating a sessionId never grants anything on its own. The cloud admits a\nsubscriber only when the session or the seat belongs to the authenticated\nuser, and neither confers any command capability: commands are minted only\nthrough POST /missions/{missionId}/command, for the session owner alone.\n")
 
 
 class MissionClientPing(BaseModel):
