@@ -7,10 +7,10 @@ import { PrismaClient } from "@darkview/db";
 
 import { AgentLink } from "@/link/agent-link";
 import { AgentRelay } from "@/link/agent-relay";
-import { createPrismaStore } from "@/link/prisma-store";
+import { createPrismaStore, type RealtimeStore } from "@/link/prisma-store";
 import { AgentLinkRegistry } from "@/link/registry";
 import { PROTOCOL_VERSION } from "@/link/protocol";
-import type { LinkStore, ObservatoryRecord } from "@/link/store";
+import type { ObservatoryRecord } from "@/link/store";
 import { RecordingBroadcast } from "@/mission/fake-broadcast";
 
 /**
@@ -32,7 +32,8 @@ const CONNECTION_STRING =
 const NOW = new Date("2026-12-15T20:00:00.000Z");
 
 let database: PrismaClient;
-let store: LinkStore;
+// Both surfaces: the link's, and the mission channel's, which DV-103 reads here.
+let store: RealtimeStore;
 let broadcast: RecordingBroadcast;
 
 let observatory: ObservatoryRecord;
@@ -99,6 +100,7 @@ beforeEach(async () => {
   sent = [];
   broadcast = new RecordingBroadcast();
 
+  await database.missionParticipant.deleteMany();
   await database.observatoryCommand.deleteMany();
   await database.missionSession.deleteMany();
   await database.missionEvent.deleteMany();
@@ -362,5 +364,108 @@ describe("a command the agent refuses", () => {
       detail: "82.4 deg exceeds MAX_ALT_SAFE 78.0 deg",
       decidedAt: decidedAt.toISOString(),
     });
+  });
+});
+
+/**
+ * DV-103's admission rule, against the real join.
+ *
+ * `hasObserverSeat` reads the seat and the mission's consent in one query, and
+ * the half worth proving here is the relation filter: a seat left behind by a
+ * controller who closed the session must not admit anybody. The fake mirrors this
+ * logic, so only a real database can tell me the SQL agrees with it.
+ */
+describe("who holds an observer seat", () => {
+  async function seatFor(userId: string) {
+    await database.missionParticipant.create({
+      data: { missionId, userId, status: "JOINED" },
+    });
+  }
+
+  async function anotherUser() {
+    const user = await database.user.create({
+      data: {
+        email: `${randomUUID()}@example.test`,
+        name: "Observer",
+        emailVerifiedAt: NOW,
+      },
+    });
+    return user.id;
+  }
+
+  it("is nobody while the mission is private, which is how it ships", async () => {
+    const observer = await anotherUser();
+    await seatFor(observer);
+
+    expect(await store.hasObserverSeat(missionId, observer)).toBe(false);
+  });
+
+  it("is the seat holder once the controller opens the session", async () => {
+    const observer = await anotherUser();
+    await seatFor(observer);
+    await database.mission.update({
+      where: { id: missionId },
+      data: { joinPolicy: "OPEN" },
+    });
+
+    expect(await store.hasObserverSeat(missionId, observer)).toBe(true);
+  });
+
+  it("is nobody again the moment consent is withdrawn", async () => {
+    const observer = await anotherUser();
+    await seatFor(observer);
+    await database.mission.update({
+      where: { id: missionId },
+      data: { joinPolicy: "OPEN" },
+    });
+    expect(await store.hasObserverSeat(missionId, observer)).toBe(true);
+
+    await database.mission.update({
+      where: { id: missionId },
+      data: { joinPolicy: "DISABLED" },
+    });
+
+    // The seat row is still JOINED here on purpose. DV-101 marks them LEFT when
+    // it closes a session; this proves the channel would refuse even if a seat
+    // survived that sweep by racing it.
+    expect(await store.hasObserverSeat(missionId, observer)).toBe(false);
+  });
+
+  it("is not somebody who left", async () => {
+    const observer = await anotherUser();
+    await seatFor(observer);
+    await database.mission.update({
+      where: { id: missionId },
+      data: { joinPolicy: "OPEN" },
+    });
+    await database.missionParticipant.updateMany({
+      where: { missionId, userId: observer },
+      data: { status: "LEFT", leftAt: NOW },
+    });
+
+    expect(await store.hasObserverSeat(missionId, observer)).toBe(false);
+  });
+
+  it("is not somebody holding a seat on a different mission", async () => {
+    const observer = await anotherUser();
+    // SCHEDULED, not live: Mission_active_per_observatory_unique allows exactly
+    // one live mission per observatory and the fixture already holds it. What
+    // this test is about is mission scoping, not liveness.
+    const other = await database.mission.create({
+      data: {
+        userId: ownerId,
+        targetId,
+        observatoryId: observatory.id,
+        telescopeId,
+        state: "SCHEDULED",
+      },
+    });
+    await database.missionParticipant.create({
+      data: { missionId: other.id, userId: observer, status: "JOINED" },
+    });
+    await database.mission.updateMany({ data: { joinPolicy: "OPEN" } });
+
+    expect(await store.hasObserverSeat(missionId, observer)).toBe(false);
+    expect(await store.hasObserverSeat(other.id, observer)).toBe(true);
   });
 });

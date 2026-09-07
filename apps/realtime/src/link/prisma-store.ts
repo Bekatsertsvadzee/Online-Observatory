@@ -147,6 +147,23 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       return { id: session.user.id, role: session.user.role };
     },
 
+    async hasObserverSeat(missionId: string, userId: string): Promise<boolean> {
+      // The seat and the mission's consent are read together. A seat left behind
+      // by a controller who has since closed the session is not entitlement --
+      // DV-101 marks those LEFT, and this is the second line of defence for one
+      // that raced the close.
+      const seat = await database.missionParticipant.findFirst({
+        where: {
+          missionId,
+          userId,
+          status: "JOINED",
+          mission: { joinPolicy: "OPEN" },
+        },
+        select: { id: true },
+      });
+      return seat !== null;
+    },
+
     async loadMissionSnapshot(missionId: string): Promise<MissionSnapshot | null> {
       const mission = await database.mission.findUnique({
         where: { id: missionId },

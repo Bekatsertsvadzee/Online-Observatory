@@ -146,6 +146,7 @@ describe("authenticating a client", () => {
         return null;
       },
       loadMissionSnapshot: store.loadMissionSnapshot.bind(store),
+      hasObserverSeat: store.hasObserverSeat.bind(store),
     };
 
     await authenticateClient(spy, `darkview_session=${TOKEN}`, now);

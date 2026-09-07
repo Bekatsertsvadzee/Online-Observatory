@@ -1674,12 +1674,33 @@ export type MissionChannelMessage = ({
     type: 'MISSION_ERROR';
 } & MissionChannelError);
 
+/**
+ * Ask to watch one mission. Sent by the controller and by an observer, which is
+ * the only difference `sessionId` carries.
+ *
+ */
 export type MissionClientSubscribe = {
     type: 'CLIENT_SUBSCRIBE';
     messageId: string;
     sentAt: string;
     missionId: string;
-    sessionId: string;
+    /**
+     * The controller's session, or null for an observer (ADR-007).
+     *
+     * The controller states it because a session rotates: reopening replaces the
+     * old identifier, and a stale browser tab holding the previous one must stop
+     * being able to watch. An observer has no rotating credential -- the seat is
+     * the grant and the session cookie verified during the handshake is the
+     * identity -- so there is nothing for them to state. Required either way, so
+     * that a client says which it is rather than omitting the field.
+     *
+     * Stating a sessionId never grants anything on its own. The cloud admits a
+     * subscriber only when the session or the seat belongs to the authenticated
+     * user, and neither confers any command capability: commands are minted only
+     * through POST /missions/{missionId}/command, for the session owner alone.
+     *
+     */
+    sessionId: string | null;
 };
 
 export type MissionClientPing = {

@@ -80,11 +80,13 @@ export class MissionChannel {
   /**
    * Admit a client, or refuse it.
    *
-   * Three things have to agree before anything is sent: the URL's mission, the
-   * subscribe message's mission, and the mission the presented session was issued
-   * for. They are checked separately because they fail for different reasons -- a
-   * mismatched URL is a confused client, a session for another mission is someone
-   * holding a valid credential and pointing it somewhere else.
+   * Two ways in, and they prove different things. A controller states the session
+   * it was issued, which rotates and so must still be current. An observer states
+   * null and is admitted by the seat DV-100 gave them, on a mission whose
+   * controller has not since withdrawn consent.
+   *
+   * Whichever path, the URL's mission and the message's mission must agree first:
+   * a mismatch is a confused client and gets nothing.
    *
    * Every refusal says the same thing. A customer probing mission ids must not be
    * able to tell "that mission does not exist" from "that mission is not yours",
@@ -103,18 +105,12 @@ export class MissionChannel {
       return;
     }
 
-    const session = await this.store.loadSession(message.sessionId);
-    const expired = session !== null && session.expiresAt <= new Date(this.now());
+    const admitted =
+      message.sessionId === null
+        ? await this.admitObserver()
+        : await this.admitController(message.sessionId);
 
-    if (
-      session === null ||
-      expired ||
-      session.missionId !== this.missionId ||
-      // The session must belong to the person on this socket. Without this a
-      // customer who learns any live sessionId could watch a stranger's mission,
-      // and the cookie check during the upgrade would not have stopped them.
-      session.userId !== this.user.id
-    ) {
+    if (!admitted) {
       this.refuse();
       return;
     }
@@ -126,6 +122,43 @@ export class MissionChannel {
     // can be minutes away.
     const snapshot = await this.store.loadMissionSnapshot(this.missionId);
     if (snapshot) this.send(missionStateUpdate(snapshot));
+  }
+
+  /**
+   * The controller: the person the session was issued to, on this mission, now.
+   *
+   * The session is stated rather than looked up because it rotates. Reopening a
+   * mission replaces the identifier, and a stale browser tab holding the previous
+   * one must stop being able to watch -- which is the same reason the agent
+   * refuses a command carrying a sessionId it no longer recognises.
+   */
+  private async admitController(sessionId: string): Promise<boolean> {
+    const session = await this.store.loadSession(sessionId);
+    if (session === null) return false;
+    if (session.expiresAt <= new Date(this.now())) return false;
+    if (session.missionId !== this.missionId) return false;
+
+    // The session must belong to the person on this socket. Without this a
+    // customer who learns any live sessionId could watch a stranger's mission,
+    // and the cookie check during the upgrade would not have stopped them.
+    return session.userId === this.user.id;
+  }
+
+  /**
+   * An observer: somebody holding a seat on a mission still open to observers.
+   *
+   * No credential is stated and none exists to state. The seat is the grant, and
+   * the person is the session cookie already verified during the handshake --
+   * ADR-007 gives an observer nothing that rotates, so there would be nothing for
+   * a `sessionId` here to prove.
+   *
+   * Watching is all this admits. An observer subscribed here has no path to a
+   * CommandEnvelope: the cloud mints one only for the session owner and the agent
+   * independently refuses any envelope whose sessionId is not the owner it last
+   * received. If this method is ever asked to grant more, the request is wrong.
+   */
+  private async admitObserver(): Promise<boolean> {
+    return this.store.hasObserverSeat(this.missionId, this.user.id);
   }
 
   /**

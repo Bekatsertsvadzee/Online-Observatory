@@ -37,6 +37,22 @@ export interface MissionChannelStore {
    * which during OBSERVING can be minutes.
    */
   loadMissionSnapshot(missionId: string): Promise<MissionSnapshot | null>;
+
+  /**
+   * Does this person hold an observer seat on this mission, and is the mission
+   * still open to observers?
+   *
+   * Both halves, in one answer, because either alone is not entitlement. A seat on
+   * a session whose controller has since closed it is consent withdrawn (ADR-007
+   * rule 5), and the contract's own words on `setMissionObservation` are that
+   * closing "detaches any attached observers" -- so a stale seat must not readmit
+   * anybody after the fact.
+   *
+   * Never grants command capability, and cannot: the cloud mints an envelope only
+   * for the session owner, and the agent refuses any envelope whose sessionId is
+   * not the owner it last received.
+   */
+  hasObserverSeat(missionId: string, userId: string): Promise<boolean>;
 }
 
 export type ChannelUser = {

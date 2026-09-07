@@ -255,3 +255,110 @@ describe("what a new subscriber is told", () => {
     expect(channel.currentState).toBe("SUBSCRIBED");
   });
 });
+
+describe("an observer watching (DV-103)", () => {
+  const observer: ChannelUser = {
+    id: "66666666-6666-4666-8666-666666666666",
+    role: "USER",
+  };
+
+  /** What an observer sends: no sessionId, because they hold nothing that rotates. */
+  function observerSubscribe(overrides: Record<string, unknown> = {}) {
+    return subscribe({ sessionId: null, ...overrides });
+  }
+
+  it("is admitted by the seat, with no session of its own", async () => {
+    store.addObserverSeat(MISSION, observer.id);
+    const channel = makeChannel(observer);
+
+    await channel.receive(observerSubscribe());
+
+    expect(channel.currentState).toBe("SUBSCRIBED");
+    expect(closedWith).toEqual([]);
+  });
+
+  it("is refused without a seat, in the words every refusal uses", async () => {
+    const channel = makeChannel(observer);
+
+    await channel.receive(observerSubscribe());
+
+    expect(channel.currentState).toBe("CLOSED");
+    // Identical to every other refusal. Somebody probing mission ids must not be
+    // able to tell "no such mission" from "not open to you".
+    expect(sent.at(-1)).toMatchObject({
+      type: "MISSION_ERROR",
+      code: "FORBIDDEN",
+      message: "No live session for this mission is yours.",
+    });
+  });
+
+  it("is refused once the controller withdraws consent, seat or no seat", async () => {
+    store.addObserverSeat(MISSION, observer.id);
+    store.closeToObservers(MISSION);
+    const channel = makeChannel(observer);
+
+    await channel.receive(observerSubscribe());
+
+    // ADR-007 rule 5 and the contract's own words on setMissionObservation:
+    // closing detaches attached observers. A seat left behind by a close is not
+    // entitlement, or withdrawing consent would only apply to the next person.
+    expect(channel.currentState).toBe("CLOSED");
+  });
+
+  it("cannot borrow somebody else's seat by naming their mission", async () => {
+    store.addObserverSeat(OTHER_MISSION, observer.id);
+    const channel = makeChannel(observer);
+
+    await channel.receive(observerSubscribe());
+
+    expect(channel.currentState).toBe("CLOSED");
+  });
+
+  it("receives what the fan-out pushes, like any other subscriber", async () => {
+    store.addObserverSeat(MISSION, observer.id);
+    const channel = makeChannel(observer);
+    await channel.receive(observerSubscribe());
+    sent.length = 0;
+
+    const delivered = channel.dispatch({
+      type: "MISSION_STATE",
+      messageId: randomUUID(),
+      sentAt: new Date(now).toISOString(),
+      missionId: MISSION,
+      state: "OBSERVING",
+      failureReason: null,
+    });
+
+    expect(delivered).toBe(true);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("gains nothing that could command, because the channel has no such path", async () => {
+    store.addObserverSeat(MISSION, observer.id);
+    const channel = makeChannel(observer);
+    await channel.receive(observerSubscribe());
+
+    // ADR-007's central rule, asserted at the only place an observer touches the
+    // system: this class exposes `dispatch` and nothing that reaches a mount. The
+    // real enforcement is elsewhere and independent -- the cloud mints envelopes
+    // only for the session owner, and the agent refuses any other sessionId -- but
+    // a channel that grew a command method would be the first step wrong.
+    const surface = Object.getOwnPropertyNames(
+      Object.getPrototypeOf(channel) as object,
+    );
+    expect(surface).not.toContain("command");
+    expect(surface).not.toContain("send");
+    expect(surface.filter((name) => /command|slew|capture|park/i.test(name))).toEqual([]);
+  });
+
+  it("still refuses a controller whose stated session is stale", async () => {
+    // The observer path must not become a way around session rotation: a
+    // controller naming a revoked session is refused, not quietly readmitted as
+    // an observer of their own mission.
+    const channel = makeChannel(owner);
+
+    await channel.receive(subscribe({ sessionId: randomUUID() }));
+
+    expect(channel.currentState).toBe("CLOSED");
+  });
+});
