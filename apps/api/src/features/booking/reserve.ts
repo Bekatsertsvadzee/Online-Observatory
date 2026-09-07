@@ -7,6 +7,7 @@ import type {
   ErrorCode,
   PaymentIntent,
 } from "@darkview/contracts";
+import { recordAuditEvent } from "@darkview/db/audit";
 
 import { getDatabase } from "@/lib/db/client";
 import { nightWindow } from "@/lib/slots/darkness";
@@ -328,6 +329,28 @@ export async function reserveSlot(input: {
         },
       });
 
+      await recordAuditEvent(
+        {
+          category: "BOOKING",
+          action: "BOOKING_RESERVED",
+          actorUserId: userId,
+          entityType: "Booking",
+          entityId: booking.id,
+          detail: {
+            targetId: target.id,
+            observatoryId: observatory.id,
+            slotStartAt: slotStartAt.toISOString(),
+            durationMinutes: slot.durationMinutes,
+            priceMinor: slot.priceMinor,
+            currency: slot.currency,
+            holdExpiresAt: holdExpiresAt.toISOString(),
+            paymentId: payment.id,
+          },
+          isDemo: observatory.isDemo,
+        },
+        tx,
+      );
+
       return { booking, payment };
     });
 
@@ -485,6 +508,19 @@ export async function releaseSlotForFailedPayment(input: {
       where: { id: booking.id },
       data: { status: "CANCELLED" },
     });
+
+    // A slot leaving the held index is what makes it purchasable again. When two
+    // customers dispute who was entitled to a half hour, this row is the answer.
+    await recordAuditEvent(
+      {
+        category: "BOOKING",
+        action: "BOOKING_SLOT_RELEASED",
+        entityType: "Booking",
+        entityId: booking.id,
+        detail: { reason: input.reason, paymentId: booking.paymentId },
+      },
+      tx,
+    );
 
     return { released: true };
   });

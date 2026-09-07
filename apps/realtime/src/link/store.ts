@@ -212,6 +212,14 @@ export type MissionEventRecord = {
    * claiming everything happened at once.
    */
   occurredAt: Date;
+  /**
+   * The command that caused the transition, when one did.
+   *
+   * AgentMissionEvent has carried this since the contract was written and the
+   * cloud discarded it until DV-062, which left the trail chronological but not
+   * correlated: nothing recorded which nudge produced which CENTERING.
+   */
+  commandId: string | null;
   detail: string | null;
 };
 

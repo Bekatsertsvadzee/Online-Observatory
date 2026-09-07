@@ -42,6 +42,7 @@ let database: PrismaClient;
 let listener: Client;
 let notifications: string[];
 let observatoryId: string;
+let operatorId: string;
 
 /**
  * MAX_ALT_SAFE is stated by every caller. There is no default for it anywhere in
@@ -137,6 +138,21 @@ beforeEach(async () => {
     },
   });
   observatoryId = observatory.id;
+
+  // The audit row DV-062 writes carries the operator who made the call, and
+  // AuditLog.actorUserId is a foreign key, so the operator has to be real.
+  await database.auditLog.deleteMany();
+  await database.user.deleteMany();
+  const operator = await database.user.create({
+    data: {
+      email: `operator-${randomUUID()}@example.test`,
+      name: "Test Operator",
+      passwordHash: "not-a-real-hash",
+      role: "OPERATOR",
+      emailVerifiedAt: NOW,
+    },
+  });
+  operatorId = operator.id;
 });
 
 describe("recording a measured maximum altitude", () => {
@@ -145,6 +161,7 @@ describe("recording a measured maximum altitude", () => {
     const result = await setSafetyEnvelope({
       observatoryId,
       envelope: envelopeFor(MEASURED),
+      actorUserId: operatorId,
     });
 
     expect(result.ok).toBe(false);
@@ -167,6 +184,7 @@ describe("recording a measured maximum altitude", () => {
     const result = await setSafetyEnvelope({
       observatoryId,
       envelope: envelopeFor(MEASURED, provenance),
+      actorUserId: operatorId,
     });
 
     expect(result.ok).toBe(false);
@@ -178,6 +196,7 @@ describe("recording a measured maximum altitude", () => {
     const result = await setSafetyEnvelope({
       observatoryId,
       envelope: envelopeFor(null),
+      actorUserId: operatorId,
     });
 
     expect(result.ok).toBe(true);
@@ -193,6 +212,7 @@ describe("recording a measured maximum altitude", () => {
         maxAltitudeMeasuredBy: "Beka Tsertsvadze",
         maxAltitudeMeasurementNote: "Clearance 21 mm at 78 degrees, power off.",
       }),
+      actorUserId: operatorId,
     });
 
     expect(result.ok).toBe(true);
@@ -212,7 +232,11 @@ describe("recording a measured maximum altitude", () => {
 
 describe("storing the survey", () => {
   it("replaces the mask wholesale instead of merging surveys", async () => {
-    await setSafetyEnvelope({ observatoryId, envelope: envelopeFor(null) });
+    await setSafetyEnvelope({
+      observatoryId,
+      envelope: envelopeFor(null),
+      actorUserId: operatorId,
+    });
 
     await setSafetyEnvelope({
       observatoryId,
@@ -220,6 +244,7 @@ describe("storing the survey", () => {
         horizonMask: [{ azimuthDegrees: 90, minAltitudeDegrees: 31 }],
         forbiddenAzimuthSectors: [],
       }),
+      actorUserId: operatorId,
     });
 
     const stored = await loadSafetyEnvelope(observatoryId);
@@ -230,7 +255,11 @@ describe("storing the survey", () => {
   });
 
   it("tells the agent, inside the same transaction as the write", async () => {
-    await setSafetyEnvelope({ observatoryId, envelope: envelopeFor(null) });
+    await setSafetyEnvelope({
+      observatoryId,
+      envelope: envelopeFor(null),
+      actorUserId: operatorId,
+    });
 
     const notification = await nextEnvelopeNotification();
     expect(notification).toEqual({ kind: "ENVELOPE", observatoryId });
@@ -240,6 +269,7 @@ describe("storing the survey", () => {
     const result = await setSafetyEnvelope({
       observatoryId: randomUUID(),
       envelope: envelopeFor(null),
+      actorUserId: operatorId,
     });
 
     expect(result.ok).toBe(false);

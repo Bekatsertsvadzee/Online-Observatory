@@ -192,6 +192,76 @@ in production, so the browser sends it only to the host that set it. **The realt
 service must be served from the same host as the web app**, on a path, not on a
 `realtime.` subdomain.
 
+## What DV-062 wrote down, and what has no writer yet
+
+`AuditCategory` had nine members and one writer: authentication. Everything else the
+system did — a session opened, a command minted, a slew refused, MAX_ALT_SAFE changed,
+the link dropping — left either nothing behind or only its latest state. DV-062 is the
+writers, the two read surfaces the contract already declared, and two schema gaps.
+
+**One recorder, in `packages/db/audit.ts`.** Both services write audit rows, so the
+action vocabulary lives in the package they already share rather than in two copies that
+drift. There is no update path and no delete path, and `createdAt` is the database's
+default with no parameter that could override it — which is what makes "never backdated"
+a property rather than a promise. A `detail` key that names a token, secret, password or
+credential throws instead of being redacted, because a redacted row hides that a call
+site tried.
+
+The writer argument is explicit and has no default. Where the audited thing is
+transactional the row joins its transaction, for the same reason `notifyAgent` does: a
+row written on another connection commits whether or not the fact it describes did.
+
+| Category | Written when |
+| --- | --- |
+| `AUTH` | Unchanged. `recordAuthEvent` now goes through the shared recorder. |
+| `BOOKING` | A slot is reserved, and released when its payment fails. |
+| `MISSION` | A session opens or is revoked; the cloud closes out a mission after an agent restart. |
+| `COMMAND` | A command is minted; the agent's verdict is applied. |
+| `SAFETY` | The cloud refuses a command, and whenever the safety envelope is recorded. |
+| `AGENT_LINK` | The link comes up, and every time it drops. |
+
+`PAYMENT` still has no writer (DV-056), and neither do `OBSERVATORY_MODE` or
+`OPERATOR_OVERRIDE` (DV-063). They are categories whose code does not exist yet, not
+categories nobody remembered.
+
+**Two schema gaps, both of them the contract's own fields going nowhere.**
+
+`AuditEvent` declares `missionId`, and `GET /admin/logs?missionId=` filters on it;
+`AuditLog` had only the polymorphic `entityType`/`entityId` pair, which would have made
+the one query an operator runs during an incident a scan. It is now a column with an
+index, and the foreign key is `SET NULL` — deleting a mission must not delete the account
+of what was done to it.
+
+`MissionEvent` declares `failureReason` and `commandId`. `AgentMissionEvent` has carried
+both since the contract was written and the cloud discarded both, which left the trail
+chronological but not correlated: nothing recorded which nudge produced which
+`CENTERING`, and a mission that held and then failed read as though it had only failed.
+A correlation to a command this cloud did not mint for this observatory is dropped rather
+than written — the transition really happened, only the claim about its cause is one the
+cloud cannot support.
+
+**Two read surfaces, both already in the contract.**
+
+`GET /admin/logs` is operator-only and newest first, because the contract calls it "the
+primary debugging tool" and the question asked of it is always what just happened. An
+unrecognised `category` is a 422 rather than a filter that quietly matches nothing.
+
+`GET /missions/{missionId}/events` is the mission's own trail, oldest first, ordered by
+`occurredAt` — the observatory's clock, replayed unchanged after a reconnect. Ordering it
+by insert time would file a queue drained after an outage as though everything happened
+at once. Someone else's mission is a 404, not a 403.
+
+Both page by keyset, never by offset. An offset page over an append-only table that is
+being written to while it is read silently repeats rows.
+
+**Not written: the route-level refusals.** A body that tries to mint its own `sessionId`,
+or names `GOTO`, is refused before the domain sees it and leaves no row. Those are
+attempts to exceed authority rather than accidents, and they belong with the abuse
+controls in DV-115 alongside whatever rate limiting answers them — not bolted to a route
+handler here.
+
+**DV-063 does not rebuild `/admin/logs`.** It exists, it is guarded, and it is tested.
+
 ## Critical path
 
 DV-003 → DV-020/021/022 → DV-023/025 → DV-026 → DV-057/058 → DV-040 → DV-060 →

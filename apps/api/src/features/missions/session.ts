@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { ErrorCode, MissionSession } from "@darkview/contracts";
+import { recordAuditEvent } from "@darkview/db/audit";
 
 import { getDatabase } from "@/lib/db/client";
 import { notifyAgent } from "@/lib/observatory/relay";
@@ -175,6 +176,26 @@ export async function startMissionSession(input: {
         sessionId: session.id,
       });
 
+      // In the transaction for the same reason. Who held the telescope, and from
+      // when until when, is the first question asked about any observation.
+      await recordAuditEvent(
+        {
+          category: "MISSION",
+          action: "MISSION_SESSION_OPENED",
+          actorUserId: actor.id,
+          missionId,
+          entityType: "MissionSession",
+          entityId: session.id,
+          detail: {
+            actorRole: actor.role,
+            expiresAt: expiresAt.toISOString(),
+            bounded: mission.booking ? "BOOKING" : "UNBOOKED_DEFAULT",
+          },
+          isDemo: mission.isDemo,
+        },
+        tx,
+      );
+
       return session;
     });
 
@@ -217,6 +238,22 @@ export async function revokeMissionSession(input: {
       where: { missionId: input.missionId, revokedAt: null },
       data: { revokedAt: input.now, revokedFor: input.reason },
     });
+
+    // Written even when nothing was revoked, and `revokedCount` says which it
+    // was. The agent is told either way -- that is the point of the message
+    // below -- and the trail records what the cloud declared, not only what it
+    // found.
+    await recordAuditEvent(
+      {
+        category: "MISSION",
+        action: "MISSION_SESSION_REVOKED",
+        missionId: input.missionId,
+        entityType: "Mission",
+        entityId: input.missionId,
+        detail: { reason: input.reason, revokedCount: count },
+      },
+      tx,
+    );
 
     // Told even when nothing was revoked. The agent's view is what matters, and
     // an agent that believes in a session the cloud has forgotten is the exact
