@@ -179,6 +179,16 @@ export interface LinkStore {
   liveMissionId(observatoryId: string): Promise<string | null>;
 
   /**
+   * Does this observatory own this mission?
+   *
+   * The scoping check for the one inbound message that carries a missionId and is
+   * not written through a store method that scopes it already. `applyMissionEvent`
+   * and `recordCommandVerdict` both take the reporting observatory and answer
+   * WRONG_OBSERVATORY; a telemetry delta is relayed, not written, so it needs this.
+   */
+  observatoryOwnsMission(observatoryId: string, missionId: string): Promise<boolean>;
+
+  /**
    * The stored safety envelope for this observatory, or null when none exists.
    *
    * Null and an envelope whose `maxAltitudeDegrees` is null mean the same thing to

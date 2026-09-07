@@ -11,6 +11,7 @@ import {
   type Send,
 } from "@/link/protocol";
 import type { LinkStore, ObservatoryRecord } from "@/link/store";
+import type { MissionBroadcast } from "@/mission/broadcast";
 
 export type LinkState = "AWAITING_HELLO" | "ONLINE" | "CLOSED";
 
@@ -28,12 +29,22 @@ export type LinkState = "AWAITING_HELLO" | "ONLINE" | "CLOSED";
 export class AgentLink {
   private state: LinkState = "AWAITING_HELLO";
   private lastActivityAt: number;
+  private readonly missionOwnership = new Map<string, boolean>();
 
   constructor(
     readonly observatory: ObservatoryRecord,
     private readonly store: LinkStore,
     private readonly send: Send,
     private readonly close: Close,
+    /**
+     * Where an applied event goes on to reach the watching customers.
+     *
+     * Required, with no default. A no-op default would be the same mistake issues
+     * #25 and #27 recorded: the agent ran its state machine, the cloud recorded
+     * that a message had arrived, and every transition went nowhere -- and nothing
+     * failed, because nothing asserted the wiring existed.
+     */
+    private readonly broadcast: MissionBroadcast,
     private readonly now: () => number = () => Date.now(),
   ) {
     this.lastActivityAt = this.now();
@@ -112,11 +123,14 @@ export class AgentLink {
         await this.applyCommandAck(message);
         return;
 
+      case "AGENT_STATE_DELTA":
+        await this.applyStateDelta(message);
+        return;
+
       // AGENT_HEARTBEAT is liveness, and `lastActivityAt` above is what consumes
-      // it. AGENT_STATE_DELTA, AGENT_LIVE_FRAME and AGENT_CAPTURE_READY carry
-      // state this service does not own yet -- DV-060, DV-032 and DV-061 own
-      // them -- so they are recorded and go no further, deliberately rather than
-      // by omission.
+      // it. AGENT_LIVE_FRAME and AGENT_CAPTURE_READY carry state this service does
+      // not own yet -- DV-032 and DV-061 own them -- so they are recorded and go no
+      // further, deliberately rather than by omission.
       default:
         return;
     }
@@ -145,6 +159,19 @@ export class AgentLink {
 
     if (outcome === "WRONG_OBSERVATORY" || outcome === "NOT_FOUND") {
       this.refuse(`Mission ${message.missionId} is not this observatory's to move.`);
+      return;
+    }
+
+    // Only what actually moved the mission. A `RECORDED` outcome is an event that
+    // arrived after a terminal state and did not change it, and telling a customer
+    // the mission had gone back to OBSERVING after they were shown FAILED would be
+    // reporting an ordering artefact as a fact about a telescope.
+    if (outcome === "APPLIED") {
+      this.broadcast.missionMoved({
+        missionId: message.missionId,
+        state: message.state,
+        failureReason: message.failureReason ?? null,
+      });
     }
   }
 
@@ -171,7 +198,59 @@ export class AgentLink {
 
     if (outcome === "WRONG_OBSERVATORY" || outcome === "NOT_FOUND") {
       this.refuse(`Command ${message.commandId} is not this observatory's to answer.`);
+      return;
     }
+
+    // `IGNORED_STALE` and `DUPLICATE_ACK` are not relayed: the first is a late ack
+    // that did not change the row, the second is the agent saying it had seen the
+    // command before. Neither is news about the command's fate, and a customer
+    // watching a NUDGE resolve should not see its outcome change twice.
+    if (outcome === "RECORDED") await this.broadcast.commandAnswered(message);
+  }
+
+  /**
+   * Telemetry from the agent's control loop.
+   *
+   * Not recorded here, only relayed. This is a sample of a continuously changing
+   * value arriving several times a second; the durable account of what the
+   * observatory did is `AGENT_MISSION_EVENT` and the command audit, and writing
+   * every delta would grow a table without answering a question those two do not.
+   *
+   * A delta holding no mission has nothing to fan out to -- the mission channel is
+   * keyed by mission, and an idle observatory has no subscribers. The operator
+   * console reads observatory-wide telemetry, which is DV-063's, not this.
+   */
+  private async applyStateDelta(
+    message: Extract<AgentToCloudMessage, { type: "AGENT_STATE_DELTA" }>,
+  ): Promise<void> {
+    const missionId = message.missionId;
+    if (!missionId) return;
+    if (!(await this.ownsMission(missionId))) {
+      this.refuse(`Mission ${missionId} is not this observatory's to report on.`);
+      return;
+    }
+    this.broadcast.telemetryReported(missionId, message);
+  }
+
+  /**
+   * Does this observatory own the mission a delta claims?
+   *
+   * Cached per connection because deltas arrive on the agent's control loop --
+   * several a second, all naming the same mission -- and asking the database each
+   * time would turn a telemetry sample into a query. A mission's observatory never
+   * changes, so the answer cannot go stale; the cache is per link, so it dies with
+   * the socket rather than outliving the process's knowledge.
+   */
+  private async ownsMission(missionId: string): Promise<boolean> {
+    const cached = this.missionOwnership.get(missionId);
+    if (cached !== undefined) return cached;
+
+    const owned = await this.store.observatoryOwnsMission(
+      this.observatory.id,
+      missionId,
+    );
+    this.missionOwnership.set(missionId, owned);
+    return owned;
   }
 
   /**

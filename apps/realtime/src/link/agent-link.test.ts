@@ -9,6 +9,7 @@ import { FakeLinkStore } from "@/link/fake-store";
 import { AgentLinkRegistry } from "@/link/registry";
 import { HEARTBEAT_GRACE_SECONDS, PROTOCOL_VERSION } from "@/link/protocol";
 import type { ObservatoryRecord } from "@/link/store";
+import { RecordingBroadcast } from "@/mission/fake-broadcast";
 
 const observatory: ObservatoryRecord = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -17,6 +18,7 @@ const observatory: ObservatoryRecord = {
 };
 
 let store: FakeLinkStore;
+let broadcast: RecordingBroadcast;
 let sent: CloudToAgentMessage[];
 let closedWith: string[];
 let now: number;
@@ -27,6 +29,7 @@ function makeLink(record: ObservatoryRecord = observatory) {
     store,
     (message) => sent.push(message),
     (reason) => closedWith.push(reason),
+    broadcast,
     () => now,
   );
 }
@@ -59,6 +62,7 @@ function heartbeat(messageId = randomUUID(), sequence = 1) {
 
 beforeEach(() => {
   store = new FakeLinkStore();
+  broadcast = new RecordingBroadcast();
   sent = [];
   closedWith = [];
   now = Date.parse("2026-09-03T20:00:00.000Z");

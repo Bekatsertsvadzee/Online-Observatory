@@ -150,6 +150,48 @@ DV-112, DV-115.
 
 **Stage 7 — freeze and prove:** DV-114, DV-037, DV-038.
 
+## What DV-060 built, and what it did not
+
+The mission client channel is live: `/ws/mission/{missionId}`, authenticated by the
+browser session cookie behind an Origin check, subscribed with `CLIENT_SUBSCRIBE`, and
+fanned out to every subscriber on the mission. `AGENT_STATE_DELTA`, which the cloud had
+been recording and discarding since DV-057, now reaches customers as `MISSION_TELEMETRY`.
+
+**The fan-out is a set per mission from the first commit**, not one channel per mission.
+DV-103 adds observers to exactly that collection, and this table is the reason it is an
+edit rather than the rewrite the stage list warns about.
+
+| Client message | What happens |
+| --- | --- |
+| `CLIENT_SUBSCRIBE` | Admitted only when the URL's mission, the message's mission and the presented session's mission all agree, and the session belongs to the authenticated user. Every refusal is worded identically. |
+| `CLIENT_PING` | Keep-alive. No reply: `MissionChannelMessage` has no pong, and inventing one would be a message outside the contract. |
+
+| Agent message | Reaches the client as |
+| --- | --- |
+| `AGENT_MISSION_EVENT` | `MISSION_STATE`, but only on `APPLIED`. A transition that arrived after a terminal state is an ordering artefact, not news about a telescope. |
+| `AGENT_STATE_DELTA` | `MISSION_TELEMETRY`, narrowed to the contract's client-safe fields. Device health, pointing, focuser position and agent version stop at the cloud. |
+| `AGENT_COMMAND_ACK` | `MISSION_COMMAND_RESULT`, routed by the **minted command row**, never by the ack's own `missionId`. |
+
+**Not built: `MISSION_STREAM`, and deliberately.** The contract describes two live-view
+paths and does not join them. The agent pushes `AGENT_LIVE_FRAME` plus a binary frame up
+its own link; the client is told a `streamUrl` and reads frames from there. Nothing in
+`contracts/openapi.yaml`, `docs/architecture.md`, `docs/observatory-protocol.md` or any
+ADR says how the first becomes the second — where the bytes are held, what serves them,
+or what signs the URL. That is an architecture decision and it is owed an ADR before any
+code implements it. DV-032 has not produced a frame yet, so nothing is blocked meanwhile;
+a fabricated `streamUrl` would have been.
+
+**New required environment variable: `APP_URL` on the realtime service.** The only origin
+a mission-channel handshake may come from. It has no default on purpose — a permissive
+fallback would silently disable the check that stops another site opening a subscription
+as a signed-in customer. It must be added to `.env.example` and to the deployment
+environment before the service starts.
+
+The mission channel also constrains deployment: the session cookie is `__Host-` prefixed
+in production, so the browser sends it only to the host that set it. **The realtime
+service must be served from the same host as the web app**, on a path, not on a
+`realtime.` subdomain.
+
 ## Critical path
 
 DV-003 → DV-020/021/022 → DV-023/025 → DV-026 → DV-057/058 → DV-040 → DV-060 →
