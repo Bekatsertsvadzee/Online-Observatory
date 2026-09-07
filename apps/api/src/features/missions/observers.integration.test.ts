@@ -18,6 +18,7 @@ const {
   detachAllObservers,
   listMissionObservers,
   releaseObserverSeat,
+  setMissionObservation,
   takeObserverSeat,
 } = await import("@/features/missions/observers");
 const { zMissionObserver, zMissionObserverList } =
@@ -388,5 +389,100 @@ describe("who may see the list", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("the controller's consent (DV-101)", () => {
+  it("is what makes a session observable, and it starts closed", async () => {
+    const hopeful = await createUser("hopeful");
+
+    // Shipped state: private. ADR-007 rule 5.
+    const before = await takeObserverSeat({ missionId, userId: hopeful, now: NOW });
+    expect(before.ok).toBe(false);
+
+    const opened = await setMissionObservation({
+      missionId,
+      actor: { id: controllerId, role: "USER" },
+      observable: true,
+      now: NOW,
+    });
+    expect(opened.ok).toBe(true);
+
+    const after = await takeObserverSeat({ missionId, userId: hopeful, now: NOW });
+    expect(after.ok).toBe(true);
+  });
+
+  it("detaches everyone watching when the controller closes it", async () => {
+    await openToObservers();
+    for (let index = 0; index < 3; index += 1) {
+      await takeObserverSeat({
+        missionId,
+        userId: await createUser(`observer-${index}`),
+        now: NOW,
+      });
+    }
+
+    const closed = await setMissionObservation({
+      missionId,
+      actor: { id: controllerId, role: "USER" },
+      observable: false,
+      now: NOW,
+    });
+
+    expect(closed.ok).toBe(true);
+    if (closed.ok) expect(closed.value.detached).toBe(3);
+
+    // Consent withdrawn stops the watching now, not for the next person to ask.
+    expect(
+      await database.missionParticipant.count({ where: { missionId, status: "JOINED" } }),
+    ).toBe(0);
+  });
+
+  it("refuses an operator opening somebody else's session", async () => {
+    const operator = await createUser("operator");
+
+    const result = await setMissionObservation({
+      missionId,
+      actor: { id: operator, role: "OPERATOR" },
+      observable: true,
+      now: NOW,
+    });
+
+    // Nobody is watched without agreeing, and an operator is not the person whose
+    // agreement this is. Deliberately not the usual operator escape hatch.
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(404);
+  });
+
+  it("refuses a mission that is not live", async () => {
+    await database.mission.update({
+      where: { id: missionId },
+      data: { state: "COMPLETE" },
+    });
+
+    const result = await setMissionObservation({
+      missionId,
+      actor: { id: controllerId, role: "USER" },
+      observable: true,
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("MISSION_NOT_ACTIVE");
+  });
+
+  it("writes the consent to the audit trail", async () => {
+    await setMissionObservation({
+      missionId,
+      actor: { id: controllerId, role: "USER" },
+      observable: true,
+      now: NOW,
+    });
+
+    const rows = await database.auditLog.findMany({
+      where: { missionId, category: "MISSION" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(rows[0]?.action).toBe("MISSION_OPENED_TO_OBSERVERS");
   });
 });

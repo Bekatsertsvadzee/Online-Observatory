@@ -285,6 +285,83 @@ export async function releaseObserverSeat(input: {
 }
 
 /**
+ * The controller's consent, and the only way a session becomes observable.
+ *
+ * ADR-007 rule 5: sessions are private by default and become observable only when
+ * their owner chooses to open one. Nobody is watched without agreeing, so this is
+ * owner-only -- an operator does not get to open somebody's session on their
+ * behalf, which is why the role check below is an equality test on the owner and
+ * not the usual `actor.role === "OPERATOR" ||` escape hatch.
+ *
+ * Closing detaches everyone currently watching, in the same transaction. The
+ * contract says "closing a session detaches any attached observers", and consent
+ * withdrawn has to stop the watching now rather than for the next person to ask.
+ */
+export async function setMissionObservation(input: {
+  missionId: string;
+  actor: { id: string; role: "USER" | "OPERATOR" };
+  observable: boolean;
+  now: Date;
+}): Promise<ObserverResult<{ observable: boolean; detached: number }>> {
+  const database = getDatabase();
+  const { missionId, actor, observable, now } = input;
+
+  const mission = await database.mission.findUnique({
+    where: { id: missionId },
+    select: { userId: true, state: true, isDemo: true },
+  });
+
+  // Existence stays private, and "not yours" is not a distinction a stranger gets
+  // to make -- the same 404 the rest of the mission surface gives.
+  if (!mission || mission.userId !== actor.id) return NO_SUCH_MISSION;
+
+  if (
+    !LIVE_MISSION_STATES.includes(
+      mission.state as (typeof LIVE_MISSION_STATES)[number],
+    )
+  ) {
+    return {
+      ok: false,
+      status: 409,
+      code: "MISSION_NOT_ACTIVE",
+      message: `A mission in ${mission.state} has no session to open.`,
+    };
+  }
+
+  return database.$transaction(async (tx) => {
+    await tx.mission.update({
+      where: { id: missionId },
+      data: { joinPolicy: observable ? "OPEN" : "DISABLED" },
+    });
+
+    const detached = observable
+      ? 0
+      : (
+          await tx.missionParticipant.updateMany({
+            where: { missionId, status: "JOINED" },
+            data: { status: "LEFT", leftAt: now },
+          })
+        ).count;
+
+    await recordAuditEvent(
+      {
+        category: "MISSION",
+        action: observable ? "MISSION_OPENED_TO_OBSERVERS" : "MISSION_CLOSED_TO_OBSERVERS",
+        actorUserId: actor.id,
+        missionId,
+        entityType: "Mission",
+        entityId: missionId,
+        detail: { observable, detached },
+        isDemo: mission.isDemo,
+      },
+      tx,
+    );
+
+    return { ok: true, value: { observable, detached } };
+  });
+}
+
+/**
  * Close a session to observers, detaching everyone watching.
  *
  * The contract's own words on `setMissionObservation`: "Closing a session
