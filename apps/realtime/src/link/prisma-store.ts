@@ -21,8 +21,16 @@ import {
   type RelayableCommand,
   type ResumeOutcome,
 } from "@/link/store";
+import type { ChannelUser, MissionChannelStore, MissionSnapshot } from "@/mission/store";
 
-export function createPrismaStore(connectionString: string): LinkStore {
+/**
+ * The one store the process runs on: the agent link's surface and the mission
+ * channel's, satisfied by a single object over a single connection pool. The two
+ * interfaces stay separate so neither channel's code can reach the other's methods.
+ */
+export type RealtimeStore = LinkStore & MissionChannelStore;
+
+export function createPrismaStore(connectionString: string): RealtimeStore {
   const database = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
 
   return {
@@ -84,6 +92,42 @@ export function createPrismaStore(connectionString: string): LinkStore {
       });
     },
 
+    async findUserBySessionTokenHash(
+      tokenHash: string,
+      now: Date,
+    ): Promise<ChannelUser | null> {
+      const session = await database.session.findUnique({
+        where: { tokenHash },
+        select: {
+          expiresAt: true,
+          user: { select: { id: true, role: true, emailVerifiedAt: true } },
+        },
+      });
+
+      // The same three refusals as the API's getCurrentSession: no such session,
+      // lapsed, or an account whose email was never verified. An unverified
+      // account cannot hold a mission, so it has nothing here to watch.
+      if (!session || session.expiresAt <= now || !session.user.emailVerifiedAt) {
+        return null;
+      }
+
+      return { id: session.user.id, role: session.user.role };
+    },
+
+    async loadMissionSnapshot(missionId: string): Promise<MissionSnapshot | null> {
+      const mission = await database.mission.findUnique({
+        where: { id: missionId },
+        select: { id: true, state: true, failureReason: true },
+      });
+      if (!mission) return null;
+
+      return {
+        missionId: mission.id,
+        state: mission.state,
+        failureReason: mission.failureReason,
+      };
+    },
+
     async loadSession(sessionId: string): Promise<ActiveSession | null> {
       const session = await database.missionSession.findUnique({
         where: { id: sessionId },
@@ -110,6 +154,17 @@ export function createPrismaStore(connectionString: string): LinkStore {
         select: { id: true, missionId: true, userId: true, expiresAt: true },
       });
       return session ? toActiveSession(session) : null;
+    },
+
+    async observatoryOwnsMission(
+      observatoryId: string,
+      missionId: string,
+    ): Promise<boolean> {
+      const mission = await database.mission.findUnique({
+        where: { id: missionId },
+        select: { observatoryId: true },
+      });
+      return mission?.observatoryId === observatoryId;
     },
 
     async applyMissionEvent(event: MissionEventRecord): Promise<MissionEventOutcome> {

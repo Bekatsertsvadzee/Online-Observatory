@@ -14,6 +14,7 @@ import { FakeLinkStore } from "@/link/fake-store";
 import { AgentLinkRegistry } from "@/link/registry";
 import { PROTOCOL_VERSION } from "@/link/protocol";
 import type { ObservatoryRecord, RelayableCommand } from "@/link/store";
+import { RecordingBroadcast } from "@/mission/fake-broadcast";
 
 /**
  * ADR-009's cloud half: a notification becomes a message on the agent socket.
@@ -54,6 +55,7 @@ function sessionNotification(sessionId: string | null): string {
 }
 
 let store: FakeLinkStore;
+let broadcast: RecordingBroadcast;
 let registry: AgentLinkRegistry;
 let relay: AgentRelay;
 let sent: CloudToAgentMessage[];
@@ -87,6 +89,7 @@ async function connectAgent(): Promise<AgentLink> {
     store,
     (message) => sent.push(message),
     () => undefined,
+    broadcast,
     () => NOW.getTime(),
   );
 
@@ -112,6 +115,7 @@ async function connectAgent(): Promise<AgentLink> {
 
 beforeEach(() => {
   store = new FakeLinkStore();
+  broadcast = new RecordingBroadcast();
   registry = new AgentLinkRegistry();
   relay = new AgentRelay(store, registry, () => NOW);
   sent = [];
@@ -161,6 +165,7 @@ describe("relaying a command", () => {
       store,
       (message) => sent.push(message),
       () => undefined,
+      broadcast,
       () => NOW.getTime(),
     );
     registry.admit(observatory.id, link);

@@ -8,6 +8,7 @@ import { AgentLink } from "@/link/agent-link";
 import { FakeLinkStore } from "@/link/fake-store";
 import { PROTOCOL_VERSION } from "@/link/protocol";
 import type { ObservatoryRecord } from "@/link/store";
+import { RecordingBroadcast } from "@/mission/fake-broadcast";
 
 /**
  * What an inbound agent message means, as opposed to whether it was allowed.
@@ -34,6 +35,7 @@ const SESSION_ID = "33333333-3333-4333-8333-333333333333";
 const USER_ID = "44444444-4444-4444-8444-444444444444";
 
 let store: FakeLinkStore;
+let broadcast: RecordingBroadcast;
 let sent: CloudToAgentMessage[];
 let now: number;
 
@@ -43,6 +45,7 @@ function makeLink() {
     store,
     (message) => sent.push(message),
     () => {},
+    broadcast,
     () => now,
   );
 }
@@ -122,6 +125,7 @@ async function onlineLink() {
 
 beforeEach(() => {
   store = new FakeLinkStore();
+  broadcast = new RecordingBroadcast();
   sent = [];
   now = Date.parse("2026-12-15T20:00:00.000Z");
   store.addMission(MISSION_ID, { observatoryId: observatory.id, state: "CAPTURING" });

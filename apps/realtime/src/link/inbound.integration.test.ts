@@ -11,6 +11,7 @@ import { createPrismaStore } from "@/link/prisma-store";
 import { AgentLinkRegistry } from "@/link/registry";
 import { PROTOCOL_VERSION } from "@/link/protocol";
 import type { LinkStore, ObservatoryRecord } from "@/link/store";
+import { RecordingBroadcast } from "@/mission/fake-broadcast";
 
 /**
  * Issues #25, #26 and #27 against a real PostgreSQL instance.
@@ -32,6 +33,7 @@ const NOW = new Date("2026-12-15T20:00:00.000Z");
 
 let database: PrismaClient;
 let store: LinkStore;
+let broadcast: RecordingBroadcast;
 
 let observatory: ObservatoryRecord;
 let telescopeId: string;
@@ -47,6 +49,7 @@ function makeLink() {
     store,
     (message) => sent.push(message),
     () => {},
+    broadcast,
     () => NOW.getTime(),
   );
 }
@@ -94,6 +97,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   sent = [];
+  broadcast = new RecordingBroadcast();
 
   await database.observatoryCommand.deleteMany();
   await database.missionSession.deleteMany();

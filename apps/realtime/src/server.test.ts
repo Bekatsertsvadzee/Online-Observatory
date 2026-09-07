@@ -1,11 +1,14 @@
+import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 
 import { hashDeviceToken } from "@/auth/device-token";
+import { hashSessionToken } from "@/auth/user-session";
 import { FakeLinkStore } from "@/link/fake-store";
 import type { ObservatoryRecord } from "@/link/store";
+import type { ChannelUser } from "@/mission/store";
 import { createRealtimeServer } from "@/server";
 
 /**
@@ -18,6 +21,7 @@ import { createRealtimeServer } from "@/server";
  * and no test could have caught it without going through the upgrade.
  */
 const DEVICE_TOKEN = "device-token-for-the-tbilisi-observatory";
+const APP_URL = "https://darkview.test";
 
 const realObservatory: ObservatoryRecord = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -52,7 +56,7 @@ beforeEach(async () => {
   store.registerToken(hashDeviceToken(DEVICE_TOKEN), realObservatory);
   clients = [];
 
-  server = createRealtimeServer(store);
+  server = createRealtimeServer(store, APP_URL);
   const httpServer = server.listen(0);
   await new Promise<void>((resolve) => httpServer.once("listening", () => resolve()));
   port = (httpServer.address() as AddressInfo).port;
@@ -122,5 +126,141 @@ describe("who is let in", () => {
     // The incumbent keeps the observatory, and keeps its own record.
     expect(first.readyState).toBe(WebSocket.OPEN);
     expect(server.registry.get(realObservatory.id)!.observatory).toEqual(realObservatory);
+  });
+});
+
+/**
+ * The mission channel through the real HTTP upgrade.
+ *
+ * The channel's own rules are covered against an in-memory channel in
+ * `mission/channel.test.ts`. What is only reachable here is the handshake: the
+ * origin check, the cookie, and the fact that a customer's socket is routed to a
+ * mission channel and never to the agent link.
+ */
+describe("the mission client channel", () => {
+  const SESSION_COOKIE = "a-browser-session-cookie-value";
+  const MISSION = "22222222-2222-4222-8222-222222222222";
+
+  const customer: ChannelUser = {
+    id: "44444444-4444-4444-8444-444444444444",
+    role: "USER",
+  };
+
+  let missionSessionId: string;
+
+  function openMissionSocket(headers: Record<string, string>) {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/mission/${MISSION}`, {
+      headers,
+    });
+    clients.push(client);
+
+    return new Promise<WebSocket>((resolve, reject) => {
+      client.once("open", () => resolve(client));
+      client.once("error", reject);
+      client.once("unexpected-response", (_request, response) =>
+        reject(new Error(`refused with ${response.statusCode}`)),
+      );
+    });
+  }
+
+  function signedIn() {
+    return {
+      origin: APP_URL,
+      cookie: `darkview_session=${SESSION_COOKIE}`,
+    };
+  }
+
+  beforeEach(() => {
+    missionSessionId = randomUUID();
+    store.registerUserSession(
+      hashSessionToken(SESSION_COOKIE),
+      customer,
+      new Date(Date.now() + 60 * 60_000),
+    );
+    store.addMission(MISSION, {
+      observatoryId: realObservatory.id,
+      state: "OBSERVING",
+    });
+    store.setActiveSession(realObservatory.id, {
+      sessionId: missionSessionId,
+      missionId: MISSION,
+      userId: customer.id,
+      expiresAt: new Date(Date.now() + 30 * 60_000),
+    });
+  });
+
+  it("refuses a handshake from another origin", async () => {
+    // A WebSocket handshake carries the customer's cookies whatever page opened
+    // it. Without this, any site could subscribe as a signed-in customer.
+    await expect(
+      openMissionSocket({
+        origin: "https://darkview.ge.evil.example",
+        cookie: `darkview_session=${SESSION_COOKIE}`,
+      }),
+    ).rejects.toThrow("refused with 403");
+  });
+
+  it("refuses a handshake with no session cookie", async () => {
+    await expect(openMissionSocket({ origin: APP_URL })).rejects.toThrow(
+      "refused with 401",
+    );
+  });
+
+  it("refuses a handshake carrying an unknown cookie", async () => {
+    await expect(
+      openMissionSocket({ origin: APP_URL, cookie: "darkview_session=guessed" }),
+    ).rejects.toThrow("refused with 401");
+  });
+
+  it("delivers the mission's state to a customer who subscribes", async () => {
+    const client = await openMissionSocket(signedIn());
+    const received = new Promise<Record<string, unknown>>((resolve) =>
+      client.once("message", (data) => resolve(JSON.parse(data.toString()))),
+    );
+
+    client.send(
+      JSON.stringify({
+        type: "CLIENT_SUBSCRIBE",
+        messageId: randomUUID(),
+        sentAt: new Date().toISOString(),
+        missionId: MISSION,
+        sessionId: missionSessionId,
+      }),
+    );
+
+    expect(await received).toMatchObject({
+      type: "MISSION_STATE",
+      missionId: MISSION,
+      state: "OBSERVING",
+    });
+    expect(server.missions.subscribers(MISSION)).toHaveLength(1);
+  });
+
+  it("does not register a customer's socket as an agent link", async () => {
+    // The two channels are separate credentials and separate powers. A browser
+    // socket appearing in the agent registry would be a socket that could be
+    // handed a CommandEnvelope.
+    await openMissionSocket(signedIn());
+
+    expect(server.registry.size).toBe(0);
+  });
+
+  it("drops the subscriber from the fan-out when the socket closes", async () => {
+    const client = await openMissionSocket(signedIn());
+    client.close();
+
+    await vi.waitFor(() => expect(server.missions.size).toBe(0));
+  });
+
+  it("refuses an unknown path outright", async () => {
+    const stray = new WebSocket(`ws://127.0.0.1:${port}/ws/nonsense`);
+    clients.push(stray);
+
+    await expect(
+      new Promise((_resolve, reject) => {
+        stray.once("open", () => reject(new Error("opened")));
+        stray.once("error", (error) => reject(error));
+      }),
+    ).rejects.toThrow();
   });
 });

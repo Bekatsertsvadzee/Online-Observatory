@@ -3,16 +3,25 @@ import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { authenticateAgent } from "@/auth/device-token";
+import { authenticateClient, isAllowedOrigin } from "@/auth/user-session";
 import { AgentLink } from "@/link/agent-link";
 import { AgentRelay } from "@/link/agent-relay";
 import { CommandListener } from "@/link/command-listener";
 import { createPrismaStore } from "@/link/prisma-store";
 import { AgentLinkRegistry } from "@/link/registry";
 import { HEARTBEAT_INTERVAL_SECONDS } from "@/link/protocol";
-import type { LinkStore, ObservatoryRecord } from "@/link/store";
+import type { ObservatoryRecord } from "@/link/store";
+import type { RealtimeStore } from "@/link/prisma-store";
+import { MissionRelay } from "@/mission/broadcast";
+import { MissionChannel } from "@/mission/channel";
+import { MissionChannelRegistry } from "@/mission/registry";
+import type { ChannelUser } from "@/mission/store";
 import { getEnvironment } from "@/env";
 
 const AGENT_PATH = "/ws/agent";
+
+/** `/ws/mission/{missionId}`, as the contract's missionClient channel names it. */
+const MISSION_PATH = /^\/ws\/mission\/([0-9a-fA-F-]{36})$/;
 
 /**
  * The Darkview realtime service.
@@ -24,9 +33,11 @@ const AGENT_PATH = "/ws/agent";
  * The observatory dials out to this service. Nothing here ever dials the
  * observatory, which has no reachable address and no listening port.
  */
-export function createRealtimeServer(store: LinkStore) {
+export function createRealtimeServer(store: RealtimeStore, appUrl: string) {
   const registry = new AgentLinkRegistry();
   const relay = new AgentRelay(store, registry);
+  const missions = new MissionChannelRegistry();
+  const broadcast = new MissionRelay(store, missions);
   const httpServer = createServer((_request, response) => {
     response.writeHead(404).end();
   });
@@ -34,22 +45,52 @@ export function createRealtimeServer(store: LinkStore) {
 
   httpServer.on("upgrade", (request, socket, head) => {
     void (async () => {
-      if (new URL(request.url ?? "/", "http://localhost").pathname !== AGENT_PATH) {
+      const path = new URL(request.url ?? "/", "http://localhost").pathname;
+
+      if (path === AGENT_PATH) {
+        const observatory = await authenticateAgent(
+          store,
+          request.headers.authorization,
+        );
+        if (!observatory) {
+          // No detail: an unauthenticated caller learns nothing about which part
+          // of the credential was wrong, or whether the observatory exists.
+          socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+
+        sockets.handleUpgrade(request, socket, head, (connection) => {
+          attach(connection, observatory);
+        });
+        return;
+      }
+
+      const mission = MISSION_PATH.exec(path);
+      if (!mission) {
         socket.destroy();
         return;
       }
 
-      const observatory = await authenticateAgent(store, request.headers.authorization);
-      if (!observatory) {
-        // No detail: an unauthenticated caller learns nothing about which part
-        // of the credential was wrong, or whether the observatory exists.
+      // Origin first, before the cookie is even read. A WebSocket handshake is not
+      // subject to the same-origin policy, so any page anywhere can open one to
+      // this service and the browser will attach the customer's cookies. Refusing
+      // here is what stops another site driving a subscription as the customer.
+      if (!isAllowedOrigin(request.headers.origin, appUrl)) {
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+
+      const user = await authenticateClient(store, request.headers.cookie, new Date());
+      if (!user) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         return;
       }
 
       sockets.handleUpgrade(request, socket, head, (connection) => {
-        attach(connection, observatory);
+        watch(connection, mission[1], user);
       });
     })();
   });
@@ -68,6 +109,7 @@ export function createRealtimeServer(store: LinkStore) {
       store,
       (message) => connection.send(JSON.stringify(message)),
       (reason) => connection.close(1000, reason),
+      broadcast,
     );
 
     const admission = registry.admit(observatory.id, link);
@@ -94,13 +136,49 @@ export function createRealtimeServer(store: LinkStore) {
     });
   }
 
+  /**
+   * One customer watching one mission.
+   *
+   * The channel is registered before the subscribe is validated, so that a socket
+   * that never subscribes is still swept by the idle timer and still removed on
+   * close. `dispatch` refuses to send to an unsubscribed channel, so being in the
+   * registry early grants it nothing.
+   */
+  function watch(connection: WebSocket, missionId: string, user: ChannelUser) {
+    const channel = new MissionChannel(
+      missionId,
+      user,
+      store,
+      (message) => connection.send(JSON.stringify(message)),
+      (reason) => connection.close(1000, reason),
+    );
+
+    missions.add(missionId, channel);
+
+    connection.on("message", (data) => {
+      // Caught, not left to `void`. A rejection here -- the database dropping
+      // mid-subscribe -- would otherwise be an unhandled rejection, and Node
+      // exits the process on those. That process also holds the observatory
+      // socket, so one customer's message during a database blip would take the
+      // telescope link down with it. The customer loses their view; the mission
+      // does not lose its link.
+      void channel.receive(data.toString()).catch((error) => {
+        console.error("darkview realtime: mission channel", error);
+        channel.terminate("internal error");
+      });
+    });
+    connection.on("close", () => missions.remove(missionId, channel));
+  }
+
   const heartbeatSweep = setInterval(() => {
     void registry.expireSilent(Date.now());
+    missions.expireSilent(Date.now());
   }, HEARTBEAT_INTERVAL_SECONDS * 1000);
 
   return {
     registry,
     relay,
+    missions,
     listen: (port: number) => httpServer.listen(port),
     close: async () => {
       clearInterval(heartbeatSweep);
@@ -114,7 +192,10 @@ export function createRealtimeServer(store: LinkStore) {
 // apps/api holds no agent link, asserted in realtime-is-separate.test.ts.
 if (process.env.NODE_ENV !== "test") {
   const environment = getEnvironment();
-  const server = createRealtimeServer(createPrismaStore(environment.DATABASE_URL));
+  const server = createRealtimeServer(
+    createPrismaStore(environment.DATABASE_URL),
+    environment.APP_URL,
+  );
   server.listen(environment.REALTIME_PORT);
 
   // ADR-009. The listener is an optimisation over the sweep, so a failure to

@@ -24,6 +24,11 @@ import {
   type RelayableCommand,
   type ResumeOutcome,
 } from "@/link/store";
+import type {
+  ChannelUser,
+  MissionChannelStore,
+  MissionSnapshot,
+} from "@/mission/store";
 
 export type FakeMission = {
   observatoryId: string;
@@ -51,10 +56,11 @@ export type FakeCommandVerdict = {
 };
 
 /**
- * In-memory LinkStore for tests. CI has no database, and the rules worth proving
- * here -- refusal, expiry, replay -- are about the link, not about SQL.
+ * In-memory store for tests, covering both channels. CI has no database, and the
+ * rules worth proving here -- refusal, expiry, replay, who may watch what -- are
+ * about the channels, not about SQL.
  */
-export class FakeLinkStore implements LinkStore {
+export class FakeLinkStore implements LinkStore, MissionChannelStore {
   readonly recorded: InboundMessageRecord[] = [];
   readonly linkUp: string[] = [];
   readonly linkLost: { observatoryId: string; at: Date }[] = [];
@@ -74,6 +80,10 @@ export class FakeLinkStore implements LinkStore {
   private readonly commands = new Map<string, RelayableCommand>();
   private readonly sessions = new Map<string, ActiveSession>();
   private readonly observatoryOf = new Map<string, string>();
+  private readonly userSessions = new Map<
+    string,
+    { user: ChannelUser; expiresAt: Date }
+  >();
 
   registerToken(tokenHash: string, observatory: ObservatoryRecord) {
     this.observatories.set(tokenHash, observatory);
@@ -175,6 +185,31 @@ export class FakeLinkStore implements LinkStore {
 
   verdictOf(commandId: string): FakeCommandVerdict | undefined {
     return this.verdicts.get(commandId);
+  }
+
+  /** Put a signed-in browser session in the store, as the API's cookie would present it. */
+  registerUserSession(tokenHash: string, user: ChannelUser, expiresAt: Date) {
+    this.userSessions.set(tokenHash, { user, expiresAt });
+  }
+
+  async findUserBySessionTokenHash(tokenHash: string, now: Date) {
+    const found = this.userSessions.get(tokenHash);
+    if (!found || found.expiresAt <= now) return null;
+    return found.user;
+  }
+
+  async loadMissionSnapshot(missionId: string): Promise<MissionSnapshot | null> {
+    const mission = this.missions.get(missionId);
+    if (!mission) return null;
+    return {
+      missionId,
+      state: mission.state,
+      failureReason: mission.failureReason,
+    };
+  }
+
+  async observatoryOwnsMission(observatoryId: string, missionId: string) {
+    return this.missions.get(missionId)?.observatoryId === observatoryId;
   }
 
   async applyMissionEvent(event: MissionEventRecord): Promise<MissionEventOutcome> {
