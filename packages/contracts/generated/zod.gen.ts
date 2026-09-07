@@ -544,7 +544,7 @@ export const zMissionFailureReason = z.enum([
 export const zMission = z.strictObject({
     id: z.uuid(),
     userId: z.uuid(),
-    bookingId: z.uuid(),
+    bookingId: z.uuid().nullable(),
     targetId: z.uuid(),
     observatoryId: z.uuid(),
     state: zMissionState,

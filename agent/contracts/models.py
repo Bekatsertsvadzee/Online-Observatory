@@ -632,7 +632,7 @@ class Mission(BaseModel):
     )
     id: UUID
     user_id: UUID = Field(..., alias='userId')
-    booking_id: UUID = Field(..., alias='bookingId')
+    booking_id: UUID | None = Field(..., alias='bookingId', description='The booking this mission was sold from, or null. Required so it is always\nstated, nullable because not every mission is sold: an operator mission and\na demo mission have no booking, and inventing one for them would put a\nfiction in the payment tables.\n')
     target_id: UUID = Field(..., alias='targetId')
     observatory_id: UUID = Field(..., alias='observatoryId')
     state: MissionState

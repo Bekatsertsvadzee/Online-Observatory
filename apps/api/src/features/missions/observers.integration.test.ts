@@ -21,7 +21,7 @@ const {
   setMissionObservation,
   takeObserverSeat,
 } = await import("@/features/missions/observers");
-const { zMissionObserver, zMissionObserverList } =
+const { zMission, zMissionObserver, zMissionObserverList } =
   await import("@darkview/contracts/zod");
 
 /**
@@ -407,6 +407,13 @@ describe("the controller's consent (DV-101)", () => {
       now: NOW,
     });
     expect(opened.ok).toBe(true);
+    if (opened.ok) {
+      expect(opened.value.observable).toBe(true);
+      // A demo mission nobody bought. The contract's bookingId is nullable for
+      // exactly this, and inventing one would be a fiction in the payment tables.
+      expect(opened.value.bookingId).toBeNull();
+      expect(() => zMission.parse(opened.value)).not.toThrow();
+    }
 
     const after = await takeObserverSeat({ missionId, userId: hopeful, now: NOW });
     expect(after.ok).toBe(true);
@@ -430,7 +437,10 @@ describe("the controller's consent (DV-101)", () => {
     });
 
     expect(closed.ok).toBe(true);
-    if (closed.ok) expect(closed.value.detached).toBe(3);
+    if (closed.ok) {
+      expect(closed.value.observable).toBe(false);
+      expect(closed.value.observerCount).toBe(0);
+    }
 
     // Consent withdrawn stops the watching now, not for the next person to ask.
     expect(

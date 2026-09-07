@@ -2,9 +2,11 @@ import "server-only";
 
 import type {
   ErrorCode,
+  Mission,
   MissionObserver,
   MissionObserverList,
 } from "@darkview/contracts";
+import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
 
 import { getDatabase } from "@/lib/db/client";
@@ -302,7 +304,7 @@ export async function setMissionObservation(input: {
   actor: { id: string; role: "USER" | "OPERATOR" };
   observable: boolean;
   now: Date;
-}): Promise<ObserverResult<{ observable: boolean; detached: number }>> {
+}): Promise<ObserverResult<Mission>> {
   const database = getDatabase();
   const { missionId, actor, observable, now } = input;
 
@@ -357,8 +359,52 @@ export async function setMissionObservation(input: {
       tx,
     );
 
-    return { ok: true, value: { observable, detached } };
+    return { ok: true, value: await readContractMission(tx, missionId) };
   });
+}
+
+/**
+ * A mission as the contract describes one.
+ *
+ * `observerCount` is counted here rather than stored. `bookingId` is null for a
+ * mission nobody bought -- an operator or demo mission -- which is what the
+ * contract's nullable `bookingId` is for; inventing one would put a fiction in
+ * the payment tables.
+ */
+export async function readContractMission(
+  tx: Pick<Prisma.TransactionClient, "mission" | "missionParticipant">,
+  missionId: string,
+): Promise<Mission> {
+  const row = await tx.mission.findUniqueOrThrow({
+    where: { id: missionId },
+    include: {
+      booking: { select: { id: true } },
+      captures: { select: { id: true } },
+    },
+  });
+
+  const observerCount = await tx.missionParticipant.count({
+    where: { missionId, status: "JOINED" },
+  });
+
+  return {
+    id: row.id,
+    userId: row.userId,
+    bookingId: row.booking?.id ?? null,
+    targetId: row.targetId,
+    observatoryId: row.observatoryId,
+    state: row.state,
+    failureReason: row.failureReason,
+    mode: row.mode,
+    scheduledStartAt: row.scheduledFor?.toISOString() ?? null,
+    requestedAt: row.requestedAt.toISOString(),
+    startedAt: row.startedAt?.toISOString() ?? null,
+    endedAt: row.completedAt?.toISOString() ?? null,
+    captureIds: row.captures.map((capture) => capture.id),
+    observable: row.joinPolicy === "OPEN",
+    observerCapacity: row.observerCapacity,
+    observerCount,
+  };
 }
 
 /**
