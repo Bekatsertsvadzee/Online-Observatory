@@ -1,12 +1,11 @@
 # ADR-011 — How a live frame reaches the customer
 
 - **Date:** 2026-09-07
-- **Status:** PROPOSED — not yet decided. Requires the maintainer's approval before
-  any code implements it.
-- **Proposed by:** DV-062 working session
+- **Status:** APPROVED
+- **Decided by:** project maintainer
 - **Arises from:** DV-060, which declined to implement `MISSION_STREAM` because this
   decision did not exist
-- **Blocks:** DV-032 (`stream/mjpeg.py`), DV-033 (`capture/pipeline.py`)
+- **Unblocks:** DV-032 (`stream/mjpeg.py`), DV-033 (`capture/pipeline.py`)
 
 ## Context
 
@@ -44,7 +43,7 @@ without a measured need and maintainer approval. The observatory accepts no inbo
 connection from the internet or the LAN. And DV-060 already fixed that the realtime
 service is served from the same host as the web app, on a path.
 
-## Decision (proposed)
+## Decision
 
 **The realtime service terminates the frame stream, holds only the latest frame per
 mission in memory, and serves it over HTTP from the same origin at a signed,
