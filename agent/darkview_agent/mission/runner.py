@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from contracts.models import MissionFailureReason, MissionState
+from darkview_agent.capture.stack import LiveStack
 from darkview_agent.clock import Clock, SystemClock, wire_timestamp
 from darkview_agent.devices.base import DeviceError
 from darkview_agent.devices.frame import Frame
@@ -147,6 +148,7 @@ class MissionRunner:
         emit: Callable[[MissionEvent], None] | None = None,
         idle_park_seconds: float = DEFAULT_IDLE_PARK_SECONDS,
         show: Callable[[Frame], None] | None = None,
+        stack: LiveStack | None = None,
     ) -> None:
         self._devices = devices
         self._envelope = envelope
@@ -160,6 +162,9 @@ class MissionRunner:
         # and the frame that failed to solve is the one that explains why the
         # mission is taking a while. What reaches the wire is decided downstream.
         self._show = show or (lambda frame: None)
+        # Not `stack or LiveStack()`: an injected stack must not be discarded, and
+        # a caller passing one is usually a test that means to inspect it.
+        self._stack = LiveStack() if stack is None else stack
 
         self._state = MissionState.scheduled
         self._failure_reason: MissionFailureReason | None = None
@@ -335,6 +340,10 @@ class MissionRunner:
 
     def _begin_slew(self, altitude: float, azimuth: float, at_time: datetime) -> None:
         progress = self._require_progress()
+        # The stack belongs to where the mount was pointing. Carrying it across a
+        # slew would average two different parts of the sky into one image, which
+        # is not a worse picture of the target -- it is a picture of nothing.
+        self._stack.reset()
         self._devices.mount.slew_to(altitude, azimuth)
         if hasattr(self._solver, "set_commanded_position"):
             self._solver.set_commanded_position(
@@ -438,7 +447,13 @@ class MissionRunner:
         if not self._devices.camera.exposure_complete():
             return
 
-        self._show(self._devices.camera.read_frame())
+        # Stacked, then shown. This is the difference between a live view and a
+        # webcam: the customer watches the same picture get better rather than
+        # watching a fresh noisy sub replace the last one. `LiveStack` returns the
+        # stack as it stands even when it refuses a frame, so a satellite crossing
+        # the field costs a second of improvement rather than blanking the view.
+        stacked = self._stack.add(self._devices.camera.read_frame())
+        self._show(stacked.frame)
         progress.exposure_started = False
         progress.frames_captured += 1
 
