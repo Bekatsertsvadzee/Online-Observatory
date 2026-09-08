@@ -160,3 +160,5 @@ routes do not exist yet — DV-063 adds them.
 | System design and boundaries | `docs/architecture.md`, `docs/OWNERSHIP.md` |
 | Observatory wire protocol | `docs/observatory-protocol.md` |
 | Security model | `docs/security.md` |
+| What stops the telescope destroying itself | `docs/SAFETY.md` |
+| How to run, qualify and recover the observatory | `docs/RUNBOOK.md` |
