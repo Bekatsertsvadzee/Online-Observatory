@@ -230,6 +230,57 @@ measured against `SimCamera`, because ADR-011 assigns the real measurement to th
 and that hardware does not exist yet. They are marked PROVISIONAL at every definition and
 DV-035 replaces them. They are not safety values; nothing in this path can move a mount.
 
+## What DV-063 built, and the one endpoint it could not
+
+Six of the seven remaining admin operations. `/admin/logs` and
+`/admin/observatory/safety-envelope` already existed.
+
+| Endpoint | What it is for |
+| --- | --- |
+| `POST /admin/override` | Operator manual control, including **the emergency Park**. The gap `docs/SAFETY.md` recorded. |
+| `POST /admin/observatory/mode` | SIMULATED / REAL, gated on a written reason and an asserted attended presence. |
+| `POST /admin/observatory/weather-hold` | The only thing in Phase 1 that can declare the weather unsafe. |
+| `GET /admin/missions` | Every mission, unscoped by user, keyset-paged. |
+| `POST /admin/missions/{id}/cancel` | Ends a stuck mission and **releases the observatory**. |
+| `PATCH /admin/targets/{id}` | Enable, disable or tune one catalogue target. |
+
+**The override does not escape safety, and cannot.** It runs the same
+`evaluatePointing` a customer's command runs, the agent checks again independently,
+and the Sun exclusion is unreachable from any parameter on this path. What the
+override actually widens is *who may issue a command* — it commands around the
+customer's session rather than through it, which is why every one of them, relayed
+or refused, is written under `OPERATOR_OVERRIDE` with the operator's identity and
+their verbatim reason.
+
+**The envelope names the session's owner as `userId`, not the operator.** The agent
+refuses any envelope whose userId is not the session owner it holds, so an override
+that put the operator there would be refused at the observatory — the opposite of
+what an emergency stop must do. `issuedByOperatorId` is the field the contract
+added for exactly this.
+
+**A found bug, from injecting one.** The recovery exemption that keeps a Park from
+ever being refused on envelope grounds was originally keyed on the command `type`
+while the safety check read the `payload`. Since the override is the one path that
+takes both from a request, `type: PARK` with a `GOTO` payload would have carried a
+slew past the pre-check under a Park's name. The contract already says
+`payload.kind` MUST equal `type`; that check now exists here, and the exemption
+reads the payload.
+
+**Not built: `GET /admin/observatory/state`.** `OperatorObservatoryState.telemetry`
+is a required `ObservatoryTelemetry`, carrying `DeviceStatus` for the mount, camera
+and focuser. **Nothing stores those.** `AGENT_STATE_DELTA` is deliberately relayed
+and never recorded — "writing every delta would grow a table without answering a
+question" — so the only copy of live telemetry is in the memory of the realtime
+process, and `apps/api` is a different process. A half-answer that reported
+DISCONNECTED would be true only while the link is down, which is the opposite of an
+operator console's purpose.
+
+Where live telemetry lives is the same shape of question ADR-011 answered for
+frames, and it is owed the same kind of decision record before any code fills it
+in. The plausible answers are a single throttled latest-telemetry row, or the
+realtime service exposing it on its own HTTP surface the way it now serves the live
+view. **This is a maintainer decision and is not made here.**
+
 ## What DV-061 built, and what it is waiting on
 
 A capture is the thing a customer keeps, and the half that does not need the bytes
@@ -307,9 +358,8 @@ row written on another connection commits whether or not the fact it describes d
 | `SAFETY` | The cloud refuses a command, and whenever the safety envelope is recorded. |
 | `AGENT_LINK` | The link comes up, and every time it drops. |
 
-`PAYMENT` still has no writer (DV-056), and neither do `OBSERVATORY_MODE` or
-`OPERATOR_OVERRIDE` (DV-063). They are categories whose code does not exist yet, not
-categories nobody remembered.
+`PAYMENT` still has no writer (DV-056). `OBSERVATORY_MODE` and `OPERATOR_OVERRIDE` now
+have one: DV-063 writes both.
 
 **Two schema gaps, both of them the contract's own fields going nowhere.**
 
