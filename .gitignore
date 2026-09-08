@@ -15,6 +15,10 @@ packages/db/generated/prisma/
 .DS_Store
 agent/.venv/
 
+# database dumps: real customer data, and the default output of `npm run backup`
+backups/
+*.dump
+
 # never commit commercial or personal material
 /private/
 *.xlsx

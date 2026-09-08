@@ -230,6 +230,56 @@ measured against `SimCamera`, because ADR-011 assigns the real measurement to th
 and that hardware does not exist yet. They are marked PROVISIONAL at every definition and
 DV-035 replaces them. They are not safety values; nothing in this path can move a mount.
 
+## What DV-114 can prove, and what it cannot
+
+Everything the platform knows is in one PostgreSQL database. There was no way to copy it
+and no procedure for putting it back.
+
+**Two scripts and a drill.** `npm run backup` dumps and then reads its own output back,
+because a backup nobody has read is a hope; `npm run restore` puts one back, and refuses
+loudly. The drill is the part that matters: an integration test that takes a real dump,
+restores it into a scratch database, and compares the two.
+
+| Refusal | The failure it is for |
+| --- | --- |
+| `pg_dump` older than the server | A dump taken by an older client can be silently incomplete, and the failure surfaces at restore time. |
+| An archive `pg_restore --list` cannot read | The file exists and is not a backup. |
+| An archive with no data entry for the core tables | The quiet one. Point the backup at a database that exists but was never migrated and pg_dump succeeds, writes a valid archive, and leaves something that looks exactly like a backup and holds nothing. |
+| `--confirm` disagreeing with `--to` | A restore aimed at the wrong database. |
+| An unreadable archive, checked *before* `--clean` runs | Order, not refusal: discovering it afterwards turns a database that could have been left alone into an empty one. |
+
+**A restore revokes every session it brings back.** A restored `Session` row is a live
+cookie from a past moment -- including one held by whoever caused the incident being
+recovered from. `--keep-restored-sessions` exists and is named for what it does.
+
+**The drill compares index definitions, not index names.** A name surviving proves nothing:
+`Booking_held_slot_unique`, `Mission_active_per_observatory_unique` and
+`MissionSession_active_owner_unique` are only worth anything if the `WHERE` clauses that
+make them partial came back too. Those clauses are what stops two people booking the same
+half hour -- DV-055 proved the index is what enforces it, and this proves a restore does not
+quietly drop it.
+
+**A found trap, in the URL itself.** `postgresql://.../darkview?schema=public` is a valid
+Prisma URL and not a valid libpq one -- psql answers `invalid URI query parameter:
+"schema"` -- so the string that runs the application cannot be handed to pg_dump unchanged.
+Both scripts strip the Prisma-only parameters.
+
+**Not backed up, deliberately:** the agent's local state store, which is a crash journal
+rather than a record and must never be copied between observatories; capture bytes, which
+have no object storage yet (ADR-012); and secrets, which are not in the database.
+
+**What this does not prove.** There is no production infrastructure, so there is no
+retention policy, no off-site copy, no schedule and no measured recovery time. The drill
+restores a nearly empty database in seconds and that number says nothing about a year of
+captures. `docs/RUNBOOK.md` §8 marks the whole of it **[UNEXERCISED]** against real
+infrastructure and lists the decisions owed.
+
+**Verified by removing each protection and confirming a named test fails:** the `--confirm`
+guard, the session revocation, the unmigrated-database check, and the order of the archive
+read. The first passed the first time and was rewritten -- it aimed at a database that did
+not exist, so `pg_restore` failed for its own reasons and the test proved only that you
+cannot restore into a database nobody created.
+
 ## What DV-115 metered, and the one rule behind it
 
 Rate limiting existed before this and was wired to two call sites: sign-in and

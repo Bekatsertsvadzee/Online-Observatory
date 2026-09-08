@@ -297,12 +297,101 @@ This is intended, and the recovery is intended too. When the agent reconnects it
 agent the session is revoked. If a mission is stuck with no agent to resume it, an operator
 must move it to a terminal state — there is no automatic timeout, deliberately.
 
-## 8. What is not in this runbook
+## 8. Backup and disaster recovery
+
+### What is backed up, and what is not
+
+One PostgreSQL database holds everything the platform knows: accounts, bookings, missions,
+captures, the audit trail and the measured safety envelope. `npm run backup` dumps it.
+
+Three things are deliberately outside that dump.
+
+| Not backed up | Why |
+| --- | --- |
+| The agent's local state store (`~/.darkview/agent-state.sqlite3`, ADR-010) | It is a crash-recovery journal, not a record. **It must never be copied between observatories** — it names that observatory's sessions, users and missions, and restoring one elsewhere would hand a machine another site's session identities. An agent that loses it reconnects and is told what is true. |
+| Capture image bytes | They will live in object storage (ADR-012), which is not provisioned yet. Object storage has its own durability and its own restore path; when it exists, this section gains a row and the drill gains a step. |
+| Secrets | `AUTH_SECRET`, `STREAM_SIGNING_SECRET` and the device tokens are not in the database and are not in the dump. They are restored from wherever they are held, and a restore is a reasonable moment to rotate them. |
+
+### Taking one
+
+```bash
+npm run backup              # writes ./backups/<database>-<utc timestamp>.dump
+npm run backup /some/path   # or somewhere else
+```
+
+It refuses rather than writes in three cases, and each refusal means there is no backup:
+`pg_dump` older than the server (a dump from an older client can be silently incomplete);
+an archive it cannot read back with `pg_restore --list`; and an archive holding no data
+entry for the core tables, which is what a dump of an unmigrated database looks like.
+
+`backups/` and `*.dump` are in `.gitignore`. A dump is real customer data.
+
+### Restoring one
+
+**This is the destructive one.** There is no default target, nothing is read from
+`DATABASE_URL`, and the target database has to be typed out twice:
+
+```bash
+npm run restore -- \
+  --from backups/darkview-2026-09-08T14-17-18-451Z.dump \
+  --to postgresql://user:password@host:5432/darkview \
+  --confirm darkview
+```
+
+`--confirm` must equal the database named in `--to`. The two disagreeing is the shape of a
+restore aimed at the wrong database, so it refuses — before touching anything.
+
+**Every session in the backup is revoked on restore.** A restored `Session` row is a live
+cookie from a past moment: whoever held it then holds it again now, including anyone who
+held one because the incident being recovered from handed it to them. Everyone signs in
+again. `--keep-restored-sessions` opts out and must not be used while recovering from
+anything that might have leaked a session.
+
+Against production this is a maintainer action, taken deliberately, in a session where the
+maintainer asked for it. Nothing here is automated.
+
+### After a restore
+
+1. **Check the observatory is not mid-mission.** A restored database can hold a mission in
+   a live state that no agent is running. §7 covers a stuck mission; the recovery is the
+   same and an operator must move it to a terminal state.
+2. **Restart the realtime service.** It holds the agent link and the live-frame store in
+   memory, and neither is in the dump.
+3. **Expect the agent to reconcile itself.** It reconnects, reports `resumeMissionId` from
+   its own store, and the cloud tells it what is true. Do not copy anything onto it.
+4. **Confirm `MAX_ALT_SAFE`.** If the restored `SafetyEnvelope` is older than the last
+   measurement, every slew is refused until it is re-recorded — which is the system
+   working, not a fault to route around. Never seed a value to clear it.
+
+### The drill
+
+`apps/api/src/lib/backup/restore-drill.integration.test.ts` runs on every pull request. It
+takes a real dump, restores it into a scratch database, and asserts that every table and
+every index *definition* came back, that the three partial unique indexes still carry the
+`WHERE` clauses that make them correctness rather than convention, that the data is there,
+and that the sessions are not.
+
+A restore procedure nobody has run is a document. This is the only reason to believe this
+section.
+
+### What has never been done — **[UNEXERCISED]**
+
+Everything above is exercised against a local or CI PostgreSQL by the drill. **None of it
+has been run against production infrastructure, because there is none yet.** No retention
+policy, no off-site copy, no schedule, and no measured recovery time exist. Those are
+decisions for the maintainer when hosting is chosen, and this section will be wrong until
+they are made:
+
+- **Where backups are kept.** A dump beside the database it came from survives a bad
+  migration and not a lost machine.
+- **How often, and how much loss is acceptable.** Nothing here says an RPO because nobody
+  has chosen one.
+- **How long a restore takes on real data.** The drill restores a nearly empty database in
+  seconds. That number means nothing about a year of captures.
+
+## 9. What is not in this runbook
 
 - **Production deployment and migrations.** Never run either unless the maintainer asks
   explicitly, in that session.
-- **Backup and restore.** Not yet written; the agent's local state store is not a backup
-  and must never be copied between observatories — it names that observatory's sessions,
-  users and missions.
 - **The Q1–Q9 qualification in full.** DV-034 owns it.
 - **Weather procedure.** DV-039 owes the trigger; there is nothing to operate yet.
