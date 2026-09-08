@@ -53,6 +53,22 @@ export interface MissionChannelStore {
    * not the owner it last received.
    */
   hasObserverSeat(missionId: string, userId: string): Promise<boolean>;
+
+  /**
+   * May this person watch this mission's live view right now?
+   *
+   * True for the holder of a live, unrevoked session on the mission -- the
+   * controller -- and for anybody holding an observer seat on it. The same two
+   * ways in that `MissionChannel.subscribe` admits, asked as one question because
+   * the HTTP stream request does not know which kind of viewer it is serving.
+   *
+   * Asked on **every** stream request, not once when the URL was minted. A signed
+   * URL proves who it was made for; only this proves they are still entitled. A
+   * controller who ends the session, or an observer a controller closed the
+   * mission against, must stop being served on their next request rather than
+   * whenever their token happens to lapse.
+   */
+  mayWatchMission(missionId: string, userId: string, now: Date): Promise<boolean>;
 }
 
 export type ChannelUser = {

@@ -22,6 +22,7 @@ import { createRealtimeServer } from "@/server";
  */
 const DEVICE_TOKEN = "device-token-for-the-tbilisi-observatory";
 const APP_URL = "https://darkview.test";
+const STREAM_SECRET = "a-stream-signing-secret-of-at-least-32-characters";
 
 const realObservatory: ObservatoryRecord = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -56,7 +57,7 @@ beforeEach(async () => {
   store.registerToken(hashDeviceToken(DEVICE_TOKEN), realObservatory);
   clients = [];
 
-  server = createRealtimeServer(store, APP_URL);
+  server = createRealtimeServer(store, APP_URL, STREAM_SECRET);
   const httpServer = server.listen(0);
   await new Promise<void>((resolve) => httpServer.once("listening", () => resolve()));
   port = (httpServer.address() as AddressInfo).port;
@@ -316,5 +317,185 @@ describe("the mission client channel", () => {
         stray.once("error", (error) => reject(error));
       }),
     ).rejects.toThrow();
+  });
+});
+
+/**
+ * The live view, from the observatory's socket to the customer's `<img>`.
+ *
+ * Everything below is covered in pieces elsewhere -- pairing in
+ * `live-frame.test.ts`, the URL in `stream/token.test.ts`, the response in
+ * `stream/http.test.ts`. What is only covered here is that the pieces are
+ * actually joined: the binary route in `server.ts`, the frame store the relay was
+ * handed, and the HTTP route on the same port. Every one of those is a line of
+ * wiring, which is precisely the shape of the failure issues #25 and #27 record.
+ */
+describe("a frame from the observatory to a customer", () => {
+  const PROTOCOL_VERSION = "1";
+  const SESSION_COOKIE = "a-browser-session-cookie-value";
+  const MISSION = "22222222-2222-4222-8222-222222222222";
+  const PIXELS = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+
+  const customer: ChannelUser = {
+    id: "44444444-4444-4444-8444-444444444444",
+    role: "USER",
+  };
+
+  let missionSessionId: string;
+
+  beforeEach(() => {
+    missionSessionId = randomUUID();
+    store.registerUserSession(
+      hashSessionToken(SESSION_COOKIE),
+      customer,
+      new Date(Date.now() + 60 * 60_000),
+    );
+    store.addMission(MISSION, { observatoryId: realObservatory.id, state: "OBSERVING" });
+    store.setActiveSession(realObservatory.id, {
+      sessionId: missionSessionId,
+      missionId: MISSION,
+      userId: customer.id,
+      expiresAt: new Date(Date.now() + 30 * 60_000),
+    });
+  });
+
+  async function agentOnline(): Promise<WebSocket> {
+    const agent = await connect(DEVICE_TOKEN);
+    const welcomed = new Promise<void>((resolve) =>
+      agent.once("message", () => resolve()),
+    );
+    agent.send(
+      JSON.stringify({
+        type: "AGENT_HELLO",
+        messageId: randomUUID(),
+        sentAt: new Date().toISOString(),
+        protocolVersion: PROTOCOL_VERSION,
+        observatoryId: realObservatory.id,
+        agentVersion: "0.1.0",
+        mode: "REAL",
+        bootedAt: new Date().toISOString(),
+        safetyEnvelopeConfigured: false,
+        resumeMissionId: null,
+      }),
+    );
+    await welcomed;
+    return agent;
+  }
+
+  function sendFrame(agent: WebSocket, sequence = 0, bytes = PIXELS) {
+    agent.send(
+      JSON.stringify({
+        type: "AGENT_LIVE_FRAME",
+        messageId: randomUUID(),
+        sentAt: new Date().toISOString(),
+        missionId: MISSION,
+        sequence,
+        capturedAt: new Date().toISOString(),
+        encoding: "JPEG",
+        widthPx: 1024,
+        heightPx: 576,
+        byteLength: bytes.byteLength,
+        exposureMilliseconds: 500,
+        gain: 200,
+        mode: "REAL",
+      }),
+    );
+    agent.send(bytes);
+  }
+
+  async function subscribedCustomer(): Promise<WebSocket> {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/mission/${MISSION}`, {
+      headers: { origin: APP_URL, cookie: `darkview_session=${SESSION_COOKIE}` },
+    });
+    clients.push(client);
+    await new Promise<void>((resolve, reject) => {
+      client.once("open", () => resolve());
+      client.once("error", reject);
+    });
+    client.send(
+      JSON.stringify({
+        type: "CLIENT_SUBSCRIBE",
+        messageId: randomUUID(),
+        sentAt: new Date().toISOString(),
+        missionId: MISSION,
+        sessionId: missionSessionId,
+      }),
+    );
+    await vi.waitFor(() => expect(server.missions.subscribers(MISSION)).toHaveLength(1));
+    return client;
+  }
+
+  it("routes the binary frame to the link rather than to the JSON parser", async () => {
+    // Handing pixels to the parser would answer the agent BAD_REQUEST for every
+    // frame it sent, on an otherwise healthy link.
+    const agent = await agentOnline();
+    const refusals: unknown[] = [];
+    agent.on("message", (data) => refusals.push(JSON.parse(data.toString())));
+
+    sendFrame(agent);
+
+    await vi.waitFor(() => expect(server.live.latest(MISSION)).not.toBeNull());
+    expect(server.live.latest(MISSION)?.bytes.equals(PIXELS)).toBe(true);
+    expect(refusals).toEqual([]);
+  });
+
+  it("tells a subscribed customer where to read it", async () => {
+    const client = await subscribedCustomer();
+    const offered = new Promise<Record<string, unknown>>((resolve) => {
+      client.on("message", (data) => {
+        const message = JSON.parse(data.toString());
+        if (message.type === "MISSION_STREAM") resolve(message);
+      });
+    });
+
+    sendFrame(await agentOnline());
+
+    const stream = await offered;
+    expect(stream).toMatchObject({ missionId: MISSION, encoding: "JPEG" });
+    // The observatory row says REAL. A UI reading this is being told the truth
+    // about what it is showing.
+    expect(stream.mode).toBe("REAL");
+    expect(String(stream.streamUrl).startsWith(`${APP_URL}/stream/mission/${MISSION}?t=`)).toBe(
+      true,
+    );
+  });
+
+  it("serves the frame at the URL it offered", async () => {
+    const client = await subscribedCustomer();
+    const offered = new Promise<string>((resolve) => {
+      client.on("message", (data) => {
+        const message = JSON.parse(data.toString());
+        if (message.type === "MISSION_STREAM") resolve(message.streamUrl);
+      });
+    });
+
+    sendFrame(await agentOnline());
+
+    // The offer names the app's origin, because that is where the session cookie
+    // goes. The service itself answers on its own port behind that path.
+    const path = new URL(await offered).pathname + new URL(await offered).search;
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+      headers: { cookie: `darkview_session=${SESSION_COOKIE}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("multipart/x-mixed-replace");
+
+    const reader = response.body!.getReader();
+    const first = Buffer.from((await reader.read()).value!).toString("binary");
+    expect(first).toContain("Content-Type: image/jpeg");
+    expect(first).toContain(PIXELS.toString("binary"));
+    void reader.cancel();
+  });
+
+  it("lets the frame go when the agent link drops", async () => {
+    // A still image of a dead link must not keep being served as live.
+    const agent = await agentOnline();
+    sendFrame(agent);
+    await vi.waitFor(() => expect(server.live.latest(MISSION)).not.toBeNull());
+
+    agent.close();
+
+    await vi.waitFor(() => expect(server.live.latest(MISSION)).toBeNull());
   });
 });

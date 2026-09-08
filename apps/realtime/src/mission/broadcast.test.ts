@@ -13,6 +13,7 @@ import { MissionRelay } from "@/mission/broadcast";
 import { MissionChannel } from "@/mission/channel";
 import { MissionChannelRegistry } from "@/mission/registry";
 import type { ChannelUser } from "@/mission/store";
+import { FakeStreamOffers, RecordingFrameSink } from "@/stream/fake-stream";
 
 const OBSERVATORY = "11111111-1111-4111-8111-111111111111";
 const MISSION = "22222222-2222-4222-8222-222222222222";
@@ -21,6 +22,8 @@ const OTHER_MISSION = "33333333-3333-4333-8333-333333333333";
 let store: FakeLinkStore;
 let registry: MissionChannelRegistry;
 let relay: MissionRelay;
+let offers: FakeStreamOffers;
+let frames: RecordingFrameSink;
 let now: number;
 
 /** A subscribed channel on `missionId`, and the messages it receives. */
@@ -42,6 +45,7 @@ async function subscriber(missionId: string, userId = randomUUID()) {
     store,
     (message) => received.push(message),
     () => {},
+    offers,
     () => now,
   );
 
@@ -99,7 +103,9 @@ function stateDelta(missionId: string | null): AgentStateDelta {
 beforeEach(() => {
   store = new FakeLinkStore();
   registry = new MissionChannelRegistry();
-  relay = new MissionRelay(store, registry);
+  offers = new FakeStreamOffers();
+  frames = new RecordingFrameSink();
+  relay = new MissionRelay(store, registry, frames);
   now = Date.parse("2026-09-07T21:00:00.000Z");
 
   store.addMission(MISSION, { observatoryId: OBSERVATORY, state: "OBSERVING" });

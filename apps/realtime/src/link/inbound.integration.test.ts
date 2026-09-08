@@ -469,3 +469,114 @@ describe("who holds an observer seat", () => {
     expect(await store.hasObserverSeat(other.id, observer)).toBe(true);
   });
 });
+
+/**
+ * DV-032's stream check, against the real queries.
+ *
+ * `mayWatchMission` is asked on **every** live-view request, and it is the only
+ * one of the three checks there that can withdraw entitlement mid-stream: the
+ * cookie and the signed token both keep saying yes until they lapse. A wrong
+ * filter here is a customer still watching a session they no longer hold, so the
+ * SQL has to be shown to agree with the fake rather than assumed to.
+ */
+describe("who may still watch a live view", () => {
+  async function anotherUser(name = "Viewer") {
+    const user = await database.user.create({
+      data: {
+        email: `${randomUUID()}@example.test`,
+        name,
+        emailVerifiedAt: NOW,
+      },
+    });
+    return user.id;
+  }
+
+  function sessionFor(userId: string, overrides: Record<string, unknown> = {}) {
+    return database.missionSession.create({
+      data: {
+        missionId,
+        userId,
+        issuedAt: NOW,
+        expiresAt: new Date(NOW.getTime() + 30 * 60_000),
+        ...overrides,
+      },
+    });
+  }
+
+  it("admits the controller holding a live session", async () => {
+    await sessionFor(ownerId);
+
+    expect(await store.mayWatchMission(missionId, ownerId, NOW)).toBe(true);
+  });
+
+  it("refuses the controller once the session is revoked", async () => {
+    await sessionFor(ownerId, { revokedAt: NOW });
+
+    expect(await store.mayWatchMission(missionId, ownerId, NOW)).toBe(false);
+  });
+
+  it("refuses the controller once the session has lapsed", async () => {
+    const session = await sessionFor(ownerId);
+
+    expect(await store.mayWatchMission(missionId, ownerId, session.expiresAt)).toBe(
+      false,
+    );
+  });
+
+  it("refuses somebody with no session and no seat", async () => {
+    const stranger = await anotherUser("Stranger");
+    await sessionFor(ownerId);
+
+    expect(await store.mayWatchMission(missionId, stranger, NOW)).toBe(false);
+  });
+
+  it("admits an observer holding a seat on an open mission", async () => {
+    const observer = await anotherUser("Observer");
+    await database.missionParticipant.create({
+      data: { missionId, userId: observer, status: "JOINED" },
+    });
+    await database.mission.update({
+      where: { id: missionId },
+      data: { joinPolicy: "OPEN" },
+    });
+
+    expect(await store.mayWatchMission(missionId, observer, NOW)).toBe(true);
+  });
+
+  it("refuses that observer the moment the controller closes the mission", async () => {
+    // The seat is untouched. Consent is what was withdrawn, and ADR-007 rule 5
+    // says a withdrawn consent is not entitlement.
+    const observer = await anotherUser("Observer");
+    await database.missionParticipant.create({
+      data: { missionId, userId: observer, status: "JOINED" },
+    });
+    await database.mission.update({
+      where: { id: missionId },
+      data: { joinPolicy: "OPEN" },
+    });
+    expect(await store.mayWatchMission(missionId, observer, NOW)).toBe(true);
+
+    await database.mission.update({
+      where: { id: missionId },
+      data: { joinPolicy: "DISABLED" },
+    });
+
+    expect(await store.mayWatchMission(missionId, observer, NOW)).toBe(false);
+  });
+
+  it("does not let a session on one mission open another mission's view", async () => {
+    const other = await database.mission.create({
+      data: {
+        userId: ownerId,
+        targetId,
+        observatoryId: observatory.id,
+        telescopeId,
+        state: "SCHEDULED",
+      },
+    });
+    await sessionFor(ownerId);
+
+    expect(await store.mayWatchMission(missionId, ownerId, NOW)).toBe(true);
+    expect(await store.mayWatchMission(other.id, ownerId, NOW)).toBe(false);
+  });
+});

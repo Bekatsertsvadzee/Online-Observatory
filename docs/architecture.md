@@ -31,8 +31,15 @@ traffic between the agent and the mount driver on the same machine. It must neve
 ## 2. Why the realtime service is separate
 
 The observatory socket is long-lived. A serverless function cannot hold it, so
-`apps/realtime` is a small always-on Node service that owns exactly two things: the agent
-link, and the fan-out to session participants.
+`apps/realtime` is a small always-on Node service that owns three things: the agent link,
+the fan-out to session participants, and the live view.
+
+The live view is there because it cannot be anywhere else. The frames arrive on the agent
+socket, so the process holding that socket is the only one that has them; ADR-011 keeps
+the latest frame per mission in its memory and serves it as MJPEG from the same origin at
+a signed, short-expiry path. One frame per mission, replaced on arrival, never queued and
+never written to disk, to the database or to object storage — a live frame is a
+viewfinder, and the kept artefact is a Capture.
 
 It is deliberately small. It holds no business rules. The orchestrator decides; realtime
 transports.

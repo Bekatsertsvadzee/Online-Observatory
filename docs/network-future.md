@@ -78,6 +78,23 @@ All availability input must be validated at the server boundary:
 - the observatory timezone controls conversion to UTC;
 - reservations remain the source of truth for occupied intervals.
 
+## One realtime process, for now
+
+Two pieces of Darkview state live in the memory of the single `apps/realtime` process
+rather than in PostgreSQL, and both are recorded here rather than solved:
+
+- **`LISTEN`/`NOTIFY` subscriptions** (ADR-009). A notification reaches the listener that
+  is connected at that instant. The `ObservatoryCommand` row remains the source of truth
+  and a slow fallback sweep collects anything the notification missed.
+- **The latest live frame per mission** (ADR-011). A second realtime instance would not
+  have the frames, because it would not be holding the agent socket they arrived on.
+
+Both are acceptable in Phase 1 for the same reason: one observatory, one active mission,
+one process. Neither is acceptable the moment a second instance exists, and the fix is not
+a bigger cache — it is deciding where the agent socket lives when more than one process
+could hold it. That decision belongs with the first multi-site or multi-instance
+deployment, alongside the scheduling flow above, and needs its own decision record.
+
 ## What is intentionally not implemented
 
 - no external partner accounts or application workflow;

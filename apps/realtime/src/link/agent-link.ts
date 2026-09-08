@@ -12,6 +12,7 @@ import {
 } from "@/link/protocol";
 import type { LinkStore, ObservatoryRecord } from "@/link/store";
 import type { MissionBroadcast } from "@/mission/broadcast";
+import type { LiveFrame } from "@/stream/frames";
 
 export type LinkState = "AWAITING_HELLO" | "ONLINE" | "CLOSED";
 
@@ -30,6 +31,18 @@ export class AgentLink {
   private state: LinkState = "AWAITING_HELLO";
   private lastActivityAt: number;
   private readonly missionOwnership = new Map<string, boolean>();
+  /**
+   * The live-frame header whose pixels have not arrived yet.
+   *
+   * At most one. The contract's binary convention is that "a LiveFrameHeader
+   * message is immediately followed by exactly one binary WebSocket frame", so a
+   * second header before the bytes means the first frame's bytes are never coming
+   * and holding onto it would pair a header with the wrong image.
+   */
+  private awaitingPixels: Extract<
+    AgentToCloudMessage,
+    { type: "AGENT_LIVE_FRAME" }
+  > | null = null;
 
   constructor(
     readonly observatory: ObservatoryRecord,
@@ -98,6 +111,23 @@ export class AgentLink {
       return;
     }
 
+    // Captured here, synchronously, before the first `await` below.
+    //
+    // The bytes arrive as the very next message on the socket, and `ws` delivers
+    // message events in order but does not wait for an async handler to settle
+    // between them. Anything that awaited before storing the header would let the
+    // binary frame arrive while this was still pending, find nothing to pair with,
+    // and drop every frame -- with the link otherwise looking perfectly healthy.
+    //
+    // Deliberately not recorded in AgentMessage. That table exists to make the
+    // agent's replay idempotent, and a live frame is never queued and never
+    // replayed (see `send_live_frame`), so a row per frame would buy no
+    // deduplication and write continuously for the length of every mission.
+    if (message.type === "AGENT_LIVE_FRAME") {
+      this.awaitingPixels = message;
+      return;
+    }
+
     // Record first, act only on the first sighting. The primary key on
     // AgentMessage is what makes every effect in `apply` idempotent, so a replayed
     // queue after an outage is acknowledged once and applied once, and nothing
@@ -128,12 +158,62 @@ export class AgentLink {
         return;
 
       // AGENT_HEARTBEAT is liveness, and `lastActivityAt` above is what consumes
-      // it. AGENT_LIVE_FRAME and AGENT_CAPTURE_READY carry state this service does
-      // not own yet -- DV-032 and DV-061 own them -- so they are recorded and go no
-      // further, deliberately rather than by omission.
+      // it. AGENT_LIVE_FRAME never reaches here -- it is taken in `receive` before
+      // the record step, because its pixels are a separate frame on the wire.
+      // AGENT_CAPTURE_READY carries state this service does not own yet: DV-061
+      // owns it, so it is recorded and goes no further, deliberately rather than
+      // by omission.
       default:
         return;
     }
+  }
+
+  /**
+   * The pixels belonging to the header that came immediately before.
+   *
+   * An unpaired binary frame is dropped in silence. Not answered with an error:
+   * the only way to produce one is a bug in an agent build or a truncated send,
+   * and there is nothing in the message to quote back -- a CLOUD_ERROR per stray
+   * frame would be a flood on a link that also carries safety verdicts.
+   *
+   * The frame is never stored, never written to disk and never enters the
+   * database. It is held as one JPEG in memory until the next one replaces it.
+   * The kept artefact is a Capture, which DV-061 owns; a live frame is a
+   * viewfinder, not evidence.
+   */
+  async receiveBinary(payload: Buffer): Promise<void> {
+    // Consumed first and unconditionally, before any await. A header left behind
+    // by a frame that was refused below must not pair with the next arrival.
+    const header = this.awaitingPixels;
+    this.awaitingPixels = null;
+
+    if (this.state !== "ONLINE" || header === null) return;
+    this.lastActivityAt = this.now();
+
+    // The header states the length. A mismatch means the two halves are not the
+    // pair they claim to be, and serving those bytes as that frame's image would
+    // be presenting one thing as another.
+    if (payload.byteLength !== header.byteLength) return;
+
+    if (!(await this.ownsMission(header.missionId))) {
+      this.refuse(`Mission ${header.missionId} is not this observatory's to stream.`);
+      return;
+    }
+
+    const frame: LiveFrame = {
+      missionId: header.missionId,
+      observatoryId: this.observatory.id,
+      // The observatory row's answer, never the agent's account of itself. This
+      // is what tells a customer they are looking at the simulator, and an agent
+      // able to set it could present simulator output as telescope output.
+      mode: this.observatory.mode,
+      encoding: header.encoding,
+      sequence: header.sequence,
+      bytes: payload,
+      receivedAt: this.now(),
+    };
+
+    this.broadcast.liveFrameArrived(frame);
   }
 
   /**
