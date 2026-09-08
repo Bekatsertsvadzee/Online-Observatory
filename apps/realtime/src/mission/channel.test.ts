@@ -8,6 +8,7 @@ import { FakeLinkStore } from "@/link/fake-store";
 import { MissionChannel } from "@/mission/channel";
 import { CLIENT_IDLE_GRACE_SECONDS } from "@/mission/protocol";
 import type { ChannelUser } from "@/mission/store";
+import { FakeStreamOffers } from "@/stream/fake-stream";
 
 const OBSERVATORY = "11111111-1111-4111-8111-111111111111";
 const MISSION = "22222222-2222-4222-8222-222222222222";
@@ -24,6 +25,7 @@ let sent: MissionChannelMessage[];
 let closedWith: string[];
 let now: number;
 let sessionId: string;
+let offers: FakeStreamOffers;
 
 function makeChannel(user: ChannelUser = owner, missionId = MISSION) {
   return new MissionChannel(
@@ -32,6 +34,7 @@ function makeChannel(user: ChannelUser = owner, missionId = MISSION) {
     store,
     (message) => sent.push(message),
     (reason) => closedWith.push(reason),
+    offers,
     () => now,
   );
 }
@@ -61,6 +64,7 @@ beforeEach(() => {
   closedWith = [];
   now = Date.parse("2026-09-07T21:00:00.000Z");
   sessionId = randomUUID();
+  offers = new FakeStreamOffers();
 
   store.addMission(MISSION, { observatoryId: OBSERVATORY, state: "OBSERVING" });
   store.addMission(OTHER_MISSION, { observatoryId: OBSERVATORY, state: "OBSERVING" });

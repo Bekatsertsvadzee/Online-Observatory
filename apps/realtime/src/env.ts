@@ -10,6 +10,17 @@ const schema = z.object({
    * that stops another site opening a subscription as a signed-in customer.
    */
   APP_URL: z.url(),
+  /**
+   * The key that signs live-view stream URLs (ADR-011).
+   *
+   * No default, for the same reason as APP_URL: a fallback would leave the
+   * signature check running against a value anybody reading this repository
+   * knows, which is worse than not signing at all because it looks like it works.
+   *
+   * The length floor matches AUTH_SECRET. An HMAC is only as strong as its key,
+   * and a short one is guessable regardless of the algorithm.
+   */
+  STREAM_SIGNING_SECRET: z.string().min(32),
 });
 
 export type RealtimeEnvironment = z.infer<typeof schema>;

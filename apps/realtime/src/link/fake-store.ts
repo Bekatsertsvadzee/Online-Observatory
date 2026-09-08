@@ -255,6 +255,20 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     return this.observable.has(missionId) && this.seats.has(`${missionId}:${userId}`);
   }
 
+  async mayWatchMission(
+    missionId: string,
+    userId: string,
+    now: Date,
+  ): Promise<boolean> {
+    for (const session of this.sessions.values()) {
+      if (session.missionId !== missionId) continue;
+      if (session.userId !== userId) continue;
+      if (session.expiresAt <= now) continue;
+      return true;
+    }
+    return this.hasObserverSeat(missionId, userId);
+  }
+
   async loadMissionSnapshot(missionId: string): Promise<MissionSnapshot | null> {
     const mission = this.missions.get(missionId);
     if (!mission) return null;

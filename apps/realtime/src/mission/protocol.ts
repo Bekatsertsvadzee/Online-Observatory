@@ -4,6 +4,7 @@ import type {
   AgentStateDelta,
   AgentCommandAck,
   ErrorCode,
+  LiveFrameEncoding,
   MissionChannelError,
   MissionChannelMessage,
   MissionClientMessage,
@@ -11,7 +12,9 @@ import type {
   MissionFailureReason,
   MissionState,
   MissionStateUpdate,
+  MissionStreamInfo,
   MissionTelemetryUpdate,
+  ObservatoryMode,
 } from "@darkview/contracts";
 import { zMissionClientMessage } from "@darkview/contracts/zod";
 
@@ -127,6 +130,38 @@ export function missionCommandResult(
     commandId: ack.commandId,
     status: ack.status,
     rejectionReason: ack.rejectionReason ?? null,
+  };
+}
+
+/**
+ * Where this customer reads the live view.
+ *
+ * A URL, never a device address. The observatory accepts no inbound connection
+ * from the internet or the LAN, and nothing in this message gives anybody an
+ * address for the mount, the camera or the mini-PC -- the client addresses the
+ * cloud, which addresses nothing.
+ *
+ * `mode` is carried through from the frame that arrived, so a UI can say
+ * SIMULATED. A client that cannot tell would be presenting simulator output as
+ * telescope output.
+ */
+export function missionStreamInfo(
+  missionId: string,
+  offer: {
+    streamUrl: string;
+    expiresAt: Date;
+    encoding: LiveFrameEncoding;
+    mode: ObservatoryMode;
+  },
+): MissionStreamInfo {
+  return {
+    type: "MISSION_STREAM",
+    ...messageHeader(),
+    missionId,
+    streamUrl: offer.streamUrl,
+    encoding: offer.encoding,
+    mode: offer.mode,
+    expiresAt: offer.expiresAt.toISOString(),
   };
 }
 

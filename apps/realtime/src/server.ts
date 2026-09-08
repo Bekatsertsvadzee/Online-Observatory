@@ -16,9 +16,22 @@ import { MissionRelay } from "@/mission/broadcast";
 import { MissionChannel } from "@/mission/channel";
 import { MissionChannelRegistry } from "@/mission/registry";
 import type { ChannelUser } from "@/mission/store";
+import { handleStreamRequest } from "@/stream/http";
+import { LiveStream } from "@/stream/live-stream";
 import { getEnvironment } from "@/env";
 
 const AGENT_PATH = "/ws/agent";
+
+/**
+ * `ws` hands a binary message as a Buffer, an ArrayBuffer or an array of Buffers
+ * depending on how it was framed. One shape reaches the link, so that the length
+ * check against the header is comparing the same thing every time.
+ */
+function toBuffer(data: Buffer | ArrayBuffer | Buffer[]): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.from(data);
+}
 
 /**
  * How often the ADR-009 fallback looks for commands the notification never
@@ -40,13 +53,33 @@ const MISSION_PATH = /^\/ws\/mission\/([0-9a-fA-F-]{36})$/;
  * The observatory dials out to this service. Nothing here ever dials the
  * observatory, which has no reachable address and no listening port.
  */
-export function createRealtimeServer(store: RealtimeStore, appUrl: string) {
+export function createRealtimeServer(
+  store: RealtimeStore,
+  appUrl: string,
+  streamSecret: string,
+) {
   const registry = new AgentLinkRegistry();
   const relay = new AgentRelay(store, registry);
   const missions = new MissionChannelRegistry();
-  const broadcast = new MissionRelay(store, missions);
-  const httpServer = createServer((_request, response) => {
-    response.writeHead(404).end();
+  const live = new LiveStream(appUrl, streamSecret);
+  const broadcast = new MissionRelay(store, missions, live);
+  const httpServer = createServer((request, response) => {
+    // The service's first HTTP surface beyond the upgrade handshake (ADR-011).
+    // Everything that is not a live view is still 404, including a stream request
+    // that fails any of its checks -- the handler answers those itself so that a
+    // refusal is indistinguishable from a path that does not exist.
+    void handleStreamRequest({ store, stream: live }, request, response)
+      .then((handled) => {
+        if (!handled) response.writeHead(404).end();
+      })
+      .catch((error) => {
+        // The database dropping mid-request. Logged and answered, never rethrown:
+        // an unhandled rejection ends the process, and this process is also
+        // holding the observatory socket.
+        console.error("darkview realtime: stream", error);
+        if (!response.headersSent) response.writeHead(500).end();
+        else response.end();
+      });
   });
   const sockets = new WebSocketServer({ noServer: true });
 
@@ -127,7 +160,18 @@ export function createRealtimeServer(store: RealtimeStore, appUrl: string) {
       return;
     }
 
-    connection.on("message", (data) => {
+    connection.on("message", (data, isBinary) => {
+      // The pixels of the live-frame header that arrived immediately before.
+      // Routed before the text path so that a binary frame is never handed to the
+      // JSON parser, which would refuse it and answer the agent with a
+      // BAD_REQUEST for every frame it sent.
+      if (isBinary) {
+        void link.receiveBinary(toBuffer(data)).catch((error) => {
+          console.error("darkview realtime: live frame", error);
+        });
+        return;
+      }
+
       // Only on the transition. An agent that has just said hello may have missed
       // notifications while it was away, and ADR-009 makes the row the source of
       // truth -- so anything unrelayed goes out once, here.
@@ -145,6 +189,10 @@ export function createRealtimeServer(store: RealtimeStore, appUrl: string) {
     });
     connection.on("close", () => {
       registry.release(observatory.id, link);
+      // Whatever this observatory was streaming is gone with the link, and any
+      // response still writing it is closed. Holding the last frame of a dead
+      // link would show a customer a still image and call it live.
+      live.releaseObservatory(observatory.id);
       void store.markLinkLost(observatory.id, new Date());
     });
   }
@@ -164,6 +212,7 @@ export function createRealtimeServer(store: RealtimeStore, appUrl: string) {
       store,
       (message) => connection.send(JSON.stringify(message)),
       (reason) => connection.close(1000, reason),
+      live,
     );
 
     missions.add(missionId, channel);
@@ -184,8 +233,12 @@ export function createRealtimeServer(store: RealtimeStore, appUrl: string) {
   }
 
   const heartbeatSweep = setInterval(() => {
-    void registry.expireSilent(Date.now());
-    missions.expireSilent(Date.now());
+    const at = Date.now();
+    void registry.expireSilent(at);
+    missions.expireSilent(at);
+    // Frames whose mission stopped sending without saying so. Mission end and link
+    // loss are released explicitly above; this covers everything that just stops.
+    live.releaseStale(at);
   }, HEARTBEAT_INTERVAL_SECONDS * 1000);
 
   /**
@@ -217,6 +270,7 @@ export function createRealtimeServer(store: RealtimeStore, appUrl: string) {
     registry,
     relay,
     missions,
+    live,
     listen: (port: number) => httpServer.listen(port),
     close: async () => {
       clearInterval(heartbeatSweep);
@@ -234,6 +288,7 @@ if (process.env.NODE_ENV !== "test") {
   const server = createRealtimeServer(
     createPrismaStore(environment.DATABASE_URL),
     environment.APP_URL,
+    environment.STREAM_SIGNING_SECRET,
   );
   server.listen(environment.REALTIME_PORT);
 

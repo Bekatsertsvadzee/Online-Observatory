@@ -5,11 +5,14 @@ import {
   CLIENT_IDLE_GRACE_SECONDS,
   missionChannelError,
   missionStateUpdate,
+  missionStreamInfo,
   parseClientMessage,
   type CloseClient,
   type SendToClient,
 } from "@/mission/protocol";
 import type { ChannelUser, MissionChannelStore } from "@/mission/store";
+import type { StreamOffers } from "@/stream/live-stream";
+import { STREAM_RENEWAL_LEAD_SECONDS } from "@/stream/token";
 
 export type ChannelState = "AWAITING_SUBSCRIBE" | "SUBSCRIBED" | "CLOSED";
 
@@ -28,6 +31,8 @@ export type ChannelState = "AWAITING_SUBSCRIBE" | "SUBSCRIBED" | "CLOSED";
 export class MissionChannel {
   private state: ChannelState = "AWAITING_SUBSCRIBE";
   private lastActivityAt: number;
+  /** When the URL this client was last given stops working. Null before the first. */
+  private streamValidUntil: Date | null = null;
 
   constructor(
     /** The mission named in the URL. A subscribe naming a different one is refused. */
@@ -37,6 +42,15 @@ export class MissionChannel {
     private readonly store: LinkStore & MissionChannelStore,
     private readonly send: SendToClient,
     private readonly close: CloseClient,
+    /**
+     * Where this client's live view comes from.
+     *
+     * Required, with no default. A no-op default would mean a channel that
+     * subscribes, reports state correctly, and silently never mentions the live
+     * view -- the same shape of failure as issues #25 and #27, where the wiring
+     * was missing and nothing failed because nothing asserted it existed.
+     */
+    private readonly streams: StreamOffers,
     private readonly now: () => number = () => Date.now(),
   ) {
     this.lastActivityAt = this.now();
@@ -122,6 +136,45 @@ export class MissionChannel {
     // can be minutes away.
     const snapshot = await this.store.loadMissionSnapshot(this.missionId);
     if (snapshot) this.send(missionStateUpdate(snapshot));
+
+    // A client joining a mission that is already streaming gets the URL now rather
+    // than on the next frame. Without this, subscribing mid-OBSERVING would show a
+    // correct state panel above an empty picture until the agent's next frame.
+    this.offerStream();
+  }
+
+  /**
+   * Give this client a live-view URL, if there is one and it needs a new one.
+   *
+   * Called on subscribe and again whenever a frame arrives. Idempotent by design:
+   * a customer must not receive a MISSION_STREAM per frame, so an offer already
+   * held is left alone until it is close enough to expiry to need replacing.
+   *
+   * The renewal happens a full minute early, so the replacement is in the client's
+   * hands long before the response serving the old URL is closed and the swap is
+   * invisible. A client that has stopped subscribing gets no renewal, which is
+   * what makes the short expiry mean something.
+   *
+   * Silent when the mission has produced no frame. ADR-011: the URL is offered
+   * only once a frame has actually arrived, because one offered earlier is fetched,
+   * refused, and has no retry.
+   */
+  offerStream(): void {
+    if (this.state !== "SUBSCRIBED") return;
+
+    const now = new Date(this.now());
+    if (
+      this.streamValidUntil !== null &&
+      this.streamValidUntil.getTime() - now.getTime() > STREAM_RENEWAL_LEAD_SECONDS * 1000
+    ) {
+      return;
+    }
+
+    const offer = this.streams.offer(this.missionId, this.user.id, now);
+    if (!offer) return;
+
+    this.send(missionStreamInfo(this.missionId, offer));
+    this.streamValidUntil = offer.expiresAt;
   }
 
   /**

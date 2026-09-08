@@ -172,19 +172,13 @@ edit rather than the rewrite the stage list warns about.
 | `AGENT_STATE_DELTA` | `MISSION_TELEMETRY`, narrowed to the contract's client-safe fields. Device health, pointing, focuser position and agent version stop at the cloud. |
 | `AGENT_COMMAND_ACK` | `MISSION_COMMAND_RESULT`, routed by the **minted command row**, never by the ack's own `missionId`. |
 
-**Not built: `MISSION_STREAM`, and deliberately.** The contract describes two live-view
-paths and does not join them. The agent pushes `AGENT_LIVE_FRAME` plus a binary frame up
-its own link; the client is told a `streamUrl` and reads frames from there. Nothing in
-`contracts/openapi.yaml`, `docs/architecture.md`, `docs/observatory-protocol.md` or any
-ADR says how the first becomes the second — where the bytes are held, what serves them,
-or what signs the URL. That is an architecture decision and it is owed an ADR before any
-code implements it. DV-032 has not produced a frame yet, so nothing is blocked meanwhile;
-a fabricated `streamUrl` would have been.
+**`MISSION_STREAM` was deferred here and is now built.** The contract describes two
+live-view paths and does not join them: the agent pushes `AGENT_LIVE_FRAME` plus a binary
+frame up its own link, and the client is told a `streamUrl` it reads frames from. Nothing
+said where the bytes were held, what served them, or what signed the URL, so DV-060 built
+everything else and stopped — a fabricated `streamUrl` would have been worse than an
+absent one. **ADR-011** answered it and DV-032 implemented it; see below.
 
-**ADR-011 answers this and is APPROVED.** The realtime service terminates the frame
-stream, keeps the latest frame per mission in memory, and serves it as multipart MJPEG
-from the same origin at a signed short-expiry path. DV-032 and DV-033 build against that
-and are no longer blocked. The stream-signing key is a new required secret.
 
 **New required environment variable: `APP_URL` on the realtime service.** The only origin
 a mission-channel handshake may come from. It has no default on purpose — a permissive
@@ -196,6 +190,45 @@ The mission channel also constrains deployment: the session cookie is `__Host-` 
 in production, so the browser sends it only to the host that set it. **The realtime
 service must be served from the same host as the web app**, on a path, not on a
 `realtime.` subdomain.
+
+## What DV-032 built
+
+The live view, end to end against the simulator. The agent encodes a frame and pushes it
+up its existing link; the realtime service holds it and serves it; the customer is told
+where to look.
+
+| Step | What happens |
+| --- | --- |
+| Agent | Stretches a 16-bit frame, encodes JPEG, sends `AGENT_LIVE_FRAME` followed by exactly one binary frame. **Never queued** — a live frame is worthless once the next exists, and replaying a backlog after an outage would show the sky as it was. |
+| Realtime, agent side | Pairs the header with the bytes that follow it, checks the mission is this observatory's, and keeps **one frame per mission** in memory. Not recorded in `AgentMessage`: that table makes the agent's replay idempotent, and a frame is never replayed. |
+| Realtime, client side | Sends `MISSION_STREAM` — but only once a frame has actually arrived, and at most one offer per client until it is near expiry. A URL per frame would mean reopening the response every second. |
+| Realtime, HTTP | `GET /stream/mission/{missionId}?t=…` answers `multipart/x-mixed-replace`, which is what an `<img>` consumes with no library. The service's first HTTP surface beyond the upgrade handshake. |
+
+**Three independent checks on every stream request**, not one. The session cookie proves
+somebody is signed in; the signed token proves the URL was minted for that same person and
+bounds how long a copied `src` keeps working; and `mayWatchMission` proves they are *still*
+entitled. Without the third the token would be a five-minute bearer credential, and an
+observer whose controller closed the mission would keep being served until it lapsed.
+
+**Every refusal is the same 404** — not signed in, forged token, expired token, somebody
+else's token, unknown mission, no frames yet, seat withdrawn. The mission channel already
+refuses on that rule, and a second surface answering more precisely would undo it.
+
+**Memory is released on mission end, on link loss, and on staleness.** The first two are
+explicit; the third exists because nothing announces that an agent crashed, and a process
+designed to run for months must not accumulate the last frame of every mission it carried.
+
+**New required environment variable: `STREAM_SIGNING_SECRET` on the realtime service.**
+No default, minimum 32 characters. A fallback would leave the signature check running
+against a value anybody reading this repository knows, which is worse than not signing
+because it looks like it works. It is separate from `AUTH_SECRET` on purpose: one signs
+sessions, the other signs view-only URLs, and a key used for two jobs cannot be rotated
+for one of them.
+
+**The tuning numbers are provisional.** Resolution, JPEG quality and frame rate were
+measured against `SimCamera`, because ADR-011 assigns the real measurement to the ASI585MC
+and that hardware does not exist yet. They are marked PROVISIONAL at every definition and
+DV-035 replaces them. They are not safety values; nothing in this path can move a mount.
 
 ## What DV-062 wrote down, and what has no writer yet
 

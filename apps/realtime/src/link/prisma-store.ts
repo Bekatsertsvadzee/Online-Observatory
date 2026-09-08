@@ -148,20 +148,22 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
     },
 
     async hasObserverSeat(missionId: string, userId: string): Promise<boolean> {
-      // The seat and the mission's consent are read together. A seat left behind
-      // by a controller who has since closed the session is not entitlement --
-      // DV-101 marks those LEFT, and this is the second line of defence for one
-      // that raced the close.
-      const seat = await database.missionParticipant.findFirst({
-        where: {
-          missionId,
-          userId,
-          status: "JOINED",
-          mission: { joinPolicy: "OPEN" },
-        },
+      return heldObserverSeat(database, missionId, userId);
+    },
+
+    async mayWatchMission(
+      missionId: string,
+      userId: string,
+      now: Date,
+    ): Promise<boolean> {
+      // The controller first, because it is the common case and the cheaper query.
+      const owned = await database.missionSession.findFirst({
+        where: { missionId, userId, revokedAt: null, expiresAt: { gt: now } },
         select: { id: true },
       });
-      return seat !== null;
+      if (owned !== null) return true;
+
+      return heldObserverSeat(database, missionId, userId);
     },
 
     async loadMissionSnapshot(missionId: string): Promise<MissionSnapshot | null> {
@@ -458,6 +460,25 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       return mission?.id ?? null;
     },
   };
+}
+
+/**
+ * Does this person hold a seat on a mission still open to observers?
+ *
+ * The seat and the mission's consent are read together. A seat left behind by a
+ * controller who has since closed the session is not entitlement -- DV-101 marks
+ * those LEFT, and this is the second line of defence for one that raced the close.
+ */
+async function heldObserverSeat(
+  database: PrismaClient,
+  missionId: string,
+  userId: string,
+): Promise<boolean> {
+  const seat = await database.missionParticipant.findFirst({
+    where: { missionId, userId, status: "JOINED", mission: { joinPolicy: "OPEN" } },
+    select: { id: true },
+  });
+  return seat !== null;
 }
 
 function toActiveSession(row: {

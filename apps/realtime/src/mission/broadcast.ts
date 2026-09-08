@@ -1,6 +1,6 @@
 import type { AgentCommandAck, AgentStateDelta } from "@darkview/contracts";
 
-import type { LinkStore } from "@/link/store";
+import { TERMINAL_MISSION_STATES, type LinkStore } from "@/link/store";
 import {
   missionCommandResult,
   missionStateUpdate,
@@ -8,12 +8,14 @@ import {
 } from "@/mission/protocol";
 import type { MissionChannelRegistry } from "@/mission/registry";
 import type { MissionSnapshot } from "@/mission/store";
+import type { LiveFrame } from "@/stream/frames";
+import type { LiveFrameSink } from "@/stream/live-stream";
 
 /**
  * What the agent link may tell the watching customers.
  *
- * An interface rather than the registry itself, so `AgentLink` depends on three
- * named events and not on the fan-out's shape. DV-103 changes that shape -- an
+ * An interface rather than the registry itself, so `AgentLink` depends on named
+ * events and not on the fan-out's shape. DV-103 changes that shape -- an
  * observer sees a mission it has no session for -- and this is the seam that keeps
  * the change on this side of the line.
  */
@@ -21,6 +23,7 @@ export interface MissionBroadcast {
   missionMoved(snapshot: MissionSnapshot): void;
   telemetryReported(missionId: string, delta: AgentStateDelta): void;
   commandAnswered(ack: AgentCommandAck): Promise<void>;
+  liveFrameArrived(frame: LiveFrame): void;
 }
 
 /**
@@ -36,10 +39,48 @@ export class MissionRelay implements MissionBroadcast {
   constructor(
     private readonly store: LinkStore,
     private readonly registry: MissionChannelRegistry,
+    /**
+     * Where a live frame is kept and where it is released.
+     *
+     * Held by the relay rather than by `AgentLink` because it is the same thing
+     * every other method here does: take something the agent said and put it in
+     * front of the people watching. The link decides whether a frame is the
+     * observatory's to send; this decides who sees it.
+     */
+    private readonly frames: LiveFrameSink,
   ) {}
 
   missionMoved(snapshot: MissionSnapshot): void {
     this.registry.broadcast(snapshot.missionId, missionStateUpdate(snapshot));
+
+    // A finished mission produces no more frames, so the last one it produced is
+    // freed here rather than left for the staleness sweep. Releasing also closes
+    // the open responses: a customer must not be left watching a still image of a
+    // mission that ended, and a process running for months must not accumulate the
+    // final frame of every mission it ever carried.
+    if ((TERMINAL_MISSION_STATES as readonly string[]).includes(snapshot.state)) {
+      this.frames.release(snapshot.missionId);
+    }
+  }
+
+  /**
+   * One frame, to everyone watching this mission.
+   *
+   * The frame is stored first and offered second, because the offer is only valid
+   * once there is something at the URL to fetch -- `StreamOffers.offer` returns
+   * null until a frame exists, so the order here is the difference between a
+   * client being given a live view and being given nothing.
+   *
+   * Nothing is pushed down the WebSocket but the URL. The contract gives the
+   * mission channel no binary clause while giving the agent link one, and putting
+   * frame bandwidth through the same socket as mission state would leave one slow
+   * reader's telemetry and command verdicts queued behind stale pictures.
+   */
+  liveFrameArrived(frame: LiveFrame): void {
+    this.frames.publish(frame);
+    for (const channel of this.registry.subscribers(frame.missionId)) {
+      channel.offerStream();
+    }
   }
 
   telemetryReported(missionId: string, delta: AgentStateDelta): void {

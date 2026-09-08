@@ -2,6 +2,7 @@ import type { AgentCommandAck, AgentStateDelta } from "@darkview/contracts";
 
 import type { MissionBroadcast } from "@/mission/broadcast";
 import type { MissionSnapshot } from "@/mission/store";
+import type { LiveFrame } from "@/stream/frames";
 
 /**
  * A recording MissionBroadcast for tests.
@@ -15,6 +16,7 @@ export class RecordingBroadcast implements MissionBroadcast {
   readonly moved: MissionSnapshot[] = [];
   readonly telemetry: { missionId: string; delta: AgentStateDelta }[] = [];
   readonly answered: AgentCommandAck[] = [];
+  readonly frames: LiveFrame[] = [];
 
   missionMoved(snapshot: MissionSnapshot): void {
     this.moved.push(snapshot);
@@ -26,5 +28,9 @@ export class RecordingBroadcast implements MissionBroadcast {
 
   async commandAnswered(ack: AgentCommandAck): Promise<void> {
     this.answered.push(ack);
+  }
+
+  liveFrameArrived(frame: LiveFrame): void {
+    this.frames.push(frame);
   }
 }
