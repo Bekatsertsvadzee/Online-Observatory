@@ -281,6 +281,54 @@ in. The plausible answers are a single throttled latest-telemetry row, or the
 realtime service exposing it on its own HTTP surface the way it now serves the live
 view. **This is a maintainer decision and is not made here.**
 
+## What DV-039 built, and the contract change it is waiting on
+
+A weather hold now reaches the mission that is already running. Before this it only
+refused the next one: `startMissionSession`, `POST /bookings` and the slot and
+target listings all consult `holdActive`, so an operator watching cloud roll in
+could stop the next customer and not the one holding the telescope.
+
+Setting a hold, when a mission is live, does three things in one transaction and in
+an order that is not arbitrary:
+
+1. **A PARK is minted and relayed first**, while the session is still valid. The
+   agent refuses any envelope whose sessionId is not the owner it currently holds,
+   so a Park sent after the revocation would be refused — and the mount would keep
+   tracking under a sky the operator has just called unsafe.
+2. **The mission moves to WEATHER_HOLD** with `WEATHER_UNSAFE`, filed as a `CLOUD`
+   event because the cloud decided it. A hold is not terminal; it leaves
+   `Mission_active_per_observatory_unique`, which is safe because every new session
+   is refused while the hold stands.
+3. **The session is revoked.** The customer keeps the page; they stop keeping the
+   telescope.
+
+**Clearing a hold resumes nothing.** It says the sky is safe again. It does not say
+the customer still wants their session, that their slot has time left, or that the
+mount is where it was. Resuming is a decision and nobody has made it.
+
+**Not built: the agent's own weather enforcement.** `Watchdog.weather_unsafe` still
+has no caller, and this is a contract gap rather than an omission. There is **no
+cloud-to-agent weather message**: `CloudToAgentMessage` carries welcome, command,
+heartbeat ack, session update, safety envelope update and error, and none of them
+says anything about the sky. So the agent obeys a Park it cannot attribute, and
+files the mission locally as an operator abort while the cloud's own record
+correctly says weather.
+
+That matters for the reason every other safety rule here is enforced twice. The
+agent keeps enforcing its safety envelope after the link dies; it cannot do the
+same for a weather hold, because it holds no copy of one. An observatory that loses
+its link during a hold has nothing telling it to stay parked.
+
+**The proposal**, which needs maintainer approval before any code: a
+`CLOUD_WEATHER_UPDATE` carrying the `WeatherState` the cloud already stores, added
+to `CloudToAgentMessage`; a `WEATHER` notification kind alongside ADR-009's
+`COMMAND`, `SESSION` and `ENVELOPE`; the state persisted in the agent's local store
+next to the safety envelope (ADR-010), so it survives a restart; and
+`Watchdog.weather_unsafe` called when a hold arrives. The agent still cannot
+*observe* weather — no sensor is fitted, and the contract is explicit that SENSOR is
+"only used if a sensor is actually fitted" — so this is about acting on being told
+and continuing to act after the telling stops.
+
 ## What DV-061 built, and what it is waiting on
 
 A capture is the thing a customer keeps, and the half that does not need the bytes

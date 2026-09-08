@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { Prisma } from "@darkview/db";
 import type {
   ErrorCode,
   ObservatoryMode,
@@ -9,8 +10,12 @@ import type {
 } from "@darkview/contracts";
 import { recordAuditEvent } from "@darkview/db/audit";
 
+import { randomUUID } from "node:crypto";
+
 import { getDatabase } from "@/lib/db/client";
+import { COMMAND_TTL_SECONDS } from "@/features/missions/command";
 import { LIVE_MISSION_STATES } from "@/features/missions/session";
+import { notifyAgent } from "@/lib/observatory/relay";
 
 export type AdminFailure = {
   ok: false;
@@ -140,8 +145,10 @@ export async function setWeatherHold(input: {
   observatoryId: string;
   request: SetWeatherHoldRequest;
   actorUserId: string;
+  now?: Date;
 }): Promise<WeatherResult> {
   const { observatoryId, request, actorUserId } = input;
+  const now = input.now ?? new Date();
   const database = getDatabase();
 
   const observatory = await database.observatory.findUnique({
@@ -175,6 +182,14 @@ export async function setWeatherHold(input: {
       },
     });
 
+    // A hold has to reach a mission that is already running, or it is only half a
+    // rule: `startMissionSession` refuses a new session under a hold, and until now
+    // that was all a hold did. An operator watching cloud roll in could stop the
+    // next customer and not the one holding the telescope.
+    const held = request.holdActive
+      ? await holdRunningMission({ tx, observatoryId, now, request })
+      : null;
+
     await recordAuditEvent(
       {
         category: "SAFETY",
@@ -182,12 +197,19 @@ export async function setWeatherHold(input: {
         actorUserId,
         entityType: "Observatory",
         entityId: observatoryId,
+        missionId: held?.missionId ?? null,
+        commandId: held?.commandId ?? null,
         detail: {
           from: previous
             ? { holdActive: previous.holdActive, status: previous.status }
             : null,
           to: { holdActive: request.holdActive, status: request.status },
           note: request.note ?? null,
+          // Null when nothing was running, which is the ordinary case. Named so an
+          // operator reading the trail can tell "I stopped somebody's session" from
+          // "I closed the observatory for tonight".
+          heldMission: held?.missionId ?? null,
+          parkCommandId: held?.commandId ?? null,
         },
       },
       tx,
@@ -210,4 +232,129 @@ export async function setWeatherHold(input: {
       updatedAt: row.updatedAt.toISOString(),
     },
   };
+}
+
+/**
+ * Stop the mission that is running, because the sky closed.
+ *
+ * Three things, in an order that is not arbitrary:
+ *
+ * 1. **A PARK is minted and relayed first**, while the session is still valid. The
+ *    agent refuses any envelope whose sessionId is not the owner it currently
+ *    holds, so a PARK sent after the revocation would be refused -- and the mount
+ *    would keep tracking under a sky the operator has just called unsafe. Both
+ *    notifications go out on the same commit, in this order, and the agent applies
+ *    them in the order it receives them.
+ *
+ * 2. **The mission moves to WEATHER_HOLD.** Not a terminal state: a hold can be
+ *    lifted, and the cloud's own store treats it as resumable. It leaves
+ *    `Mission_active_per_observatory_unique`, which is safe here because
+ *    `startMissionSession` refuses every new session while the hold stands.
+ *
+ * 3. **The session is revoked.** The customer keeps the page; they stop keeping
+ *    the telescope.
+ *
+ * What this cannot do is tell the agent *why*. There is no cloud-to-agent weather
+ * message in the contract, so the agent obeys a Park it cannot attribute and files
+ * the mission locally as an operator abort. The cloud's own record is correct --
+ * the mission event and the audit row both say weather -- but the agent's is not,
+ * and that is a contract gap rather than something to paper over here. See the
+ * backlog for the proposal.
+ */
+async function holdRunningMission(input: {
+  /**
+   * The same transaction the weather row is written in, narrowed to the models
+   * this touches. One transaction covers the hold, the Park, the state change and
+   * both records: a weather hold that stopped a session but failed to write down
+   * that it had would be worse than one that did neither.
+   */
+  tx: Pick<
+    Prisma.TransactionClient,
+    "mission" | "missionSession" | "missionEvent" | "observatoryCommand" | "$executeRaw"
+  >;
+  observatoryId: string;
+  now: Date;
+  request: SetWeatherHoldRequest;
+}): Promise<{ missionId: string; commandId: string | null } | null> {
+  const { tx, observatoryId, now, request } = input;
+
+  const mission = await tx.mission.findFirst({
+    where: { observatoryId, state: { in: [...LIVE_MISSION_STATES] } },
+    select: { id: true, state: true, isDemo: true },
+  });
+  if (!mission) return null;
+
+  const session = await tx.missionSession.findFirst({
+    where: { missionId: mission.id, revokedAt: null, expiresAt: { gt: now } },
+    select: { id: true, userId: true },
+  });
+
+  // Only with a session to name. Without one the agent holds no owner, would
+  // refuse the envelope, and there is nothing for a command to be valid against --
+  // the mission still moves to WEATHER_HOLD, and the agent's idle park takes the
+  // mount when the runner finishes.
+  let commandId: string | null = null;
+  if (session) {
+    commandId = randomUUID();
+    await tx.observatoryCommand.create({
+      data: {
+        id: commandId,
+        missionId: mission.id,
+        sessionId: session.id,
+        userId: session.userId,
+        observatoryId,
+        type: "PARK",
+        status: "RECEIVED",
+        issuedAt: now,
+        expiresAt: new Date(now.getTime() + COMMAND_TTL_SECONDS * 1000),
+        payload: { kind: "PARK" },
+        simulated: false,
+        isDemo: mission.isDemo,
+      },
+    });
+
+    await notifyAgent(tx, {
+      kind: "COMMAND",
+      commandId,
+      observatoryId,
+    });
+  }
+
+  await tx.mission.updateMany({
+    where: { id: mission.id, state: { in: [...LIVE_MISSION_STATES] } },
+    data: { state: "WEATHER_HOLD", failureReason: "WEATHER_UNSAFE" },
+  });
+
+  await tx.missionEvent.create({
+    data: {
+      missionId: mission.id,
+      state: "WEATHER_HOLD",
+      failureReason: "WEATHER_UNSAFE",
+      // The cloud held this mission. The agent will report its own account of
+      // parking separately, and filing this as AGENT would put a decision the
+      // cloud made into the observatory's record of what it did.
+      source: "CLOUD",
+      commandId,
+      message: request.note ?? "operator weather hold",
+      occurredAt: now,
+      simulated: false,
+      isDemo: mission.isDemo,
+    },
+  });
+
+  if (session) {
+    await tx.missionSession.updateMany({
+      where: { missionId: mission.id, revokedAt: null },
+      data: { revokedAt: now },
+    });
+
+    await notifyAgent(tx, {
+      kind: "SESSION",
+      observatoryId,
+      missionId: mission.id,
+      sessionId: null,
+    });
+  }
+
+  return { missionId: mission.id, commandId };
 }
