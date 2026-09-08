@@ -113,6 +113,9 @@ agent refuse every slew with `SAFETY_ENVELOPE_UNMEASURED`.
 `HORIZON_MASK` comes from a compass survey at the actual installation site (ADR-005:
 Tbilisi rooftop). A survey from anywhere else is not valid for this site.
 
+The full model — rule order, what is not overridable, the watchdog, and what is designed
+but not yet wired — is `docs/SAFETY.md`. The procedures are `docs/RUNBOOK.md`.
+
 ## 7. Observers do not exist to the agent
 
 The Observer Pack (ADR-007) fans out in the cloud. **The Observatory Agent never learns an
