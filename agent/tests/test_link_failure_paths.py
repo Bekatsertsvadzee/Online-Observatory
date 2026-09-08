@@ -42,6 +42,9 @@ class HelloFailsTransport(Transport):
     def send(self, payload: str) -> None:
         raise TransportError("peer went away before hello")
 
+    def send_binary(self, payload: bytes) -> None:
+        raise TransportError("peer went away before hello")
+
     def receive(self) -> str | None:
         return None
 

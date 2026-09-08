@@ -19,6 +19,10 @@ class FakeTransport(Transport):
 
     def __init__(self) -> None:
         self.sent: list[str] = []
+        #: Every frame in order, text and binary together, so a test can assert
+        #: that a LiveFrameHeader is immediately followed by its image bytes and
+        #: that nothing was sent between the two.
+        self.frames: list[str | bytes] = []
         self._inbox: list[str] = []
         self._open = True
         self.close_count = 0
@@ -35,6 +39,15 @@ class FakeTransport(Transport):
             self._open = False
             raise TransportError("connection reset by peer")
         self.sent.append(payload)
+        self.frames.append(payload)
+
+    def send_binary(self, payload: bytes) -> None:
+        if not self._open:
+            raise TransportError("connection is not open")
+        if self.fail_send_after is not None and len(self.sent) >= self.fail_send_after:
+            self._open = False
+            raise TransportError("connection reset by peer")
+        self.frames.append(payload)
 
     def receive(self) -> str | None:
         return self._inbox.pop(0) if self._inbox else None

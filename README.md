@@ -55,6 +55,7 @@ Do not upgrade a major mid-phase.
 | Zod | **4.4.3** | generated from the contract, never hand-written |
 | Vitest | 4.1.11 | |
 | Python | **3.12.14** | Observatory Agent (`agent/.venv`) |
+| Pillow | **11.3.0** | JPEG encoding for the live view — DV-032 |
 | ZWO ASI binding | **not yet pinned** | chosen after testing against the physical ASI585MC — ADR-001 |
 
 ## Layout

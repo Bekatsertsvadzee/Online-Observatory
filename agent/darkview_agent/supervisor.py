@@ -65,6 +65,7 @@ from darkview_agent.safety.coordinates import equatorial_to_horizontal
 from darkview_agent.safety.envelope import SafetyEnvelope, normalise_azimuth
 from darkview_agent.safety.watchdog import Watchdog
 from darkview_agent.state.store import StateStore, StoredMission, StoredOwnership
+from darkview_agent.stream.mjpeg import LiveView, StreamSettings
 
 logger = logging.getLogger("darkview.agent.supervisor")
 
@@ -767,6 +768,7 @@ def build_supervisor(
     store: StateStore | None = None,
     clock: Clock | None = None,
     now: Callable[[], datetime] | None = None,
+    stream_settings: StreamSettings | None = None,
 ) -> Supervisor:
     """Assemble a supervisor from configuration. The only place the wiring lives.
 
@@ -812,12 +814,23 @@ def build_supervisor(
         mode=devices.mount.mode,
     )
     watchdog = Watchdog(devices=devices, clock=clock, audit=audit, config=envelope.config)
+
+    # The live view, wired here rather than left for a caller to remember. An
+    # unwired feature is the fault DV-026 and DV-040 already paid for twice: the
+    # code existed, nothing constructed it, and nothing failed.
+    #
+    # `runner.mission_id` is read at the moment a frame arrives rather than
+    # captured now, because the runner does not have one yet and will hold a
+    # different one for every mission it runs.
+    live_view = LiveView(send=link.send_live_frame, clock=clock, settings=stream_settings)
+
     runner = MissionRunner(
         devices=devices,
         envelope=envelope,
         solver=solver or SimSolver(),
         clock=clock,
         emit=outbox.append,
+        show=lambda frame: live_view.offer(runner.mission_id, frame),
     )
     validator = CommandValidator(
         envelope=envelope,

@@ -31,6 +31,7 @@ from datetime import datetime
 from contracts.models import MissionFailureReason, MissionState
 from darkview_agent.clock import Clock, SystemClock, wire_timestamp
 from darkview_agent.devices.base import DeviceError
+from darkview_agent.devices.frame import Frame
 from darkview_agent.mission.solver import PlateSolver
 from darkview_agent.runtime import Devices
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
@@ -145,6 +146,7 @@ class MissionRunner:
         clock: Clock | None = None,
         emit: Callable[[MissionEvent], None] | None = None,
         idle_park_seconds: float = DEFAULT_IDLE_PARK_SECONDS,
+        show: Callable[[Frame], None] | None = None,
     ) -> None:
         self._devices = devices
         self._envelope = envelope
@@ -152,6 +154,12 @@ class MissionRunner:
         self._clock = clock or SystemClock()
         self._emit = emit or (lambda event: None)
         self._idle_park_seconds = idle_park_seconds
+        # Every frame the camera returns is offered to the live view, whatever the
+        # runner wanted it for. A customer watching during VERIFYING should see the
+        # sky the plate solver is looking at, not a blank panel until CAPTURING --
+        # and the frame that failed to solve is the one that explains why the
+        # mission is taking a while. What reaches the wire is decided downstream.
+        self._show = show or (lambda frame: None)
 
         self._state = MissionState.scheduled
         self._failure_reason: MissionFailureReason | None = None
@@ -368,6 +376,7 @@ class MissionRunner:
             return
 
         frame = self._devices.camera.read_frame()
+        self._show(frame)
         progress.exposure_started = False
         progress.solve_attempts += 1
 
@@ -429,7 +438,7 @@ class MissionRunner:
         if not self._devices.camera.exposure_complete():
             return
 
-        self._devices.camera.read_frame()
+        self._show(self._devices.camera.read_frame())
         progress.exposure_started = False
         progress.frames_captured += 1
 

@@ -8,6 +8,10 @@ dependencies = [
     "pydantic[email]>=2.9,<3",
     "numpy>=2.3,<3",
     "websockets>=15.0,<16",
+    # JPEG encoding for the live view. The contract fixes LiveFrameEncoding at
+    # JPEG, and a codec is not something to hand-roll. A library, not a service --
+    # nothing new listens and nothing new runs.
+    "pillow>=11,<12",
 ]
 
 [project.optional-dependencies]

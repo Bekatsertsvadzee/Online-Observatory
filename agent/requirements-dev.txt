@@ -16,6 +16,10 @@ pydantic[email]==2.12.4
 # real frames; both are array work that numpy is the standard tool for.
 numpy==2.3.4
 
+# JPEG encoding for the live view (DV-032). The contract fixes LiveFrameEncoding
+# at JPEG and a codec is not something to hand-roll. A library, not a service.
+pillow==11.3.0
+
 # The outbound link. websockets backs the real transport; the agent dials out
 # and never binds a port.
 websockets==15.0.1
