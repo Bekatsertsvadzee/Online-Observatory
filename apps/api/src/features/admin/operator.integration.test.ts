@@ -304,6 +304,151 @@ describe("the operator weather hold", () => {
     expect(audit.category).toBe("SAFETY");
   });
 
+  it("stops the mission that is already running", async () => {
+    // A hold that only refused the next customer would leave the one holding the
+    // telescope observing under the sky the operator just called unsafe.
+    const session = await openSession();
+
+    const result = await setWeatherHold({
+      observatoryId,
+      request: { holdActive: true, status: "UNSAFE", note: "rain" },
+      actorUserId: operatorId,
+      now: NOW,
+    });
+    expect(result.ok).toBe(true);
+
+    const mission = await database.mission.findUniqueOrThrow({ where: { id: missionId } });
+    expect(mission.state).toBe("WEATHER_HOLD");
+    expect(mission.failureReason).toBe("WEATHER_UNSAFE");
+
+    const revoked = await database.missionSession.findUniqueOrThrow({
+      where: { id: session.id },
+    });
+    expect(revoked.revokedAt).toEqual(NOW);
+  });
+
+  it("parks the mount, naming the session that still owns it", async () => {
+    // The Park is minted while the session is still valid. The agent refuses any
+    // envelope whose sessionId is not the owner it holds, so a Park issued after
+    // the revocation would be refused -- and the mount would keep tracking.
+    const session = await openSession();
+
+    await setWeatherHold({
+      observatoryId,
+      request: { holdActive: true, status: "UNSAFE", note: null },
+      actorUserId: operatorId,
+      now: NOW,
+    });
+
+    const command = await database.observatoryCommand.findFirstOrThrow({
+      where: { missionId },
+    });
+    expect(command.type).toBe("PARK");
+    expect(command.sessionId).toBe(session.id);
+    expect(command.userId).toBe(ownerId);
+  });
+
+  it("files the hold as the cloud's act, with weather as the reason", async () => {
+    await openSession();
+
+    await setWeatherHold({
+      observatoryId,
+      request: { holdActive: true, status: "UNSAFE", note: "cloud closing in" },
+      actorUserId: operatorId,
+      now: NOW,
+    });
+
+    const event = await database.missionEvent.findFirstOrThrow({ where: { missionId } });
+    expect(event.source).toBe("CLOUD");
+    expect(event.state).toBe("WEATHER_HOLD");
+    expect(event.failureReason).toBe("WEATHER_UNSAFE");
+    expect(event.message).toBe("cloud closing in");
+
+    const audit = await database.auditLog.findFirstOrThrow({
+      where: { action: "WEATHER_HOLD_SET" },
+    });
+    expect(audit.missionId).toBe(missionId);
+    expect(audit.metadata).toMatchObject({ heldMission: missionId });
+  });
+
+  it("holds the mission even when no session owns it", async () => {
+    // No session means no envelope the agent would accept, so no Park is minted.
+    // The mission is still held, and the agent's own idle park takes the mount.
+    const result = await setWeatherHold({
+      observatoryId,
+      request: { holdActive: true, status: "UNSAFE", note: null },
+      actorUserId: operatorId,
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(
+      (await database.mission.findUniqueOrThrow({ where: { id: missionId } })).state,
+    ).toBe("WEATHER_HOLD");
+    expect(await database.observatoryCommand.count()).toBe(0);
+  });
+
+  it("does not stop a running mission when the hold is being cleared", async () => {
+    // An operator clearing a hold that is already clear -- a second click, a
+    // client retry -- must not take down the session that started since. Only
+    // setting a hold reaches a running mission.
+    await openSession();
+
+    await setWeatherHold({
+      observatoryId,
+      request: { holdActive: false, status: "CLEAR", note: null },
+      actorUserId: operatorId,
+      now: NOW,
+    });
+
+    const mission = await database.mission.findUniqueOrThrow({ where: { id: missionId } });
+    expect(mission.state).toBe("OBSERVING");
+    expect(await database.observatoryCommand.count()).toBe(0);
+    expect(await database.missionSession.count({ where: { revokedAt: null } })).toBe(1);
+  });
+
+  it("leaves a finished mission alone", async () => {
+    await database.mission.update({
+      where: { id: missionId },
+      data: { state: "COMPLETE" },
+    });
+
+    await setWeatherHold({
+      observatoryId,
+      request: { holdActive: true, status: "UNSAFE", note: null },
+      actorUserId: operatorId,
+      now: NOW,
+    });
+
+    expect(
+      (await database.mission.findUniqueOrThrow({ where: { id: missionId } })).state,
+    ).toBe("COMPLETE");
+    expect(await database.missionEvent.count()).toBe(0);
+  });
+
+  it("does not resume anything when the hold is lifted", async () => {
+    // Clearing a hold says the sky is safe again. It does not say the customer
+    // still wants their session, that their slot has time left, or that the mount
+    // is where it was. Resuming is a decision, and nobody has made it.
+    await openSession();
+    await setWeatherHold({
+      observatoryId,
+      request: { holdActive: true, status: "UNSAFE", note: null },
+      actorUserId: operatorId,
+      now: NOW,
+    });
+
+    await setWeatherHold({
+      observatoryId,
+      request: { holdActive: false, status: "CLEAR", note: null },
+      actorUserId: operatorId,
+      now: NOW,
+    });
+
+    const mission = await database.mission.findUniqueOrThrow({ where: { id: missionId } });
+    expect(mission.state).toBe("WEATHER_HOLD");
+  });
+
   it("clears a hold and says so distinctly", async () => {
     await setWeatherHold({
       observatoryId,
