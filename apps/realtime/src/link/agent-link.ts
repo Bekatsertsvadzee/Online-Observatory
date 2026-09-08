@@ -1,4 +1,5 @@
 import type { AgentToCloudMessage, CloudToAgentMessage } from "@darkview/contracts";
+import type { CaptureAssetKind } from "@darkview/db/enums";
 
 import {
   HEARTBEAT_GRACE_SECONDS,
@@ -157,12 +158,14 @@ export class AgentLink {
         await this.applyStateDelta(message);
         return;
 
+      case "AGENT_CAPTURE_READY":
+        await this.applyCaptureReady(message);
+        return;
+
       // AGENT_HEARTBEAT is liveness, and `lastActivityAt` above is what consumes
       // it. AGENT_LIVE_FRAME never reaches here -- it is taken in `receive` before
       // the record step, because its pixels are a separate frame on the wire.
-      // AGENT_CAPTURE_READY carries state this service does not own yet: DV-061
-      // owns it, so it is recorded and goes no further, deliberately rather than
-      // by omission.
+      // AGENT_ERROR is diagnostic and is recorded; DV-063 gives it a reader.
       default:
         return;
     }
@@ -287,6 +290,64 @@ export class AgentLink {
     // command before. Neither is news about the command's fate, and a customer
     // watching a NUDGE resolve should not see its outcome change twice.
     if (outcome === "RECORDED") await this.broadcast.commandAnswered(message);
+  }
+
+  /**
+   * A finished capture, on its way into the customer's Collection.
+   *
+   * This is the moment a session becomes something the customer keeps. Everything
+   * else the agent reports is an account of what happened; this is the artefact.
+   *
+   * Two layers of idempotency, and they answer different failures. `record` above
+   * catches the agent replaying its queue with the same messageId. The store
+   * catches a capture arriving twice under any other circumstance, because the
+   * commandId is a unique index. Only the first is announced -- a second
+   * MISSION_CAPTURE_READY would show the customer an image that is not a second
+   * image.
+   *
+   * The storage keys are taken as given and nothing is fetched. This service does
+   * not read the objects, does not size them, and does not check they exist: it
+   * transports and records (architecture section 2), and a capture whose object is
+   * missing is a storage incident, not a reason to lose the row that names it.
+   */
+  private async applyCaptureReady(
+    message: Extract<AgentToCloudMessage, { type: "AGENT_CAPTURE_READY" }>,
+  ): Promise<void> {
+    const assets: { kind: CaptureAssetKind; storageKey: string }[] = [
+      { kind: "IMAGE", storageKey: message.imageStorageKey },
+    ];
+    // Optional and recorded only when present. An asset row for a key the agent
+    // did not write would be a download that 404s.
+    if (message.unmarkedStorageKey) {
+      assets.push({ kind: "UNMARKED", storageKey: message.unmarkedStorageKey });
+    }
+    if (message.fitsStorageKey) {
+      assets.push({ kind: "FITS", storageKey: message.fitsStorageKey });
+    }
+
+    const result = await this.store.recordCapture({
+      observatoryId: this.observatory.id,
+      missionId: message.missionId,
+      commandId: message.commandId,
+      capturedAt: new Date(message.capturedAt),
+      imagingProfile: message.imagingProfile,
+      opticalConfig: message.opticalConfig,
+      exposureMilliseconds: message.exposureMilliseconds,
+      gain: message.gain,
+      framesStacked: message.framesStacked,
+      integrationSeconds: message.integrationSeconds,
+      widthPx: message.widthPx ?? null,
+      heightPx: message.heightPx ?? null,
+      solvedFocalLengthMm: message.solvedFocalLengthMm ?? null,
+      assets,
+    });
+
+    if (result.outcome === "NOT_FOUND" || result.outcome === "WRONG_OBSERVATORY") {
+      this.refuse(`Capture for mission ${message.missionId} is not this observatory's.`);
+      return;
+    }
+
+    if (result.outcome === "RECORDED") this.broadcast.captureRecorded(result.capture);
   }
 
   /**

@@ -1,6 +1,9 @@
-import type { ObservatoryCommandStatus } from "@darkview/db/enums";
+import type { CaptureAssetKind, ObservatoryCommandStatus } from "@darkview/db/enums";
 
 import type {
+  Capture,
+  ImagingProfile,
+  OpticalConfig,
   SafetyEnvelopeConfig,
   CommandAcceptanceStatus,
   CommandEnvelope,
@@ -79,6 +82,39 @@ export function isTerminalCommandStatus(status: ObservatoryCommandStatus): boole
  * tests run against an in-memory fake in CI, which has no database, while the
  * process uses the Prisma implementation.
  */
+/**
+ * What the agent reported about one finished capture.
+ *
+ * Storage keys, never URLs. The agent writes objects; the cloud signs a
+ * short-expiry URL at request time, and a public bucket path is never stored,
+ * relayed, or returned.
+ */
+export type CaptureRecord = {
+  observatoryId: string;
+  missionId: string;
+  /** The CAPTURE command this came from. Also the idempotency key. */
+  commandId: string;
+  capturedAt: Date;
+  imagingProfile: ImagingProfile;
+  opticalConfig: OpticalConfig;
+  exposureMilliseconds: number;
+  gain: number;
+  framesStacked: number;
+  integrationSeconds: number;
+  widthPx: number | null;
+  heightPx: number | null;
+  solvedFocalLengthMm: number | null;
+  assets: { kind: CaptureAssetKind; storageKey: string }[];
+};
+
+export type CaptureOutcome =
+  /** Written, and the customer has not been told yet. */
+  | { outcome: "RECORDED"; capture: Capture }
+  /** Already written. The agent re-sent it; nothing changed and nobody is re-told. */
+  | { outcome: "DUPLICATE" }
+  | { outcome: "NOT_FOUND" }
+  | { outcome: "WRONG_OBSERVATORY" };
+
 export interface LinkStore {
   /**
    * Resolve a presented device token to the observatory that owns it.
@@ -196,6 +232,20 @@ export interface LinkStore {
    * this must never invent one.
    */
   loadSafetyEnvelope(observatoryId: string): Promise<SafetyEnvelopeConfig | null>;
+
+  /**
+   * Record one finished capture and put it in its owner's Collection.
+   *
+   * Scoped by the reporting observatory, and by the command: the commandId is the
+   * idempotency key, so an agent must not be able to attach a capture to a command
+   * that is not this observatory's, on this mission. Doing so would let one
+   * observatory occupy another's row in `Capture_command_unique`.
+   *
+   * The owner is the mission's own user and nobody else. ADR-007: an observer
+   * receives mission state and the live view and nothing else -- "nothing from this
+   * mission enters the observer's Collection".
+   */
+  recordCapture(capture: CaptureRecord): Promise<CaptureOutcome>;
 }
 
 /** A state transition the agent reported, as it reported it. */

@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
+
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { CAPTURE_CONTRACT_COLUMNS, toContractCapture } from "@darkview/db/capture";
 
 import type { CommandEnvelope, SafetyEnvelopeConfig } from "@darkview/contracts";
 
@@ -12,6 +15,8 @@ import {
   TERMINAL_MISSION_STATES,
   isTerminalCommandStatus,
   type ActiveSession,
+  type CaptureOutcome,
+  type CaptureRecord,
   type CommandVerdictOutcome,
   type CommandVerdictRecord,
   type InboundMessageRecord,
@@ -275,6 +280,130 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
         });
 
         return count === 1 ? "APPLIED" : "RECORDED";
+      });
+    },
+
+    async recordCapture(capture: CaptureRecord): Promise<CaptureOutcome> {
+      return database.$transaction(async (tx) => {
+        const mission = await tx.mission.findUnique({
+          where: { id: capture.missionId },
+          select: {
+            observatoryId: true,
+            telescopeId: true,
+            targetId: true,
+            userId: true,
+            mode: true,
+            isDemo: true,
+          },
+        });
+        if (!mission) return { outcome: "NOT_FOUND" };
+        if (mission.observatoryId !== capture.observatoryId) {
+          return { outcome: "WRONG_OBSERVATORY" };
+        }
+
+        // The command is the idempotency key, so unlike a mission event -- which
+        // drops an unrecognised correlation and keeps the transition -- an
+        // unrecognised command here is a refusal. A capture filed against somebody
+        // else's command would occupy their row in Capture_command_unique.
+        const command = await tx.observatoryCommand.findFirst({
+          where: {
+            id: capture.commandId,
+            observatoryId: capture.observatoryId,
+            missionId: capture.missionId,
+          },
+          select: { id: true },
+        });
+        if (!command) return { outcome: "WRONG_OBSERVATORY" };
+
+        const existing = await tx.capture.findUnique({
+          where: { commandId: capture.commandId },
+          select: { id: true },
+        });
+        // The re-send an agent makes after an outage. Nothing is written and
+        // nobody is told again: the customer already has this image, and a second
+        // MISSION_CAPTURE_READY would put a duplicate in front of them.
+        if (existing) return { outcome: "DUPLICATE" };
+
+        const row = await tx.capture.create({
+          data: {
+            id: randomUUID(),
+            userId: mission.userId,
+            missionId: capture.missionId,
+            targetId: mission.targetId,
+            observatoryId: mission.observatoryId,
+            telescopeId: mission.telescopeId,
+            commandId: command.id,
+            capturedAt: capture.capturedAt,
+            imagingProfile: capture.imagingProfile,
+            opticalConfig: capture.opticalConfig,
+            exposureMilliseconds: capture.exposureMilliseconds,
+            gain: capture.gain,
+            framesStacked: capture.framesStacked,
+            integrationSeconds: capture.integrationSeconds,
+            widthPx: capture.widthPx,
+            heightPx: capture.heightPx,
+            solvedFocalLengthMm: capture.solvedFocalLengthMm,
+            // Derived from the objects that actually exist, never from a flag the
+            // agent sets. A true here with no FITS object is a download button
+            // that 404s, which is worse than an absent one.
+            fitsAvailable: capture.assets.some((asset) => asset.kind === "FITS"),
+            // A column with no contract field and, today, nobody choosing it.
+            // NATURAL is the preset that applies no additional processing, which
+            // is what actually happened. DV-033 owns SET_PROFILE and the table
+            // mapping a profile to a preset; when it lands, this stops being a
+            // constant. Recording BRIGHT or DETAIL now would claim a customer
+            // made a choice they were never offered.
+            processingPreset: "NATURAL",
+            // The observatory row's answer. An agent able to set this could file
+            // simulator output as telescope output.
+            mode: mission.mode,
+            isDemo: mission.isDemo,
+            assets: {
+              create: capture.assets.map((asset) => ({
+                kind: asset.kind,
+                storageKey: asset.storageKey,
+              })),
+            },
+            // The Collection is the owner's, and only the owner's. ADR-007: an
+            // observer "receives mission state and the live view and nothing
+            // else". If Mission.allowSharedCaptures ever becomes true, this is the
+            // line that has to change -- and it needs the decision record amended
+            // first, not this line edited.
+            access: {
+              create: {
+                missionId: capture.missionId,
+                userId: mission.userId,
+                status: "AVAILABLE",
+                isDemo: mission.isDemo,
+              },
+            },
+          },
+          select: CAPTURE_CONTRACT_COLUMNS,
+        });
+
+        await recordAuditEvent(
+          {
+            category: "MISSION",
+            action: "CAPTURE_RECORDED",
+            actorUserId: null,
+            missionId: capture.missionId,
+            commandId: command.id,
+            entityType: "Capture",
+            entityId: row.id,
+            detail: {
+              framesStacked: capture.framesStacked,
+              integrationSeconds: capture.integrationSeconds,
+              assetKinds: capture.assets.map((asset) => asset.kind),
+              mode: mission.mode,
+            },
+          },
+          tx,
+        );
+
+        // thumbnailUrl is null and must be: it is a signed, short-expiry URL
+        // minted against a caller, and there is no caller here. The client asks
+        // for it when it needs it.
+        return { outcome: "RECORDED", capture: toContractCapture(row) };
       });
     },
 

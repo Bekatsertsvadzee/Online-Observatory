@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import type {
   AgentStateDelta,
   AgentCommandAck,
+  Capture,
   ErrorCode,
   LiveFrameEncoding,
+  MissionCaptureReady,
   MissionChannelError,
   MissionChannelMessage,
   MissionClientMessage,
@@ -162,6 +164,26 @@ export function missionStreamInfo(
     encoding: offer.encoding,
     mode: offer.mode,
     expiresAt: offer.expiresAt.toISOString(),
+  };
+}
+
+/**
+ * A capture is in the customer's Collection.
+ *
+ * Sent once, when the row is written. A re-sent capture from the agent produces
+ * no second message: the customer already has the image, and telling them twice
+ * would put a duplicate in front of them that does not exist in their Collection.
+ *
+ * The whole Capture travels, not just its id, so the client can show the new
+ * image without a round trip. `thumbnailUrl` is null here and must be -- it is a
+ * signed URL minted against a caller, and this is a push.
+ */
+export function missionCaptureReady(capture: Capture): MissionCaptureReady {
+  return {
+    type: "MISSION_CAPTURE_READY",
+    ...messageHeader(),
+    missionId: capture.missionId,
+    capture,
   };
 }
 

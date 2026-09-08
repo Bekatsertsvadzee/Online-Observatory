@@ -230,6 +230,55 @@ measured against `SimCamera`, because ADR-011 assigns the real measurement to th
 and that hardware does not exist yet. They are marked PROVISIONAL at every definition and
 DV-035 replaces them. They are not safety values; nothing in this path can move a mount.
 
+## What DV-061 built, and what it is waiting on
+
+A capture is the thing a customer keeps, and the half that does not need the bytes
+is done: the agent reports `AGENT_CAPTURE_READY`, the cloud records it, and it
+appears in the Collection.
+
+| Step | What happens |
+| --- | --- |
+| Recording | One `Capture`, its `CaptureAsset` keys, and one `CaptureAccess` for the mission's owner, in a single transaction with an audit row. |
+| Idempotency | `Capture_command_unique`. The realtime service already deduplicates by messageId; this puts "one capture per CAPTURE command" in the database, where a future writer or a retry under a fresh messageId cannot get past it. |
+| Fan-out | `MISSION_CAPTURE_READY` once, carrying the whole `Capture` so the client shows it without a round trip. A re-sent capture produces no second message. |
+| Collection | `GET /captures` and `GET /captures/{captureId}`, keyset-paged, newest first. |
+
+**`Capture.commandId` is new.** `MissionEvent` and `AuditLog` already carried a
+commandId; without it the capture was the one artefact of a mission that could not
+be joined back to the instruction that produced it. It doubles as the idempotency
+key.
+
+**Ordering is by `capturedAt`, not `createdAt`.** A capture the agent queued through
+an outage and delivered an hour later belongs where it was taken in the customer's
+evening, not above images from a later session.
+
+**Observers get the message and not the image.** ADR-007: "nothing from this mission
+enters the observer's Collection". The fan-out reaches every subscriber, because an
+observer seeing that a capture happened is the same as seeing the mount slew; the
+recorder grants `CaptureAccess` to the mission's own user and nobody else.
+
+**`processingPreset` is recorded as NATURAL and nobody chose it.** The column is
+required, has no contract field, and no customer is offered the choice yet. NATURAL
+is the preset that applies no additional processing, which is what actually
+happened. DV-033 owns `SET_PROFILE` and the mapping; recording BRIGHT or DETAIL now
+would claim a choice that was never offered.
+
+**Not built: the bytes.** `GET /captures/{captureId}/download` and the agent's
+upload need object storage, which does not exist yet. **ADR-012 is APPROVED** and
+answers how: the cloud mints a short-expiry, single-object presigned PUT over the
+agent's existing link, so the observatory holds no bucket credential — only its
+revocable device token. Downloads are presigned GETs minted by the API against the
+requesting customer, after the ownership check.
+
+Until then `thumbnailUrl` is null throughout, which is the contract's own word for
+"no thumbnail". A fabricated path would be a broken image in every card.
+
+**The `Collection` table is not the Collection.** `GET /captures` is what the
+contract and `CLAUDE.md` mean by a customer's Collection. The `Collection` /
+`CollectionCapture` tables hold curated named sets (SOLAR_SYSTEM,
+MESSIER_STARTER) that no endpoint reads and nothing writes. They predate the
+contract and are left alone.
+
 ## What DV-062 wrote down, and what has no writer yet
 
 `AuditCategory` had nine members and one writer: authentication. Everything else the
@@ -407,6 +456,7 @@ These are not engineering work, and none of them can be compressed by working ha
 | Site compass survey | DV-034, DV-059 |
 | **`MAX_ALT_SAFE` measured** from the assembled optical train | DV-034 and every issue that permits a slew |
 | Payment provider merchant onboarding, with the provider's own webhook and signature documentation | DV-056 |
+| S3-compatible object storage: an account, a private bucket and credentials | the rest of DV-061, DV-033 |
 | Hardware order placement and arrival dates | DV-034, DV-035 |
 
 **`MAX_ALT_SAFE` is deliberately `null` in the contract.**

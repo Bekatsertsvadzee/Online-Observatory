@@ -866,6 +866,19 @@ model Capture {
   targetId            String              @db.Uuid
   observatoryId       String              @db.Uuid
   telescopeId         String              @db.Uuid
+  /// The CAPTURE command that produced this frame.
+  ///
+  /// Two jobs, and both of them matter. It is the correlation key: MissionEvent
+  /// and AuditLog already carry commandId, so without this the capture is the one
+  /// artefact of a mission that cannot be traced back to the instruction that made
+  /// it. And it is the idempotency key -- Capture_command_unique is what stops an
+  /// agent that re-sends a capture creating a second row and a second copy in the
+  /// customer's Collection.
+  ///
+  /// Nullable because a capture need not have come from a command the cloud minted
+  /// -- an operator-side capture would not -- and because Postgres allows many
+  /// NULLs under a unique index, which is the behaviour wanted here.
+  commandId           String?             @db.Uuid
   capturedAt          DateTime
   imagingProfile      ImagingProfile
   opticalConfig       OpticalConfig
@@ -892,7 +905,9 @@ model Capture {
   collections         CollectionCapture[]
   access              CaptureAccess[]
   assets              CaptureAsset[]
+  command             ObservatoryCommand? @relation(fields: [commandId], references: [id], onDelete: SetNull)
 
+  @@unique([commandId], map: "Capture_command_unique")
   @@index([userId, capturedAt])
   @@index([missionId])
   @@index([targetId])
@@ -1052,6 +1067,7 @@ model ObservatoryCommand {
   observatory   Observatory              @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
   auditLogs     AuditLog[]
   missionEvents MissionEvent[]
+  captures      Capture[]
 
   @@index([missionId, issuedAt])
   @@index([observatoryId, status, issuedAt])

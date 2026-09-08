@@ -123,6 +123,10 @@ afterAll(async () => {
 beforeEach(async () => {
   notifications = [];
 
+  // Captures first. Capture holds Restrict foreign keys to Mission, Target,
+  // Telescope, Observatory and User, so a capture left behind by another suite
+  // blocks every delete below it -- and these suites share one database.
+  await database.capture.deleteMany();
   await database.observatoryCommand.deleteMany();
   await database.missionSession.deleteMany();
   await database.missionEvent.deleteMany();

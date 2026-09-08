@@ -81,6 +81,10 @@ afterAll(async () => {
 beforeEach(async () => {
   // Order matters: ObservatoryCommand carries a foreign key to MissionSession, so
   // the commands go before the sessions or the delete is refused.
+  // Captures first. Capture holds Restrict foreign keys to Mission, Target,
+  // Telescope, Observatory and User, so a capture left behind by another suite
+  // blocks every delete below it -- and these suites share one database.
+  await database.capture.deleteMany();
   await database.auditLog.deleteMany();
   await database.missionParticipant.deleteMany();
   await database.missionEvent.deleteMany();

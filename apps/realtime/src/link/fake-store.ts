@@ -1,6 +1,9 @@
 import type { ObservatoryCommandStatus } from "@darkview/db/enums";
 
+import { randomUUID } from "node:crypto";
+
 import type {
+  Capture,
   MissionEventSource,
   MissionFailureReason,
   MissionState,
@@ -14,6 +17,8 @@ import {
   TERMINAL_MISSION_STATES,
   isTerminalCommandStatus,
   type ActiveSession,
+  type CaptureOutcome,
+  type CaptureRecord,
   type CommandVerdictOutcome,
   type CommandVerdictRecord,
   type InboundMessageRecord,
@@ -32,6 +37,10 @@ export type FakeMission = {
   failureReason: MissionFailureReason | null;
   mode: ObservatoryMode;
   isDemo: boolean;
+  /** The controller. A capture belongs to this person and to nobody else. */
+  userId: string;
+  targetId: string;
+  telescopeId: string;
 };
 
 export type FakeMissionEvent = {
@@ -209,6 +218,9 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
       failureReason: null,
       mode: "SIMULATED",
       isDemo: false,
+      userId: "00000000-0000-4000-8000-0000000000ff",
+      targetId: "00000000-0000-4000-8000-0000000000fe",
+      telescopeId: "00000000-0000-4000-8000-0000000000fd",
       ...mission,
     });
   }
@@ -249,6 +261,54 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   /** Withdraw the controller's consent without touching the seats. */
   closeToObservers(missionId: string) {
     this.observable.delete(missionId);
+  }
+
+  /** Recorded captures, keyed by the command that produced them. */
+  readonly captures = new Map<string, { capture: Capture; ownerId: string }>();
+
+  async recordCapture(record: CaptureRecord): Promise<CaptureOutcome> {
+    const mission = this.missions.get(record.missionId);
+    if (!mission) return { outcome: "NOT_FOUND" };
+    if (mission.observatoryId !== record.observatoryId) {
+      return { outcome: "WRONG_OBSERVATORY" };
+    }
+
+    // The same scoping the real store applies: the commandId is the idempotency
+    // key, so it has to be this observatory's command on this mission.
+    const command = this.commands.get(record.commandId);
+    if (
+      !command ||
+      command.observatoryId !== record.observatoryId ||
+      command.envelope.missionId !== record.missionId
+    ) {
+      return { outcome: "WRONG_OBSERVATORY" };
+    }
+
+    if (this.captures.has(record.commandId)) return { outcome: "DUPLICATE" };
+
+    const capture: Capture = {
+      id: randomUUID(),
+      missionId: record.missionId,
+      userId: mission.userId,
+      targetId: mission.targetId,
+      capturedAt: record.capturedAt.toISOString(),
+      imagingProfile: record.imagingProfile,
+      opticalConfig: record.opticalConfig,
+      exposureMilliseconds: record.exposureMilliseconds,
+      gain: record.gain,
+      framesStacked: record.framesStacked,
+      integrationSeconds: record.integrationSeconds,
+      widthPx: record.widthPx,
+      heightPx: record.heightPx,
+      solvedFocalLengthMm: record.solvedFocalLengthMm,
+      fitsAvailable: record.assets.some((asset) => asset.kind === "FITS"),
+      visibility: "PRIVATE",
+      mode: mission.mode,
+      thumbnailUrl: null,
+    };
+
+    this.captures.set(record.commandId, { capture, ownerId: mission.userId });
+    return { outcome: "RECORDED", capture };
   }
 
   async hasObserverSeat(missionId: string, userId: string): Promise<boolean> {
