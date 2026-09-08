@@ -1,4 +1,4 @@
-import type { AgentCommandAck, AgentStateDelta } from "@darkview/contracts";
+import type { AgentCommandAck, AgentStateDelta, Capture } from "@darkview/contracts";
 
 import type { MissionBroadcast } from "@/mission/broadcast";
 import type { MissionSnapshot } from "@/mission/store";
@@ -17,6 +17,7 @@ export class RecordingBroadcast implements MissionBroadcast {
   readonly telemetry: { missionId: string; delta: AgentStateDelta }[] = [];
   readonly answered: AgentCommandAck[] = [];
   readonly frames: LiveFrame[] = [];
+  readonly captures: Capture[] = [];
 
   missionMoved(snapshot: MissionSnapshot): void {
     this.moved.push(snapshot);
@@ -32,5 +33,9 @@ export class RecordingBroadcast implements MissionBroadcast {
 
   liveFrameArrived(frame: LiveFrame): void {
     this.frames.push(frame);
+  }
+
+  captureRecorded(capture: Capture): void {
+    this.captures.push(capture);
   }
 }

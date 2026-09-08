@@ -9,7 +9,8 @@
     "./audit": "./audit.ts",
     "./schema": "./prisma/schema.prisma",
     "./development-seed": "./prisma/development-seed.ts",
-    "./phase1-catalogue": "./prisma/phase1-catalogue.ts"
+    "./phase1-catalogue": "./prisma/phase1-catalogue.ts",
+    "./capture": "./capture.ts"
   },
   "scripts": {
     "db:generate": "prisma generate",
@@ -19,7 +20,8 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
-    "@prisma/client": "7.9.1"
+    "@prisma/client": "7.9.1",
+    "@darkview/contracts": "*"
   },
   "devDependencies": {
     "prisma": "7.9.1",

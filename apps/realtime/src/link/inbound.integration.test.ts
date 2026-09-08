@@ -100,6 +100,11 @@ beforeEach(async () => {
   sent = [];
   broadcast = new RecordingBroadcast();
 
+  // Captures first: Capture holds Restrict foreign keys to Mission, Target,
+  // Telescope, Observatory and User, so every later delete in this list is
+  // blocked while one exists.
+  await database.capture.deleteMany();
+  await database.auditLog.deleteMany();
   await database.missionParticipant.deleteMany();
   await database.observatoryCommand.deleteMany();
   await database.missionSession.deleteMany();
@@ -578,5 +583,238 @@ describe("who may still watch a live view", () => {
 
     expect(await store.mayWatchMission(missionId, ownerId, NOW)).toBe(true);
     expect(await store.mayWatchMission(other.id, ownerId, NOW)).toBe(false);
+  });
+});
+
+/**
+ * DV-061 against the real tables.
+ *
+ * Two things here exist only in the database and cannot be shown any other way:
+ * `Capture_command_unique`, which is what makes recording a capture idempotent
+ * beyond the application's own messageId guard, and the `CaptureAccess` row that
+ * decides whose Collection the image lands in. The fake mirrors both, so only this
+ * suite can tell me the SQL agrees with it.
+ */
+describe("a capture reaching the Collection", () => {
+  async function captureCommand(): Promise<string> {
+    const session = await database.missionSession.create({
+      data: {
+        missionId,
+        userId: ownerId,
+        issuedAt: NOW,
+        expiresAt: new Date(NOW.getTime() + 30 * 60_000),
+      },
+    });
+
+    const commandId = randomUUID();
+    await database.observatoryCommand.create({
+      data: {
+        id: commandId,
+        missionId,
+        sessionId: session.id,
+        userId: ownerId,
+        observatoryId: observatory.id,
+        type: "CAPTURE",
+        issuedAt: NOW,
+        expiresAt: new Date(NOW.getTime() + 30_000),
+        payload: { kind: "CAPTURE" },
+      },
+    });
+    return commandId;
+  }
+
+  function record(commandId: string, assets: { kind: "IMAGE" | "FITS" | "UNMARKED" | "THUMBNAIL"; storageKey: string }[] = [
+    { kind: "IMAGE", storageKey: "captures/image.jpg" },
+  ]) {
+    return store.recordCapture({
+      observatoryId: observatory.id,
+      missionId,
+      commandId,
+      capturedAt: NOW,
+      imagingProfile: "GLOBULAR_CLUSTER",
+      opticalConfig: "F10_NATIVE",
+      exposureMilliseconds: 4000,
+      gain: 250,
+      framesStacked: 40,
+      integrationSeconds: 160,
+      widthPx: 3840,
+      heightPx: 2160,
+      solvedFocalLengthMm: 1500,
+      assets,
+    });
+  }
+
+  it("writes the capture, its assets and the owner's access in one transaction", async () => {
+    const commandId = await captureCommand();
+
+    const outcome = await record(commandId, [
+      { kind: "IMAGE", storageKey: "captures/image.jpg" },
+      { kind: "FITS", storageKey: "captures/frame.fits" },
+    ]);
+
+    expect(outcome.outcome).toBe("RECORDED");
+    if (outcome.outcome !== "RECORDED") return;
+
+    const stored = await database.capture.findUniqueOrThrow({
+      where: { id: outcome.capture.id },
+      include: { assets: true, access: true },
+    });
+
+    expect(stored.userId).toBe(ownerId);
+    expect(stored.commandId).toBe(commandId);
+    expect(stored.fitsAvailable).toBe(true);
+    expect(stored.visibility).toBe("PRIVATE");
+    expect(stored.assets.map((asset) => asset.kind).sort()).toEqual(["FITS", "IMAGE"]);
+
+    // The Collection is one person's. ADR-007: nothing from a mission enters an
+    // observer's Collection, so exactly one access row and it is the owner's.
+    expect(stored.access).toHaveLength(1);
+    expect(stored.access[0].userId).toBe(ownerId);
+    expect(stored.access[0].status).toBe("AVAILABLE");
+  });
+
+  it("records only one capture per CAPTURE command", async () => {
+    const commandId = await captureCommand();
+
+    const first = await record(commandId);
+    const second = await record(commandId);
+
+    expect(first.outcome).toBe("RECORDED");
+    expect(second.outcome).toBe("DUPLICATE");
+    expect(await database.capture.count({ where: { missionId } })).toBe(1);
+  });
+
+  it("lets Capture_command_unique refuse a second row even when the check is bypassed", async () => {
+    // The application guard above is the polite path. This is the guarantee: a
+    // future writer, an operator script or an agent build that retries under a
+    // fresh messageId cannot produce two captures for one command.
+    const commandId = await captureCommand();
+    const first = await record(commandId);
+    expect(first.outcome).toBe("RECORDED");
+
+    await expect(
+      database.capture.create({
+        data: {
+          id: randomUUID(),
+          userId: ownerId,
+          missionId,
+          targetId,
+          observatoryId: observatory.id,
+          telescopeId,
+          commandId,
+          capturedAt: NOW,
+          imagingProfile: "GLOBULAR_CLUSTER",
+          opticalConfig: "F10_NATIVE",
+          exposureMilliseconds: 4000,
+          gain: 250,
+          framesStacked: 40,
+          integrationSeconds: 160,
+          processingPreset: "NATURAL",
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("refuses a capture filed against a command the cloud never minted", async () => {
+    const outcome = await record(randomUUID());
+
+    expect(outcome.outcome).toBe("WRONG_OBSERVATORY");
+    expect(await database.capture.count({ where: { missionId } })).toBe(0);
+  });
+
+  it("refuses a capture citing a real command that belongs to another mission", async () => {
+    // The sharper version of the test below. When the mission is somebody else's,
+    // the mission check refuses it and the command scoping is doing nothing. Here
+    // the mission IS this observatory's, and the only thing wrong is that the
+    // command names a different one -- which is what would let one mission's
+    // capture occupy another's row in Capture_command_unique and stop it ever
+    // being recorded.
+    const commandId = await captureCommand();
+
+    const second = await database.mission.create({
+      data: {
+        userId: ownerId,
+        targetId,
+        observatoryId: observatory.id,
+        telescopeId,
+        state: "SCHEDULED",
+      },
+    });
+
+    const outcome = await store.recordCapture({
+      observatoryId: observatory.id,
+      missionId: second.id,
+      commandId,
+      capturedAt: NOW,
+      imagingProfile: "GLOBULAR_CLUSTER",
+      opticalConfig: "F10_NATIVE",
+      exposureMilliseconds: 4000,
+      gain: 250,
+      framesStacked: 40,
+      integrationSeconds: 160,
+      widthPx: null,
+      heightPx: null,
+      solvedFocalLengthMm: null,
+      assets: [{ kind: "IMAGE", storageKey: "captures/image.jpg" }],
+    });
+
+    expect(outcome.outcome).toBe("WRONG_OBSERVATORY");
+    expect(await database.capture.count()).toBe(0);
+  });
+
+  it("reports FITS as unavailable when no FITS object was written", async () => {
+    // Derived from the assets that exist, never asserted. A true here with no
+    // object behind it is a download button that 404s.
+    const commandId = await captureCommand();
+
+    const outcome = await record(commandId, [
+      { kind: "IMAGE", storageKey: "captures/image.jpg" },
+    ]);
+    if (outcome.outcome !== "RECORDED") throw new Error("expected a capture");
+
+    const stored = await database.capture.findUniqueOrThrow({
+      where: { id: outcome.capture.id },
+    });
+    expect(stored.fitsAvailable).toBe(false);
+    expect(outcome.capture.fitsAvailable).toBe(false);
+  });
+
+  it("refuses a capture for a mission belonging to another observatory", async () => {
+    // The mission is real and the command is real; the reporting observatory is
+    // not the one that owns them. An agent authenticated as one observatory must
+    // not be able to file a capture into another's mission.
+    const commandId = await captureCommand();
+
+    const outcome = await store.recordCapture({
+      observatoryId: randomUUID(),
+      missionId,
+      commandId,
+      capturedAt: NOW,
+      imagingProfile: "GLOBULAR_CLUSTER",
+      opticalConfig: "F10_NATIVE",
+      exposureMilliseconds: 4000,
+      gain: 250,
+      framesStacked: 40,
+      integrationSeconds: 160,
+      widthPx: null,
+      heightPx: null,
+      solvedFocalLengthMm: null,
+      assets: [{ kind: "IMAGE", storageKey: "captures/image.jpg" }],
+    });
+
+    expect(outcome.outcome).toBe("WRONG_OBSERVATORY");
+    expect(await database.capture.count({ where: { missionId } })).toBe(0);
+  });
+
+  it("writes an audit row naming the command that produced it", async () => {
+    const commandId = await captureCommand();
+    const outcome = await record(commandId);
+    if (outcome.outcome !== "RECORDED") throw new Error("expected a capture");
+
+    const audit = await database.auditLog.findFirstOrThrow({
+      where: { action: "CAPTURE_RECORDED", missionId },
+    });
+    expect(audit.commandId).toBe(commandId);
+    expect(audit.entityId).toBe(outcome.capture.id);
   });
 });

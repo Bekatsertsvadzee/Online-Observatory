@@ -1,7 +1,8 @@
-import type { AgentCommandAck, AgentStateDelta } from "@darkview/contracts";
+import type { AgentCommandAck, AgentStateDelta, Capture } from "@darkview/contracts";
 
 import { TERMINAL_MISSION_STATES, type LinkStore } from "@/link/store";
 import {
+  missionCaptureReady,
   missionCommandResult,
   missionStateUpdate,
   missionTelemetryUpdate,
@@ -24,6 +25,7 @@ export interface MissionBroadcast {
   telemetryReported(missionId: string, delta: AgentStateDelta): void;
   commandAnswered(ack: AgentCommandAck): Promise<void>;
   liveFrameArrived(frame: LiveFrame): void;
+  captureRecorded(capture: Capture): void;
 }
 
 /**
@@ -81,6 +83,20 @@ export class MissionRelay implements MissionBroadcast {
     for (const channel of this.registry.subscribers(frame.missionId)) {
       channel.offerStream();
     }
+  }
+
+  /**
+   * One capture, to everyone watching the mission it came from.
+   *
+   * The fan-out is the mission's, so an observer sees the message. That is the
+   * correct reading of ADR-007 rather than a leak of one: an observer watching a
+   * session sees that a capture happened, exactly as they see the mount slew.
+   * What they do not get is the capture -- no CaptureAccess row, nothing in their
+   * Collection, and no download. The recorder is where that is enforced, and it
+   * grants the mission's own user and nobody else.
+   */
+  captureRecorded(capture: Capture): void {
+    this.registry.broadcast(capture.missionId, missionCaptureReady(capture));
   }
 
   telemetryReported(missionId: string, delta: AgentStateDelta): void {
