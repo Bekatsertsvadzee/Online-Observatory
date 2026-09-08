@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 
 from contracts.models import MissionFailureReason, MissionState
+from darkview_agent.capture.stack import LiveStack
 from darkview_agent.clock import ManualClock, wire_timestamp
 from darkview_agent.devices.base import DeviceError
 from darkview_agent.devices.simulated import SimCamera, SimFocuser, SimMount
@@ -51,6 +52,8 @@ def build_runner(
     site=TBILISI,
     events: list[MissionEvent] | None = None,
     devices: Devices | None = None,
+    show: list | None = None,
+    stack=None,
     **config,
 ) -> MissionRunner:
     envelope = SafetyEnvelope(
@@ -67,6 +70,8 @@ def build_runner(
         solver=solver or SimSolver(),
         clock=clock,
         emit=(events.append if events is not None else None),
+        show=(show.append if show is not None else None),
+        stack=stack,
     )
 
 
@@ -675,3 +680,47 @@ def test_a_solver_with_no_commanded_position_reports_no_solution():
         mode=ObservatoryMode.simulated,
     )
     assert solver.solve(frame) is None
+
+
+class TestLiveStackWiring:
+    """DV-033 — the stack is actually in the capture loop.
+
+    The stacking itself is covered exhaustively in `test_live_stack.py` against
+    synthetic skies. What only these tests can show is that the runner uses it:
+    that the frames the customer is shown during CAPTURING are the stack rather
+    than the latest sub, and that a slew starts a new one. Both are single lines
+    of wiring, which is precisely the shape of failure issues #25 and #27 record.
+    """
+
+    def _run(self, clock: ManualClock, shown: list, stack=None) -> MissionRunner:
+        runner = build_runner(clock, show=shown, stack=stack)
+        runner.offer(request(requested_frames=4), NIGHT)
+        run_to_completion(runner, clock)
+        assert runner.frames_captured == 4
+        return runner
+
+    def test_shows_the_stack_rather_than_the_latest_sub(self) -> None:
+        clock = ManualClock()
+        shown: list = []
+
+        self._run(clock, shown)
+
+        # Frames from CAPTURING carry a stack count that climbs. A runner showing
+        # the raw sub would leave stacked_frames None on every one of them.
+        stacked = [frame.stacked_frames for frame in shown if frame.stacked_frames]
+        assert stacked, "no frame was shown with a stack count"
+        assert stacked == sorted(stacked)
+        assert max(stacked) >= 2
+
+    def test_a_slew_starts_a_new_stack(self) -> None:
+        # Averaging across a slew would combine two different parts of the sky
+        # into one image, which is not a worse picture of the target.
+        clock = ManualClock()
+        stack = LiveStack()
+        shown: list = []
+
+        self._run(clock, shown, stack=stack)
+        assert stack.frames_stacked >= 2
+
+        stack.reset()
+        assert stack.frames_stacked == 0
