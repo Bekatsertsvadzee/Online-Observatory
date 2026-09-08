@@ -230,6 +230,83 @@ measured against `SimCamera`, because ADR-011 assigns the real measurement to th
 and that hardware does not exist yet. They are marked PROVISIONAL at every definition and
 DV-035 replaces them. They are not safety values; nothing in this path can move a mount.
 
+## What DV-115 metered, and the one rule behind it
+
+Rate limiting existed before this and was wired to two call sites: sign-in and
+register. Everything else an authenticated account could do -- reserve slots,
+mint commands, churn observer seats, write the safety envelope -- was unmetered.
+
+**The primitive did not change.** `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`
+in one statement, so concurrent attempts serialise on the row lock instead of
+racing; `X-Forwarded-For` read from the right, bounded by `TRUSTED_PROXY_HOPS`,
+trusting nothing by default. What changed is that it now lives in
+`packages/db/rate-limit.ts`, for the reason `audit.ts` does: both services need
+it, and two implementations of a decision that is only correct in one statement
+is two chances to get it wrong. `apps/api/src/lib/security/rate-limit.ts` holds
+what is specific to this service -- who is asking, which policy, what a refusal
+looks like on the wire.
+
+**One rule decides every exemption: anything that stops the telescope is never
+metered, anything that starts or widens it is.**
+
+| Path | Metered? |
+| --- | --- |
+| `POST /admin/override` carrying `PARK` or `ABORT` | Never. A limiter able to delay an emergency stop is a regression dressed as hardening -- the moment an operator most needs Park is the moment they have been hammering the console. |
+| `POST /admin/observatory/weather-hold` declaring a hold | Never. Phase 1 has no sky sensor, so an operator at a window is the only thing that can call the weather unsafe. Clearing a hold is metered. |
+| `POST /admin/missions/{id}/cancel` | Never. It releases the observatory, and there is one active mission at a time, so cancelling in a loop cancels the same mission repeatedly. |
+| Everything else that mutates | Metered, and `metered-routes.test.ts` fails if a new mutating route lands without it. |
+
+**The exemptions are functions, not conditions at a call site.**
+`overrideIsExemptFromMetering` lives next to `RECOVERY_COMMANDS` and
+`weatherHoldIsExemptFromMetering` next to `setWeatherHold`, so neither can drift
+from the thing it is about, and both are testable without a request.
+
+**The override exemption reads both `type` and `payload.kind`, where the safety
+pre-check reads only the payload.** That is not an inconsistency. The safety
+check reads the payload because the payload says where the telescope ends up.
+This one is deciding whether to *skip* a check, so it fails the other way: a
+request whose halves disagree is not a Park, it is the 422 that DV-063's injected
+bug taught us to expect -- and unmetered refusals are exactly what an attacker
+would want unlimited attempts at.
+
+**A found hole, in the code this inherited.** Registration was metered on
+`address:email`, so a fresh email address was a fresh bucket: it capped attempts
+at one account and not the number of accounts one client could open.
+`consumeRegistrationOriginLimit` caps that -- and returns true unconditionally
+for an unattributed actor, because keyed on the fallback constant it would be one
+bucket shared by every customer in the world and the eleventh person to register
+anywhere would be locked out for an hour. So the cap is real only once
+`TRUSTED_PROXY_HOPS` is set, which `.env.example` now says.
+
+**A refusal is an audit row.** Category by surface, action `RATE_LIMITED`,
+`detail.scope` naming the bucket. DV-063 deferred exactly this: without it a
+customer locked out of their own observation and a script being turned away look
+identical in the logs.
+
+**Not built: the realtime service's own metering.** `packages/db/rate-limit.ts`
+is where it will go and takes no Next dependency for that reason, but nothing in
+`apps/realtime` calls it yet. The exposure is genuinely smaller -- a mission
+handshake already needs a valid session cookie behind an Origin check, and a
+live-view token is a 256-bit HMAC, so neither is guessable -- and an
+unauthenticated connection flood is a transport concern that belongs to whatever
+proxy terminates TLS. It is deferred, not overlooked.
+
+**Not built: anything payment-shaped.** Checkout abuse, voucher fraud and refund
+churn are the other half of DV-115 and none of it can be written before DV-056.
+
+**Verified by removing each protection and confirming a named test fails:** the
+override's two-sided exemption, the weather-hold direction, the audit row, the
+per-route metering, the unattributed-actor escape hatch, the fail-closed branch,
+and reading `X-Forwarded-For` from the trusted end. The per-route check passed
+the first time and was rewritten: it asserted a route *mentioned* `meterRequest`,
+which an unmetered route with a surviving import line satisfies.
+
+The two routes that already had unit tests -- bookings and mission command --
+gained one apiece asserting the refusal lands *before* the domain is asked. That
+ordering is the point rather than a detail: a booking metered after the fact has
+already held a slot, and a command metered after the fact is a command the
+telescope has already been asked to obey.
+
 ## What DV-063 built, and the one endpoint it could not
 
 Six of the seven remaining admin operations. `/admin/logs` and

@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const { getCurrentSession, requestHeaders, mintMissionCommand } = vi.hoisted(() => ({
+const { meterRequest, getCurrentSession, requestHeaders, mintMissionCommand } = vi.hoisted(() => ({
+  meterRequest: vi.fn(),
   getCurrentSession: vi.fn(),
   requestHeaders: { origin: "https://darkview.test" as string | null },
   mintMissionCommand: vi.fn(),
@@ -13,6 +14,7 @@ vi.mock("next/headers", () => ({
   headers: async () =>
     new Headers(requestHeaders.origin ? { origin: requestHeaders.origin } : {}),
 }));
+vi.mock("@/lib/security/rate-limit", () => ({ meterRequest, COMMAND_POLICY: {} }));
 vi.mock("@/lib/validation/env", () => ({
   getServerEnvironment: () => ({ APP_URL: "https://darkview.test" }),
 }));
@@ -77,6 +79,22 @@ const params = { params: Promise.resolve({ missionId: MISSION_ID }) };
 describe("POST /missions/{missionId}/command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    meterRequest.mockResolvedValue(null);
+  });
+
+  it("refuses without minting anything when the meter says no", async () => {
+    // A metered refusal must land before the envelope is minted. A command that
+    // reached the observatory and was then rate-limited would be a command the
+    // telescope had already been asked to obey.
+    getCurrentSession.mockResolvedValueOnce(session);
+    meterRequest.mockResolvedValueOnce(
+      Response.json({ code: "RATE_LIMITED", message: "Too many requests." }, { status: 429 }),
+    );
+
+    const response = await POST(request(nudge), params);
+
+    expect(response.status).toBe(429);
+    expect(mintMissionCommand).not.toHaveBeenCalled();
   });
 
   it("refuses an anonymous caller", async () => {

@@ -1,8 +1,12 @@
 import { zOperatorOverrideRequest } from "@darkview/contracts/zod";
 
-import { issueOperatorOverride } from "@/features/admin/override";
+import {
+  issueOperatorOverride,
+  overrideIsExemptFromMetering,
+} from "@/features/admin/override";
 import { requireOperatorMutation } from "@/lib/auth/api-guard";
 import { apiError } from "@/lib/http/api-error";
+import { meterRequest, OPERATOR_OVERRIDE_POLICY } from "@/lib/security/rate-limit";
 
 /**
  * POST /admin/override -- operator manual control, including the emergency Park.
@@ -25,6 +29,21 @@ export async function POST(request: Request) {
       "VALIDATION_FAILED",
       "An override needs a command type, a payload and a reason of at least eight characters.",
     );
+  }
+
+  // A stolen operator session is metered; an emergency stop is not. The exemption
+  // is decided by `overrideIsExemptFromMetering`, which lives next to the list of
+  // recovery commands so the two cannot drift apart.
+  if (!overrideIsExemptFromMetering(parsed.data)) {
+    const limited = await meterRequest({
+      policy: OPERATOR_OVERRIDE_POLICY,
+      scope: "operator-override",
+      identity: guard.session.user.id,
+      category: "OPERATOR_OVERRIDE",
+      actorUserId: guard.session.user.id,
+      missionId: parsed.data.missionId ?? null,
+    });
+    if (limited) return limited;
   }
 
   const result = await issueOperatorOverride({

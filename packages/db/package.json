@@ -10,7 +10,8 @@
     "./schema": "./prisma/schema.prisma",
     "./development-seed": "./prisma/development-seed.ts",
     "./phase1-catalogue": "./prisma/phase1-catalogue.ts",
-    "./capture": "./capture.ts"
+    "./capture": "./capture.ts",
+    "./rate-limit": "./rate-limit.ts"
   },
   "scripts": {
     "db:generate": "prisma generate",

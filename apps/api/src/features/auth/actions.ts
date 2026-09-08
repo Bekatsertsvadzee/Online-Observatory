@@ -10,7 +10,12 @@ import { createOpaqueToken, hashToken } from "@/lib/auth/crypto";
 import { sendEmailVerification } from "@/lib/auth/email-verification";
 import { assertSameOrigin } from "@/lib/auth/origin";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
-import { consumeAuthenticationLimit, requestActor } from "@/lib/auth/rate-limit";
+import {
+  AUTHENTICATION_POLICY,
+  consumeLimit,
+  consumeRegistrationOriginLimit,
+  requestActor,
+} from "@/lib/security/rate-limit";
 import {
   createSession,
   csrfTokenIsValid,
@@ -77,7 +82,7 @@ export async function signInAction(
 
   const actor = await requestActor();
   const identity = `${actor}:${result.data.email}`;
-  if (!(await consumeAuthenticationLimit("sign-in", identity))) {
+  if (!(await consumeLimit(AUTHENTICATION_POLICY, "sign-in", identity))) {
     await recordAuthEvent("RATE_LIMITED", { actor: identity });
     return { message: copy.errors.rateLimited };
   }
@@ -127,8 +132,18 @@ export async function registerAction(
 
   const actor = await requestActor();
   const identity = `${actor}:${result.data.email}`;
-  if (!(await consumeAuthenticationLimit("register", identity))) {
+  if (!(await consumeLimit(AUTHENTICATION_POLICY, "register", identity))) {
     await recordAuthEvent("RATE_LIMITED", { actor: identity });
+    return { message: copy.errors.rateLimited };
+  }
+
+  // The check above is keyed on the address *and* the email, so a fresh email
+  // address is a fresh bucket: it caps attempts at one account, not the number
+  // of accounts one client may create. This caps that, and only where the
+  // address is real, which is why the check is a function rather than a
+  // condition here.
+  if (!(await consumeRegistrationOriginLimit(actor))) {
+    await recordAuthEvent("RATE_LIMITED", { actor });
     return { message: copy.errors.rateLimited };
   }
 

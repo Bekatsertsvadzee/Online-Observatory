@@ -30,6 +30,32 @@ import { loadSafetyEnvelope, siteOf } from "@/lib/safety/store";
  */
 const RECOVERY_COMMANDS = ["PARK", "ABORT"] as const;
 
+function isRecoveryCommand(kind: string) {
+  return RECOVERY_COMMANDS.includes(kind as (typeof RECOVERY_COMMANDS)[number]);
+}
+
+/**
+ * Whether an override must skip rate limiting entirely.
+ *
+ * A limiter able to delay an emergency stop is a regression dressed as
+ * hardening: the moment an operator most needs Park is the moment they have
+ * been hammering the console, which is exactly when a meter would refuse them.
+ * So recovery commands are never metered, and this lives beside
+ * `RECOVERY_COMMANDS` so the two cannot drift apart.
+ *
+ * It requires *both* the declared type and the payload to be recovery commands,
+ * where `preValidate` needs only the payload. That is not inconsistency. The
+ * safety check reads the payload because the payload is what says where the
+ * telescope ends up. This one is deciding whether to skip a check, so it fails
+ * the other way: a request whose two halves disagree is not a Park, it is a
+ * malformed request that `issueOperatorOverride` is about to refuse with 422 --
+ * and refusals are precisely what an unmetered path should not offer unlimited
+ * attempts at.
+ */
+export function overrideIsExemptFromMetering(request: OperatorOverrideRequest) {
+  return isRecoveryCommand(request.type) && isRecoveryCommand(request.payload.kind);
+}
+
 export type OverrideFailure = {
   ok: false;
   status: 404 | 409 | 422;
@@ -265,9 +291,7 @@ async function preValidate(input: {
   // agree before this runs, but exempting on `type` would still be the wrong shape:
   // it is the payload that says where the telescope would end up, and a check that
   // reads one field while acting on another is how a mismatch becomes a bypass.
-  if (
-    RECOVERY_COMMANDS.includes(request.payload.kind as (typeof RECOVERY_COMMANDS)[number])
-  ) {
+  if (isRecoveryCommand(request.payload.kind)) {
     return null;
   }
 

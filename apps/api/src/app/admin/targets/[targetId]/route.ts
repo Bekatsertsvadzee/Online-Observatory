@@ -3,6 +3,7 @@ import { zAdminUpdateTargetRequest, zTargetId } from "@darkview/contracts/zod";
 import { updateTargetAsOperator } from "@/features/admin/targets";
 import { requireOperatorMutation } from "@/lib/auth/api-guard";
 import { apiError } from "@/lib/http/api-error";
+import { ADMIN_MUTATION_POLICY, meterRequest } from "@/lib/security/rate-limit";
 
 /**
  * PATCH /admin/targets/{targetId} -- enable, disable or tune one target.
@@ -31,6 +32,15 @@ export async function PATCH(
   if (!parsed.success) {
     return apiError(422, "VALIDATION_FAILED", "One or more known target fields are required.");
   }
+
+  const limited = await meterRequest({
+    policy: ADMIN_MUTATION_POLICY,
+    scope: "admin-target-update",
+    identity: guard.session.user.id,
+    category: "OPERATOR_OVERRIDE",
+    actorUserId: guard.session.user.id,
+  });
+  if (limited) return limited;
 
   const result = await updateTargetAsOperator({
     targetId,

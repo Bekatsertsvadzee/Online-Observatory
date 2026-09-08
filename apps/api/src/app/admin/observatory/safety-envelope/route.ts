@@ -4,6 +4,7 @@ import { setSafetyEnvelope } from "@/features/admin/safety-envelope";
 import { requireOperator, requireOperatorMutation } from "@/lib/auth/api-guard";
 import { getDatabase } from "@/lib/db/client";
 import { apiError } from "@/lib/http/api-error";
+import { ADMIN_MUTATION_POLICY, meterRequest } from "@/lib/security/rate-limit";
 import { loadSafetyEnvelope } from "@/lib/safety/store";
 
 /**
@@ -70,6 +71,15 @@ export async function PUT(request: Request) {
   if (!observatoryId) {
     return apiError(404, "NOT_FOUND", "No observatory is configured.");
   }
+
+  const limited = await meterRequest({
+    policy: ADMIN_MUTATION_POLICY,
+    scope: "admin-safety-envelope",
+    identity: guard.session.user.id,
+    category: "SAFETY",
+    actorUserId: guard.session.user.id,
+  });
+  if (limited) return limited;
 
   const result = await setSafetyEnvelope({
     observatoryId,

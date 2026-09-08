@@ -27,8 +27,17 @@ vi.mock("@/lib/validation/env", () => ({
   }),
 }));
 
-const { consumeAuthenticationLimit, requestActor } =
-  await import("@/lib/auth/rate-limit");
+const {
+  AUTHENTICATION_POLICY,
+  consumeLimit,
+  consumeRegistrationOriginLimit,
+  meterRequest,
+  requestActor,
+  UNATTRIBUTED,
+} = await import("@/lib/security/rate-limit");
+
+const authenticationLimit = (scope: string, identity: string, now: Date) =>
+  consumeLimit(AUTHENTICATION_POLICY, scope, identity, now);
 
 /**
  * The authentication limiter is only worth anything under concurrency, and
@@ -69,7 +78,7 @@ describe("the authentication limiter counts every attempt", () => {
   it("allows exactly the limit when attempts arrive one at a time", async () => {
     const results: boolean[] = [];
     for (let attempt = 0; attempt < PARALLEL_ATTEMPTS; attempt += 1) {
-      results.push(await consumeAuthenticationLimit("sign-in", "victim", NOW));
+      results.push(await authenticationLimit("sign-in", "victim", NOW));
     }
 
     expect(results.filter(Boolean)).toHaveLength(LIMIT);
@@ -83,7 +92,7 @@ describe("the authentication limiter counts every attempt", () => {
     // two. Arriving together must not buy an attacker a single extra attempt.
     const results = await Promise.all(
       Array.from({ length: PARALLEL_ATTEMPTS }, () =>
-        consumeAuthenticationLimit("sign-in", "victim", NOW),
+        authenticationLimit("sign-in", "victim", NOW),
       ),
     );
 
@@ -97,13 +106,13 @@ describe("the authentication limiter counts every attempt", () => {
 
   it("keeps refusing while the block stands, without extending it", async () => {
     for (let attempt = 0; attempt <= LIMIT; attempt += 1) {
-      await consumeAuthenticationLimit("sign-in", "victim", NOW);
+      await authenticationLimit("sign-in", "victim", NOW);
     }
 
     const blocked = await database.rateLimitBucket.findFirstOrThrow();
 
     const later = new Date(NOW.getTime() + 60_000);
-    expect(await consumeAuthenticationLimit("sign-in", "victim", later)).toBe(false);
+    expect(await authenticationLimit("sign-in", "victim", later)).toBe(false);
 
     const after = await database.rateLimitBucket.findFirstOrThrow();
     expect(after.blockedUntil).toEqual(blocked.blockedUntil);
@@ -111,7 +120,7 @@ describe("the authentication limiter counts every attempt", () => {
 
   it("gives a fresh window the moment a block lapses", async () => {
     for (let attempt = 0; attempt <= LIMIT; attempt += 1) {
-      await consumeAuthenticationLimit("sign-in", "victim", NOW);
+      await authenticationLimit("sign-in", "victim", NOW);
     }
 
     const blocked = await database.rateLimitBucket.findFirstOrThrow();
@@ -120,7 +129,7 @@ describe("the authentication limiter counts every attempt", () => {
     // Guards against a lockout loop: if the block is ever configured shorter than
     // the window, a lapsed block must still hand back a full allowance rather
     // than land on count+1 > limit and re-block on the very next attempt.
-    expect(await consumeAuthenticationLimit("sign-in", "victim", afterBlock)).toBe(true);
+    expect(await authenticationLimit("sign-in", "victim", afterBlock)).toBe(true);
 
     const bucket = await database.rateLimitBucket.findFirstOrThrow();
     expect(bucket.count).toBe(1);
@@ -129,11 +138,11 @@ describe("the authentication limiter counts every attempt", () => {
 
   it("starts a fresh window once the old one has passed", async () => {
     for (let attempt = 0; attempt <= LIMIT; attempt += 1) {
-      await consumeAuthenticationLimit("sign-in", "victim", NOW);
+      await authenticationLimit("sign-in", "victim", NOW);
     }
 
     const afterWindow = new Date(NOW.getTime() + WINDOW_MS + 1);
-    expect(await consumeAuthenticationLimit("sign-in", "victim", afterWindow)).toBe(true);
+    expect(await authenticationLimit("sign-in", "victim", afterWindow)).toBe(true);
 
     const bucket = await database.rateLimitBucket.findFirstOrThrow();
     expect(bucket.count).toBe(1);
@@ -142,11 +151,11 @@ describe("the authentication limiter counts every attempt", () => {
 
   it("separates scopes and identities", async () => {
     for (let attempt = 0; attempt <= LIMIT; attempt += 1) {
-      await consumeAuthenticationLimit("sign-in", "victim", NOW);
+      await authenticationLimit("sign-in", "victim", NOW);
     }
 
-    expect(await consumeAuthenticationLimit("sign-in", "someone-else", NOW)).toBe(true);
-    expect(await consumeAuthenticationLimit("register", "victim", NOW)).toBe(true);
+    expect(await authenticationLimit("sign-in", "someone-else", NOW)).toBe(true);
+    expect(await authenticationLimit("register", "victim", NOW)).toBe(true);
   });
 });
 
@@ -164,7 +173,7 @@ describe("who the limiter thinks is asking", () => {
     for (let attempt = 0; attempt <= LIMIT; attempt += 1) {
       requestHeaders.forwardedFor = `198.51.100.${attempt}`;
       const actor = await requestActor();
-      attempts.push(await consumeAuthenticationLimit("sign-in", `${actor}:victim`, NOW));
+      attempts.push(await authenticationLimit("sign-in", `${actor}:victim`, NOW));
     }
 
     expect(attempts.filter(Boolean)).toHaveLength(LIMIT);
@@ -186,5 +195,95 @@ describe("who the limiter thinks is asking", () => {
     // Fewer hops than promised means the request did not arrive the way we were
     // told, so nothing in the header is trusted.
     expect(await requestActor()).toBe("unattributed");
+  });
+});
+
+describe("what a refused request leaves behind", () => {
+  const meterOnce = (now: Date) =>
+    meterRequest({
+      policy: { limit: 1, windowMs: 60_000, blockMs: 60_000 },
+      scope: "test-surface",
+      identity: "somebody",
+      category: "BOOKING",
+      now,
+    });
+
+  beforeEach(async () => {
+    await database.auditLog.deleteMany({ where: { action: "RATE_LIMITED" } });
+  });
+
+  it("says nothing at all while the budget holds", async () => {
+    expect(await meterOnce(NOW)).toBeNull();
+    expect(await database.auditLog.count({ where: { action: "RATE_LIMITED" } })).toBe(0);
+  });
+
+  it("answers 429 RATE_LIMITED once the budget is spent", async () => {
+    await meterOnce(NOW);
+    const refusal = await meterOnce(NOW);
+
+    expect(refusal?.status).toBe(429);
+    expect(await refusal?.json()).toEqual({
+      code: "RATE_LIMITED",
+      message: "Too many requests. Try again later.",
+    });
+  });
+
+  it("writes one audit row naming the surface, and none for an allowed request", async () => {
+    // A refusal that leaves nothing behind is invisible: a customer locked out of
+    // their own observation and a script being turned away look identical in the
+    // logs. `docs/backlog.md` recorded exactly this gap when DV-063 deferred it.
+    await meterOnce(NOW);
+    await meterOnce(NOW);
+
+    const rows = await database.auditLog.findMany({ where: { action: "RATE_LIMITED" } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].category).toBe("BOOKING");
+    expect(rows[0].metadata).toEqual({ scope: "test-surface" });
+  });
+
+  it("does not tell the caller how much budget is left or when it returns", async () => {
+    // A limiter that reports its own state can be measured, and an attacker who
+    // can measure one can schedule around it.
+    await meterOnce(NOW);
+    const body = JSON.stringify(await (await meterOnce(NOW))?.json());
+
+    expect(body).not.toMatch(/\d/);
+  });
+});
+
+describe("how many accounts one address may open", () => {
+  const ORIGIN_LIMIT = 10;
+
+  it("never limits an unattributed registration", async () => {
+    // `AUTHENTICATION_POLICY` meters registration by address and email together,
+    // so a fresh email is a fresh bucket. This is the cap on the number of
+    // accounts rather than the attempts at one -- but keyed on UNATTRIBUTED it
+    // would be a single bucket shared by every customer in the world, and the
+    // eleventh person to register anywhere would be locked out for an hour.
+    const results = await Promise.all(
+      Array.from({ length: ORIGIN_LIMIT * 3 }, () =>
+        consumeRegistrationOriginLimit(UNATTRIBUTED, NOW),
+      ),
+    );
+
+    expect(results.every(Boolean)).toBe(true);
+    expect(await database.rateLimitBucket.count()).toBe(0);
+  });
+
+  it("caps registrations from one real address", async () => {
+    const results: boolean[] = [];
+    for (let attempt = 0; attempt < ORIGIN_LIMIT * 2; attempt += 1) {
+      results.push(await consumeRegistrationOriginLimit("203.0.113.9", NOW));
+    }
+
+    expect(results.filter(Boolean)).toHaveLength(ORIGIN_LIMIT);
+  });
+
+  it("keeps one address's budget away from another's", async () => {
+    for (let attempt = 0; attempt <= ORIGIN_LIMIT; attempt += 1) {
+      await consumeRegistrationOriginLimit("203.0.113.9", NOW);
+    }
+
+    expect(await consumeRegistrationOriginLimit("198.51.100.4", NOW)).toBe(true);
   });
 });

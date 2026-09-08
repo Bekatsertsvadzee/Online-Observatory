@@ -29,13 +29,18 @@ import type { AuditCategory } from "./generated/prisma/enums.ts";
  * OPERATOR_OVERRIDE are DV-063.
  */
 export type AuditAction =
+  // Any category. A rate limiter refused something, and the category says which
+  // surface: AUTH is a password-guessing budget, BOOKING is somebody holding
+  // inventory, COMMAND is somebody flooding a live mission. One action rather
+  // than one per surface, because the pair (category, action) already says it
+  // and `detail.scope` names the exact bucket.
+  | "RATE_LIMITED"
   // AUTH -- written by recordAuthEvent, whose actions are AuthEventType.
   | "REGISTERED"
   | "EMAIL_VERIFIED"
   | "LOGIN_SUCCEEDED"
   | "LOGIN_FAILED"
   | "LOGGED_OUT"
-  | "RATE_LIMITED"
   // BOOKING
   | "BOOKING_RESERVED"
   | "BOOKING_SLOT_RELEASED"

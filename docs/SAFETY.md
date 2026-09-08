@@ -198,7 +198,7 @@ failure it exists to prevent.
 
 | Gap | Consequence today | Owed by |
 | --- | --- | --- |
-| **No operator emergency-park control.** `Watchdog.operator_abort` has no caller outside an `ABORT` command envelope. | An operator's emergency stop is: send `ABORT`/`PARK` through the mission command route as the session owner, or stop the agent process (which parks on shutdown), or wait out `linkDeadSeconds`. There is no button. | DV-063 |
+| **`Watchdog.operator_abort` still has no caller outside a command envelope.** | Closed at the cloud end: `POST /admin/override` is the operator's emergency stop, and DV-115 exempts `PARK` and `ABORT` from rate limiting so nothing can delay one. What remains is the agent-side trigger, which fires today only because an envelope arrives. | DV-034 |
 | **`Watchdog.weather_unsafe` has no caller.** Nothing reads weather and nothing raises the trigger. | `WEATHER_HOLD` is reachable only by an operator moving the mission by hand. | DV-039 |
 | **`MAX_ALT_SAFE` is unmeasured, and no hardware exists.** | Every slew is refused by both cloud and agent. This is the system working. | DV-034 |
 | **Nothing has run against a real mount or camera.** Every property above is verified against `SimMount` and `SimCamera`. | The rules are proven; their behaviour against real driver faults and real timing is not. | DV-034 … DV-038 |
