@@ -3,6 +3,7 @@ import { zMissionId } from "@darkview/contracts/zod";
 import { startMissionSession } from "@/features/missions/session";
 import { requireApiMutation } from "@/lib/auth/api-guard";
 import { apiError } from "@/lib/http/api-error";
+import { meterRequest, MISSION_SESSION_POLICY } from "@/lib/security/rate-limit";
 
 /**
  * POST /missions/{missionId}/start -- become the single active session owner.
@@ -24,6 +25,16 @@ export async function POST(
   if (!zMissionId.safeParse(missionId).success) {
     return apiError(404, "NOT_FOUND", "No such mission.");
   }
+
+  const limited = await meterRequest({
+    policy: MISSION_SESSION_POLICY,
+    scope: "mission-start",
+    identity: guard.session.user.id,
+    category: "MISSION",
+    actorUserId: guard.session.user.id,
+    missionId,
+  });
+  if (limited) return limited;
 
   const result = await startMissionSession({
     missionId,

@@ -7,6 +7,7 @@ import {
 } from "@/features/missions/command";
 import { requireApiMutation } from "@/lib/auth/api-guard";
 import { apiError } from "@/lib/http/api-error";
+import { COMMAND_POLICY, meterRequest } from "@/lib/security/rate-limit";
 
 /**
  * POST /missions/{missionId}/command -- submit bounded intent.
@@ -35,6 +36,20 @@ export async function POST(
   if (!zMissionId.safeParse(missionId).success) {
     return apiError(404, "NOT_FOUND", "No such mission.");
   }
+
+  // Metered after the mission id is known to be well formed, so a refusal here
+  // is always about how often this account is commanding and never about a
+  // malformed URL. The block is deliberately short: the account on the other end
+  // is usually a paying customer in the middle of their own observation.
+  const limited = await meterRequest({
+    policy: COMMAND_POLICY,
+    scope: "mission-command",
+    identity: guard.session.user.id,
+    category: "COMMAND",
+    actorUserId: guard.session.user.id,
+    missionId,
+  });
+  if (limited) return limited;
 
   let raw: unknown;
   try {

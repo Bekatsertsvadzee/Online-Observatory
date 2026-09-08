@@ -130,6 +130,20 @@ export async function setObservatoryMode(input: {
 export type WeatherResult = { ok: true; weather: WeatherState } | AdminFailure;
 
 /**
+ * Whether a weather-hold change must skip rate limiting.
+ *
+ * Declaring a hold is never metered; clearing one is. This is the same rule the
+ * override applies to Park: whatever stops the telescope must not be something a
+ * rate limiter can delay, and the moment an operator most needs to call the
+ * weather unsafe is a moment they may well have been hammering the console.
+ * Clearing a hold is the direction that puts a telescope back under the sky, and
+ * it waits its turn like everything else.
+ */
+export function weatherHoldIsExemptFromMetering(request: SetWeatherHoldRequest) {
+  return request.holdActive;
+}
+
+/**
  * Set or clear the operator's weather hold.
  *
  * Phase 1 has no sky sensor, so this is the only thing that can declare the

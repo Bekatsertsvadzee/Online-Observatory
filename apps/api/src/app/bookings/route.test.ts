@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const { getCurrentSession, requestHeaders, reserveSlot } = vi.hoisted(() => ({
+const { meterRequest, getCurrentSession, requestHeaders, reserveSlot } = vi.hoisted(() => ({
+  meterRequest: vi.fn(),
   getCurrentSession: vi.fn(),
   requestHeaders: { origin: "https://darkview.test" as string | null },
   reserveSlot: vi.fn(),
@@ -13,6 +14,7 @@ vi.mock("next/headers", () => ({
   headers: async () =>
     new Headers(requestHeaders.origin ? { origin: requestHeaders.origin } : {}),
 }));
+vi.mock("@/lib/security/rate-limit", () => ({ meterRequest, BOOKING_POLICY: {} }));
 vi.mock("@/lib/validation/env", () => ({
   getServerEnvironment: () => ({ APP_URL: "https://darkview.test" }),
 }));
@@ -91,6 +93,23 @@ const validBody = {
 describe("POST /bookings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    meterRequest.mockResolvedValue(null);
+  });
+
+  it("refuses without reserving anything when the meter says no", async () => {
+    // The route's own wiring, not the limiter's arithmetic. A booking takes a
+    // half hour of the only telescope out of everyone else's reach, so a metered
+    // refusal must happen before the domain is asked, not after it has held a
+    // slot.
+    getCurrentSession.mockResolvedValueOnce(session);
+    meterRequest.mockResolvedValueOnce(
+      Response.json({ code: "RATE_LIMITED", message: "Too many requests." }, { status: 429 }),
+    );
+
+    const response = await POST(request({ body: validBody }));
+
+    expect(response.status).toBe(429);
+    expect(reserveSlot).not.toHaveBeenCalled();
   });
 
   it("refuses an anonymous caller with 401", async () => {

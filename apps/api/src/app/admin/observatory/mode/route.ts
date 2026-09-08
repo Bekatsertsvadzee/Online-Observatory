@@ -3,6 +3,7 @@ import { zSetObservatoryModeRequest } from "@darkview/contracts/zod";
 import { setObservatoryMode } from "@/features/admin/observatory";
 import { requireOperatorMutation } from "@/lib/auth/api-guard";
 import { apiError } from "@/lib/http/api-error";
+import { ADMIN_MUTATION_POLICY, meterRequest } from "@/lib/security/rate-limit";
 import { currentObservatoryId } from "@/lib/http/current-observatory";
 
 /**
@@ -28,6 +29,15 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return apiError(422, "VALIDATION_FAILED", "A mode, a reason and an attendance statement are required.");
   }
+
+  const limited = await meterRequest({
+    policy: ADMIN_MUTATION_POLICY,
+    scope: "admin-observatory-mode",
+    identity: guard.session.user.id,
+    category: "OBSERVATORY_MODE",
+    actorUserId: guard.session.user.id,
+  });
+  if (limited) return limited;
 
   const result = await setObservatoryMode({
     observatoryId,

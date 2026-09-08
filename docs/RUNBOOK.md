@@ -59,6 +59,15 @@ deliberate — a permissive fallback silently disables the check it stands for.
 `STREAM_SIGNING_SECRET` is separate from `AUTH_SECRET` on purpose: one signs sessions, the
 other signs view-only URLs, and a key used for two jobs cannot be rotated for one of them.
 
+`TRUSTED_PROXY_HOPS` does have a default -- zero -- and it is the cautious one: no address
+in `X-Forwarded-For` is trusted, so rate limiting falls back to metering by account. **Set
+it to the real number of proxies in front of the API before going live.** Left at zero the
+per-address cap on new account creation is off, because keyed on the unattributed fallback
+it would be a single bucket shared by every customer in the world. Count the proxies that
+append to the header, not the hops the packet takes; if the number is wrong in the high
+direction every request is unattributed, and in the low direction a caller can name their
+own bucket.
+
 ### Seeding
 
 `npm run db:seed` refuses to run unless `NODE_ENV=development`. It writes demo users, a

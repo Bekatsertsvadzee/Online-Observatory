@@ -6,6 +6,7 @@ import {
 } from "@/features/missions/observers";
 import { requireApiMutation, requireApiSession } from "@/lib/auth/api-guard";
 import { apiError } from "@/lib/http/api-error";
+import { meterRequest, OBSERVER_SEAT_POLICY } from "@/lib/security/rate-limit";
 
 /**
  * Observer seats on a live mission (ADR-007).
@@ -85,6 +86,19 @@ export async function DELETE(
   if (!zMissionId.safeParse(missionId).success) {
     return apiError(404, "NOT_FOUND", "No such mission.");
   }
+
+  // Metered, even though leaving is always allowed. ADR-007 caps a mission at
+  // five seats; taking and releasing in a loop is how you would hold that cap
+  // against other people without ever exceeding it.
+  const limited = await meterRequest({
+    policy: OBSERVER_SEAT_POLICY,
+    scope: "observer-seat",
+    identity: guard.session.user.id,
+    category: "MISSION",
+    actorUserId: guard.session.user.id,
+    missionId,
+  });
+  if (limited) return limited;
 
   // Leaving is not gated on payment. Somebody holding a seat must always be able
   // to give it back, whatever the state of the thing that granted it.

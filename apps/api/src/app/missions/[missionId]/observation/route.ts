@@ -3,6 +3,7 @@ import { zMissionId, zMissionObservationSettings } from "@darkview/contracts/zod
 import { setMissionObservation } from "@/features/missions/observers";
 import { requireApiMutation } from "@/lib/auth/api-guard";
 import { apiError } from "@/lib/http/api-error";
+import { meterRequest, MISSION_SESSION_POLICY } from "@/lib/security/rate-limit";
 
 /**
  * PUT /missions/{missionId}/observation -- the controller's consent to be watched.
@@ -24,6 +25,16 @@ export async function PUT(
   if (!zMissionId.safeParse(missionId).success) {
     return apiError(404, "NOT_FOUND", "No such mission.");
   }
+
+  const limited = await meterRequest({
+    policy: MISSION_SESSION_POLICY,
+    scope: "mission-observation",
+    identity: guard.session.user.id,
+    category: "MISSION",
+    actorUserId: guard.session.user.id,
+    missionId,
+  });
+  if (limited) return limited;
 
   let raw: unknown;
   try {

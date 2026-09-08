@@ -3,6 +3,7 @@ import { zCreateBookingBody, zIdempotencyKey } from "@darkview/contracts/zod";
 import { reserveSlot } from "@/features/booking/reserve";
 import { requireApiMutation } from "@/lib/auth/api-guard";
 import { apiError } from "@/lib/http/api-error";
+import { BOOKING_POLICY, meterRequest } from "@/lib/security/rate-limit";
 
 /**
  * POST /bookings -- reserve a slot and open a payment intent.
@@ -18,6 +19,18 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   const guard = await requireApiMutation();
   if (!guard.ok) return guard.response;
+
+  // Metered before the body is even read. A reservation takes a half hour of the
+  // only telescope out of everyone else's reach, so this is the one customer
+  // action that can deny the whole night's inventory to everyone else.
+  const limited = await meterRequest({
+    policy: BOOKING_POLICY,
+    scope: "booking",
+    identity: guard.session.user.id,
+    category: "BOOKING",
+    actorUserId: guard.session.user.id,
+  });
+  if (limited) return limited;
 
   let payload: unknown;
   try {

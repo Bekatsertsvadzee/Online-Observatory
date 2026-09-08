@@ -1,69 +1,45 @@
-import "server-only";
+import type { Prisma } from "./generated/prisma/client.ts";
 
-import { createHmac } from "node:crypto";
-import { headers } from "next/headers";
+/**
+ * The one way anything in this repository decides that something has been asked
+ * too often.
+ *
+ * It lives in `packages/db` for the reason `audit.ts` does: both services need
+ * it. The API meters routes, the realtime service meters handshakes, and the
+ * alternative is two implementations of a decision that is only correct when it
+ * is made in one statement. Nothing here is Next-specific -- the caller supplies
+ * the key, the policy and the clock.
+ *
+ * What is *not* here is who is asking. Deriving an actor from a request is a
+ * transport question and the two services answer it differently, so each keeps
+ * its own; this module never sees a header.
+ */
 
-import { getDatabase } from "@/lib/db/client";
-import { getServerEnvironment } from "@/lib/validation/env";
-
-type RateLimitPolicy = {
+/**
+ * How much of something is allowed, and what happens when it is not.
+ *
+ * `blockMs` is deliberately separate from `windowMs`. A limiter that only counts
+ * lets an attacker spend the full allowance every window forever; a block makes
+ * exceeding the limit cost more than the attempt did.
+ */
+export type RateLimitPolicy = {
   limit: number;
   windowMs: number;
   blockMs: number;
 };
 
-const authenticationPolicy: RateLimitPolicy = {
-  limit: 5,
-  windowMs: 15 * 60 * 1000,
-  blockMs: 15 * 60 * 1000,
-};
-
-function rateLimitKey(scope: string, identity: string) {
-  return `${scope}:${createHmac("sha256", getServerEnvironment().AUTH_SECRET)
-    .update(identity)
-    .digest("base64url")}`;
-}
-
 /**
- * Who is asking, for rate-limiting purposes.
+ * Anything that can run the statement below.
  *
- * `X-Forwarded-For` is a list the client starts and each proxy appends to, so the
- * leftmost entry is whatever the caller typed. Reading from that end lets anyone
- * mint a fresh rate-limit bucket per request by varying one header, which is the
- * same as having no limit at all.
- *
- * So the header is read from the right, and only as far as `TRUSTED_PROXY_HOPS`
- * says we actually have proxies. The default is zero: an unconfigured deployment
- * trusts nothing and falls back to a constant, which limits by account rather
- * than by address. That is deliberately the cautious direction -- it throttles a
- * real attack, at the cost of being able to throttle one abusive client
- * separately from everyone else. Set the variable once the proxy in front of this
- * is known.
+ * Not a transaction client, and the type does not stop that -- nothing in Prisma
+ * distinguishes them at this level -- so it is said here instead: a limiter
+ * enrolled in a transaction forgets every attempt the transaction rolls back,
+ * which is precisely the attempts an attacker is making. Pass the base client.
  */
-export async function requestActor() {
-  const requestHeaders = await headers();
-  const { TRUSTED_PROXY_HOPS } = getServerEnvironment();
-
-  if (TRUSTED_PROXY_HOPS > 0) {
-    const chain =
-      requestHeaders
-        .get("x-forwarded-for")
-        ?.split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean) ?? [];
-
-    // The last hop is our own proxy; the one it saw is TRUSTED_PROXY_HOPS from
-    // the end. A chain too short to contain it means the request did not arrive
-    // the way we were told it would, so nothing in it is trusted.
-    const client = chain[chain.length - TRUSTED_PROXY_HOPS];
-    if (client) return client.slice(0, 128);
-  }
-
-  return "unattributed";
-}
+export type RateLimitClient = Pick<Prisma.TransactionClient, "$queryRaw">;
 
 /**
- * Count one authentication attempt and say whether it may proceed.
+ * Count one attempt against `key` and say whether it may proceed.
  *
  * One statement. Reading the row, deciding in JavaScript and writing the answer
  * back loses attempts that arrive together: two requests both read count = 4,
@@ -76,15 +52,17 @@ export async function requestActor() {
  * returns is the answer. Concurrent callers serialise on the row lock the upsert
  * already takes, so every attempt is counted exactly once.
  */
-export async function consumeAuthenticationLimit(
-  scope: string,
-  identity: string,
-  now = new Date(),
-) {
-  const key = rateLimitKey(scope, identity);
-  const windowStart = new Date(now.getTime() - authenticationPolicy.windowMs);
-  const blockUntil = new Date(now.getTime() + authenticationPolicy.blockMs);
-  const { limit } = authenticationPolicy;
+export async function consumeRateLimit(
+  {
+    key,
+    policy,
+    now = new Date(),
+  }: { key: string; policy: RateLimitPolicy; now?: Date },
+  client: RateLimitClient,
+): Promise<boolean> {
+  const windowStart = new Date(now.getTime() - policy.windowMs);
+  const blockUntil = new Date(now.getTime() + policy.blockMs);
+  const { limit } = policy;
 
   // Three cases, in this order, and the same order in all three assignments:
   //
@@ -93,7 +71,7 @@ export async function consumeAuthenticationLimit(
   //                      block that ends before its window cannot re-block on the
   //                      very next attempt
   //   otherwise          count one attempt, and block if that passes the limit
-  const [decided] = await getDatabase().$queryRaw<{ blockedUntil: Date | null }[]>`
+  const [decided] = await client.$queryRaw<{ blockedUntil: Date | null }[]>`
     INSERT INTO "RateLimitBucket" ("key", "count", "windowStartedAt", "blockedUntil", "updatedAt")
     VALUES (${key}, 1, ${now}, NULL, ${now})
     ON CONFLICT ("key") DO UPDATE SET
