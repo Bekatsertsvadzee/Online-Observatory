@@ -18,7 +18,7 @@ import { equatorialFor } from "@/lib/ephemeris/visibility";
 import { notifyAgent } from "@/lib/observatory/relay";
 import { evaluateNudgeStep, evaluatePointing } from "@/lib/safety/envelope";
 import { loadSafetyEnvelope, siteOf } from "@/lib/safety/store";
-import { LIVE_MISSION_STATES } from "@/features/missions/session";
+import { currentSession, LIVE_MISSION_STATES } from "@/features/missions/session";
 
 /**
  * How long a minted command stays valid.
@@ -160,9 +160,7 @@ export async function mintMissionCommand(input: {
     };
   }
 
-  const session = await database.missionSession.findFirst({
-    where: { missionId, revokedAt: null, expiresAt: { gt: now } },
-  });
+  const session = await currentSession(missionId, now);
 
   if (!session) {
     return {

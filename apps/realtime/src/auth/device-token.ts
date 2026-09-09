@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import type { LinkStore, ObservatoryRecord } from "@/link/store";
 
@@ -33,15 +33,4 @@ export async function authenticateAgent(
   if (!observatory) return null;
 
   return observatory;
-}
-
-/**
- * Constant-time comparison of two hashes. Used where a candidate hash is checked
- * against a known one rather than looked up, so that a rejection takes the same
- * time regardless of how much of the value matched.
- */
-export function hashesMatch(left: string, right: string): boolean {
-  const a = Buffer.from(left);
-  const b = Buffer.from(right);
-  return a.length === b.length && timingSafeEqual(a, b);
 }
