@@ -166,8 +166,13 @@ rejected after `expiresAt`, and rejected if the session is not the current owner
 
 - The simulator is the default implementation. Always.
 - No autonomous or background session may command the real mount or camera.
-- Real-hardware mode requires an explicit, attended operator action outside the
-  normal test workflow.
+- Real-hardware mode on a **first-party** observatory requires an explicit,
+  attended operator action outside the normal test workflow.
+- A **partner** observatory may operate unattended only while `APPROVED` under
+  ADR-013, which requires a measured envelope, sky-verified coordinates, a
+  recorded horizon mask, a supervised first light and Park proven on that
+  hardware. It returns to refusing everything the moment any of those stops
+  holding, and an operator can suspend it or revoke its token in one row.
 - The cloud validates commands; the local agent validates them **again**. A
   cloud-approved command that fails local safety is refused.
 - Safety covers: altitude envelope, horizon mask, Sun avoidance, session
