@@ -55,6 +55,7 @@ deliberate — a permissive fallback silently disables the check it stands for.
 | `APP_URL` | realtime | The only origin a mission-channel handshake may come from. A fallback would let any site open a subscription as a signed-in customer. |
 | `STREAM_SIGNING_SECRET` | realtime | Signs live-view URLs (ADR-011). ≥ 32 characters. A known fallback is worse than no signing, because it looks like it works. |
 | `EMAIL_VERIFICATION_WEBHOOK_URL` / `_SECRET` | api | Registration is refused without them. |
+| `S3_ENDPOINT` / `_REGION` / `_BUCKET` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | both | Object storage (ADR-012). Both services refuse to start without them: a Collection whose every download is broken is worse than a server that says why it will not come up. |
 
 `STREAM_SIGNING_SECRET` is separate from `AUTH_SECRET` on purpose: one signs sessions, the
 other signs view-only URLs, and a key used for two jobs cannot be rotated for one of them.

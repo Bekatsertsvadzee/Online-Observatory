@@ -10,6 +10,7 @@ import { FakeLinkStore } from "@/link/fake-store";
 import type { ObservatoryRecord } from "@/link/store";
 import type { ChannelUser } from "@/mission/store";
 import { createRealtimeServer } from "@/server";
+import { FAKE_STORAGE } from "@/link/fake-storage";
 
 /**
  * These tests drive a real socket through the real HTTP upgrade.
@@ -57,7 +58,7 @@ beforeEach(async () => {
   store.registerToken(hashDeviceToken(DEVICE_TOKEN), realObservatory);
   clients = [];
 
-  server = createRealtimeServer(store, APP_URL, STREAM_SECRET);
+  server = createRealtimeServer(store, APP_URL, STREAM_SECRET, FAKE_STORAGE);
   const httpServer = server.listen(0);
   await new Promise<void>((resolve) => httpServer.once("listening", () => resolve()));
   port = (httpServer.address() as AddressInfo).port;

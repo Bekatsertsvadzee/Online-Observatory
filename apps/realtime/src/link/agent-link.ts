@@ -1,11 +1,15 @@
 import type { AgentToCloudMessage, CloudToAgentMessage } from "@darkview/contracts";
 import type { CaptureAssetKind } from "@darkview/db/enums";
+import type { StorageConfiguration } from "@darkview/storage/config";
+import { captureObjectKey } from "@darkview/storage/keys";
+import { presignUpload } from "@darkview/storage/presign";
 
 import {
   HEARTBEAT_GRACE_SECONDS,
   PROTOCOL_VERSION,
   cloudError,
   cloudSessionUpdate,
+  cloudUploadGrant,
   cloudWelcome,
   parseAgentMessage,
   type Close,
@@ -59,6 +63,16 @@ export class AgentLink {
      * failed, because nothing asserted the wiring existed.
      */
     private readonly broadcast: MissionBroadcast,
+    /**
+     * Object storage (ADR-012).
+     *
+     * Required, with no null case. ADR-012: "A service that cannot sign must
+     * refuse to start." Both services validate the bucket configuration at
+     * startup, so by the time a link exists there is somewhere to put a capture
+     * -- and there is no half-configured state in which the agent asks and is
+     * told the cloud forgot to bring a bucket.
+     */
+    private readonly storage: StorageConfiguration,
     private readonly now: () => number = () => Date.now(),
   ) {
     this.lastActivityAt = this.now();
@@ -160,6 +174,10 @@ export class AgentLink {
 
       case "AGENT_CAPTURE_READY":
         await this.applyCaptureReady(message);
+        return;
+
+      case "AGENT_UPLOAD_GRANT_REQUEST":
+        await this.applyUploadGrantRequest(message);
         return;
 
       // AGENT_HEARTBEAT is liveness, and `lastActivityAt` above is what consumes
@@ -290,6 +308,64 @@ export class AgentLink {
     // command before. Neither is news about the command's fate, and a customer
     // watching a NUDGE resolve should not see its outcome change twice.
     if (outcome === "RECORDED") await this.broadcast.commandAnswered(message);
+  }
+
+  /**
+   * Somewhere to put one capture asset (ADR-012).
+   *
+   * The agent asks; the cloud decides where. The key is derived from identifiers
+   * the cloud already holds and is never taken from the request, so a compromised
+   * agent cannot name another customer's object -- and that is also what makes
+   * `CaptureAsset.storageKey` trustworthy when the capture is finally recorded.
+   *
+   * Two authority checks, in the order that leaks least. The command is loaded
+   * first because it carries both the mission and the observatory it was minted
+   * for, so one read answers "is this a real command" and "is it ours". A request
+   * naming a command that belongs to another observatory is refused with exactly
+   * the wording used for one naming a mission that does, so a probing agent
+   * cannot tell the two apart.
+   *
+   * A refusal is a CLOUD_ERROR, never a grant with no URL in it: a message shaped
+   * like permission is a message some future agent will treat as permission.
+   */
+  private async applyUploadGrantRequest(
+    message: Extract<AgentToCloudMessage, { type: "AGENT_UPLOAD_GRANT_REQUEST" }>,
+  ): Promise<void> {
+    const command = await this.store.loadCommand(message.commandId);
+    const refusal = `No upload can be granted for command ${message.commandId}.`;
+
+    if (
+      !command ||
+      command.observatoryId !== this.observatory.id ||
+      command.envelope.missionId !== message.missionId
+    ) {
+      this.send(cloudError("NOT_FOUND", refusal));
+      return;
+    }
+
+    const storageKey = captureObjectKey({
+      observatoryId: this.observatory.id,
+      missionId: message.missionId,
+      commandId: message.commandId,
+      kind: message.kind,
+    });
+
+    const { url, expiresAt } = await presignUpload(
+      this.storage,
+      storageKey,
+      new Date(this.now()),
+    );
+
+    this.send(
+      cloudUploadGrant({
+        missionId: message.missionId,
+        commandId: message.commandId,
+        kind: message.kind,
+        storageKey,
+        url,
+        expiresAt,
+      }),
+    );
   }
 
   /**

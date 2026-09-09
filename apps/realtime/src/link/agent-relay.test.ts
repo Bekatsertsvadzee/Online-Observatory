@@ -15,6 +15,7 @@ import { AgentLinkRegistry } from "@/link/registry";
 import { PROTOCOL_VERSION } from "@/link/protocol";
 import type { ObservatoryRecord, RelayableCommand } from "@/link/store";
 import { RecordingBroadcast } from "@/mission/fake-broadcast";
+import { FAKE_STORAGE } from "@/link/fake-storage";
 
 /**
  * ADR-009's cloud half: a notification becomes a message on the agent socket.
@@ -90,6 +91,7 @@ async function connectAgent(): Promise<AgentLink> {
     (message) => sent.push(message),
     () => undefined,
     broadcast,
+    FAKE_STORAGE,
     () => NOW.getTime(),
   );
 
@@ -166,6 +168,7 @@ describe("relaying a command", () => {
       (message) => sent.push(message),
       () => undefined,
       broadcast,
+      FAKE_STORAGE,
       () => NOW.getTime(),
     );
     registry.admit(observatory.id, link);

@@ -9,6 +9,7 @@ import { FakeLinkStore } from "@/link/fake-store";
 import { PROTOCOL_VERSION } from "@/link/protocol";
 import type { ObservatoryRecord } from "@/link/store";
 import { RecordingBroadcast } from "@/mission/fake-broadcast";
+import { FAKE_STORAGE } from "@/link/fake-storage";
 
 /**
  * DV-062 on the realtime side: what the link writes down.
@@ -44,6 +45,7 @@ async function onlineLink(hello: Record<string, unknown> = {}) {
     (message) => sent.push(message),
     () => {},
     broadcast,
+    FAKE_STORAGE,
     () => now,
   );
 

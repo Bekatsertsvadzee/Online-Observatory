@@ -13,7 +13,22 @@ const { testDatabase } = vi.hoisted(() => ({
 
 vi.mock("@/lib/db/client", () => ({ getDatabase: () => testDatabase.current }));
 
+// Not a credential and cannot become one: the endpoint does not resolve and the
+// key is not an account. These tests assert what a signed URL *names*, and none
+// of them reaches a bucket.
+vi.mock("@/lib/storage/configuration", () => ({
+  getStorage: () => ({
+    S3_ENDPOINT: "https://s3.example.test",
+    S3_REGION: "eu-central-1",
+    S3_BUCKET: "darkview-test",
+    S3_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST",
+    S3_SECRET_ACCESS_KEY: "a-test-secret-that-signs-nothing-real",
+    S3_FORCE_PATH_STYLE: false,
+  }),
+}));
+
 const { listCaptures, getCapture } = await import("@/features/captures/collection");
+const { getCaptureDownload } = await import("@/features/captures/download");
 const { zCapture, zCapturePage } = await import("@darkview/contracts/zod");
 
 /**
@@ -46,6 +61,7 @@ async function addCapture(input: {
   minutesAgo: number;
   framesStacked?: number;
   fits?: boolean;
+  assets?: { kind: "IMAGE" | "FITS" | "THUMBNAIL" | "UNMARKED"; storageKey: string }[];
 }) {
   const capture = await database.capture.create({
     data: {
@@ -65,6 +81,7 @@ async function addCapture(input: {
       fitsAvailable: input.fits ?? false,
       processingPreset: "NATURAL",
       mode: "SIMULATED",
+      ...(input.assets ? { assets: { create: input.assets } } : {}),
     },
   });
   return capture.id;
@@ -312,5 +329,91 @@ describe("what crosses the boundary", () => {
     const page = await listCaptures({ userId: ownerId, limit: 20 });
 
     expect(page.items[0].mode).toBe("SIMULATED");
+  });
+});
+
+describe("the signed download of a capture", () => {
+  const KEY = "captures/obs/mission/command/IMAGE";
+
+  it("signs a URL naming that capture's own object", async () => {
+    const captureId = await addCapture({
+      userId: ownerId,
+      minutesAgo: 1,
+      assets: [{ kind: "IMAGE", storageKey: KEY }],
+    });
+
+    const result = await getCaptureDownload({
+      userId: ownerId,
+      captureId,
+      kind: "IMAGE",
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const url = new URL(result.download.url);
+    expect(url.pathname).toBe(`/${KEY}`);
+    expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
+    expect(new Date(result.download.expiresAt).getTime()).toBeGreaterThan(NOW.getTime());
+  });
+
+  it("will not sign somebody else's capture", async () => {
+    // The whole access model. What stops one customer reaching another's image is
+    // a WHERE clause, and a WHERE clause is only real when a database applies it.
+    // A signed URL is a bearer credential for an object in a private bucket, so
+    // minting one for the wrong caller is not a leaked row -- it is a leaked file.
+    const captureId = await addCapture({
+      userId: strangerId,
+      minutesAgo: 1,
+      assets: [{ kind: "IMAGE", storageKey: KEY }],
+    });
+
+    const result = await getCaptureDownload({
+      userId: ownerId,
+      captureId,
+      kind: "IMAGE",
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("answers 404 for an asset that was never written", async () => {
+    // Most captures have no FITS. Asking for one is an ordinary miss, not an
+    // error, and it must not be distinguishable from a capture that is not yours.
+    const captureId = await addCapture({
+      userId: ownerId,
+      minutesAgo: 1,
+      assets: [{ kind: "IMAGE", storageKey: KEY }],
+    });
+
+    const result = await getCaptureDownload({
+      userId: ownerId,
+      captureId,
+      kind: "FITS",
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("signs each asset of the same capture separately", async () => {
+    const captureId = await addCapture({
+      userId: ownerId,
+      minutesAgo: 1,
+      assets: [
+        { kind: "IMAGE", storageKey: KEY },
+        { kind: "FITS", storageKey: "captures/obs/mission/command/FITS" },
+      ],
+    });
+
+    const image = await getCaptureDownload({ userId: ownerId, captureId, kind: "IMAGE", now: NOW });
+    const fits = await getCaptureDownload({ userId: ownerId, captureId, kind: "FITS", now: NOW });
+
+    expect(image.ok && fits.ok).toBe(true);
+    if (!image.ok || !fits.ok) return;
+    expect(new URL(image.download.url).pathname).toBe(`/${KEY}`);
+    expect(new URL(fits.download.url).pathname).toBe("/captures/obs/mission/command/FITS");
   });
 });
