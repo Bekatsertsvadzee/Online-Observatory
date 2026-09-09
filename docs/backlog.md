@@ -108,6 +108,36 @@ wired, and what it deferred** below before touching command intake.
 | DV-114 | Backup, restore and disaster recovery | M |
 | DV-115 | Security hardening and abuse controls | M |
 
+## Partner observatories (ADR-013, PROPOSED)
+
+A telescope somebody else owns joining the network by installing the agent -- no
+Darkview hardware, no dongle, no port forwarding -- available during hours the owner
+chooses, including while the owner is away.
+
+**Not startable until ADR-013 is approved.** It replaces the attended-operator rule
+for partner nodes, and that is a maintainer decision about risk to other people's
+property rather than an implementation choice.
+
+`ObservatoryNetworkNode` and `NetworkAvailabilityWindow` already exist in the schema,
+with `kind`, `approvalStatus`, `capabilities` and per-weekday windows. Nothing reads
+either table. The agent is already software-only, already outbound-only, and already
+holds one revocable token scoped to one observatory; Alpaca already makes any ASCOM
+mount reachable. What is missing is the qualification path, not the transport.
+
+| ID | Title | Size | Needs hardware? |
+| --- | --- | --- | --- |
+| DV-120 | Partner node registration and the DRAFT -> UNDER_REVIEW -> APPROVED workflow | M | no |
+| DV-121 | Availability windows, feeding the existing slot generator | M | no |
+| DV-122 | Operator review surface for a qualification, on the DV-063 admin console | M | no |
+| DV-123 | Agent installer and guided first-run setup, exercised against SimMount and SimCamera | L | no |
+| DV-124 | Qualification procedure run end to end on the first-party instrument | L | **yes -- DV-034 first** |
+| DV-125 | `CameraDriver` implementations beyond ZWO | L | **yes** |
+
+DV-120 through DV-123 are buildable before any hardware exists. DV-124 is the gate:
+a stranger's telescope cannot be certified with a procedure Darkview has never run on
+its own, so nothing accepts a customer until the first-party qualification has been
+performed.
+
 ## Build order
 
 **Stage 1 — simulator-first core.** Roughly 60% of this repository can be finished before
