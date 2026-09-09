@@ -1471,6 +1471,28 @@ export type AgentError = {
 };
 
 /**
+ * The agent asks for somewhere to put one capture asset (ADR-012).
+ *
+ * It does not propose a key. The cloud derives the object's identity from
+ * facts it already holds, so a compromised agent cannot choose to write over
+ * another customer's object -- and that is also what lets
+ * `CaptureAsset.storageKey` be trusted when the capture is finally recorded.
+ *
+ * The mission and command say which capture this is for. Together with
+ * `kind` they identify the object, so no correlation identifier is needed:
+ * a grant answers the request naming the same three.
+ *
+ */
+export type AgentUploadGrantRequest = {
+    type: 'AGENT_UPLOAD_GRANT_REQUEST';
+    messageId: string;
+    sentAt: string;
+    missionId: string;
+    commandId: string;
+    kind: CaptureAssetKind;
+};
+
+/**
  * Every message the Observatory Agent may send over its outbound link.
  */
 export type AgentToCloudMessage = ({
@@ -1486,6 +1508,8 @@ export type AgentToCloudMessage = ({
 } & AgentMissionEvent) | ({
     type: 'AGENT_LIVE_FRAME';
 } & LiveFrameHeader) | ({
+    type: 'AGENT_UPLOAD_GRANT_REQUEST';
+} & AgentUploadGrantRequest) | ({
     type: 'AGENT_CAPTURE_READY';
 } & AgentCaptureReady) | ({
     type: 'AGENT_ERROR';
@@ -1569,6 +1593,43 @@ export type CloudError = {
 };
 
 /**
+ * Permission to write exactly one object, for a few minutes (ADR-012).
+ *
+ * The observatory holds no bucket credential. This URL is the whole of its
+ * authority over object storage: one key, one method, a short expiry. A
+ * stolen mini-PC yields a revocable device token and nothing else.
+ *
+ * `storageKey` is what the agent reports back as `imageStorageKey` on
+ * `AGENT_CAPTURE_READY`. It is the cloud's own derived key, echoed so the
+ * agent knows what it wrote rather than having to construct it.
+ *
+ * A request the cloud will not grant is answered with `CLOUD_ERROR`, not
+ * with a grant naming no URL.
+ *
+ */
+export type CloudUploadGrant = {
+    type: 'CLOUD_UPLOAD_GRANT';
+    messageId: string;
+    sentAt: string;
+    missionId: string;
+    commandId: string;
+    kind: CaptureAssetKind;
+    /**
+     * Object storage key the cloud derived. Not a URL and never a public path.
+     */
+    storageKey: string;
+    /**
+     * Presigned URL. Names one object and one method, and expires.
+     */
+    url: string;
+    /**
+     * Always PUT. Stated rather than assumed, so a reader of a captured message knows what it permitted.
+     */
+    method: 'PUT';
+    expiresAt: string;
+};
+
+/**
  * Every message the cloud may send down the agent link.
  */
 export type CloudToAgentMessage = ({
@@ -1582,6 +1643,8 @@ export type CloudToAgentMessage = ({
 } & CloudSessionUpdate) | ({
     type: 'CLOUD_SAFETY_ENVELOPE_UPDATE';
 } & CloudSafetyEnvelopeUpdate) | ({
+    type: 'CLOUD_UPLOAD_GRANT';
+} & CloudUploadGrant) | ({
     type: 'CLOUD_ERROR';
 } & CloudError);
 

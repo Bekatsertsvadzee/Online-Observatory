@@ -12,6 +12,7 @@ import { AgentLinkRegistry } from "@/link/registry";
 import { PROTOCOL_VERSION } from "@/link/protocol";
 import type { ObservatoryRecord } from "@/link/store";
 import { RecordingBroadcast } from "@/mission/fake-broadcast";
+import { FAKE_STORAGE } from "@/link/fake-storage";
 
 /**
  * Issues #25, #26 and #27 against a real PostgreSQL instance.
@@ -51,6 +52,7 @@ function makeLink() {
     (message) => sent.push(message),
     () => {},
     broadcast,
+    FAKE_STORAGE,
     () => NOW.getTime(),
   );
 }

@@ -11,6 +11,10 @@ import { createPrismaStore } from "@/link/prisma-store";
 import { AgentLinkRegistry } from "@/link/registry";
 import { HEARTBEAT_INTERVAL_SECONDS } from "@/link/protocol";
 import type { ObservatoryRecord } from "@/link/store";
+import {
+  getStorageConfiguration,
+  type StorageConfiguration,
+} from "@darkview/storage/config";
 import type { RealtimeStore } from "@/link/prisma-store";
 import { MissionRelay } from "@/mission/broadcast";
 import { MissionChannel } from "@/mission/channel";
@@ -20,6 +24,14 @@ import { handleStreamRequest } from "@/stream/http";
 import { LiveStream } from "@/stream/live-stream";
 import { getEnvironment } from "@/env";
 
+const STORAGE = {
+  S3_ENDPOINT: "https://s3.example.test",
+  S3_REGION: "eu-central-1",
+  S3_BUCKET: "darkview-test",
+  S3_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST",
+  S3_SECRET_ACCESS_KEY: "a-test-secret-that-signs-nothing-real",
+  S3_FORCE_PATH_STYLE: false,
+};
 const AGENT_PATH = "/ws/agent";
 
 /**
@@ -57,6 +69,7 @@ export function createRealtimeServer(
   store: RealtimeStore,
   appUrl: string,
   streamSecret: string,
+  storage: StorageConfiguration,
 ) {
   const registry = new AgentLinkRegistry();
   const relay = new AgentRelay(store, registry);
@@ -150,6 +163,7 @@ export function createRealtimeServer(
       (message) => connection.send(JSON.stringify(message)),
       (reason) => connection.close(1000, reason),
       broadcast,
+      storage,
     );
 
     const admission = registry.admit(observatory.id, link);
@@ -289,6 +303,9 @@ if (process.env.NODE_ENV !== "test") {
     createPrismaStore(environment.DATABASE_URL),
     environment.APP_URL,
     environment.STREAM_SIGNING_SECRET,
+    // ADR-012: a service that cannot sign refuses to start. This throws here,
+    // before a socket is accepted, rather than at the first capture of the night.
+    getStorageConfiguration(),
   );
   server.listen(environment.REALTIME_PORT);
 

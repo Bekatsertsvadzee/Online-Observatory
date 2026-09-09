@@ -10,6 +10,7 @@ import { AgentLinkRegistry } from "@/link/registry";
 import { HEARTBEAT_GRACE_SECONDS, PROTOCOL_VERSION } from "@/link/protocol";
 import type { ObservatoryRecord } from "@/link/store";
 import { RecordingBroadcast } from "@/mission/fake-broadcast";
+import { FAKE_STORAGE } from "@/link/fake-storage";
 
 const observatory: ObservatoryRecord = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -30,6 +31,7 @@ function makeLink(record: ObservatoryRecord = observatory) {
     (message) => sent.push(message),
     (reason) => closedWith.push(reason),
     broadcast,
+    FAKE_STORAGE,
     () => now,
   );
 }

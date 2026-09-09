@@ -9,6 +9,7 @@ import { FakeLinkStore } from "@/link/fake-store";
 import { PROTOCOL_VERSION } from "@/link/protocol";
 import type { ObservatoryRecord } from "@/link/store";
 import { RecordingBroadcast } from "@/mission/fake-broadcast";
+import { FAKE_STORAGE } from "@/link/fake-storage";
 
 const observatory: ObservatoryRecord = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -76,6 +77,7 @@ async function online(record: ObservatoryRecord = observatory) {
     (message) => sent.push(message),
     () => {},
     broadcast,
+    FAKE_STORAGE,
     () => now,
   );
   await link.receive(
@@ -282,6 +284,7 @@ describe("what is refused", () => {
       (message) => sent.push(message),
       () => {},
       broadcast,
+      FAKE_STORAGE,
       () => now,
     );
 

@@ -9,6 +9,7 @@ import { FakeLinkStore } from "@/link/fake-store";
 import { PROTOCOL_VERSION } from "@/link/protocol";
 import type { ObservatoryRecord } from "@/link/store";
 import { RecordingBroadcast } from "@/mission/fake-broadcast";
+import { FAKE_STORAGE } from "@/link/fake-storage";
 
 /**
  * What an inbound agent message means, as opposed to whether it was allowed.
@@ -46,6 +47,7 @@ function makeLink() {
     (message) => sent.push(message),
     () => {},
     broadcast,
+    FAKE_STORAGE,
     () => now,
   );
 }
