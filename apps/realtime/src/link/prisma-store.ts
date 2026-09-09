@@ -200,6 +200,15 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       return toActiveSession(session);
     },
 
+    /**
+     * The session that currently owns a mission at this observatory.
+     *
+     * `apps/api` has its own in `features/missions/session.ts` (`currentSession`),
+     * deliberately: this service does not depend on the Next.js app, and two
+     * services sharing a two-line predicate do not need a package between them.
+     * A change to what "owns" means -- a grace period, a paused session -- has to
+     * be made in both, so changing one is a reason to read the other.
+     */
     async activeSession(observatoryId: string, now: Date): Promise<ActiveSession | null> {
       const session = await database.missionSession.findFirst({
         where: {

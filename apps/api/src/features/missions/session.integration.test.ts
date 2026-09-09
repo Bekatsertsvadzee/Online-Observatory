@@ -682,6 +682,48 @@ describe("minting a command", () => {
     expect(result.code).toBe("SESSION_NOT_OWNER");
   });
 
+  it("refuses a command once the owning session is revoked", async () => {
+    // `currentSession` is now the one definition of "the session that owns this
+    // mission", and `mintMissionCommand` reads it. Without this, dropping
+    // `revokedAt: null` from that query changed nothing any test could see, and
+    // a revoked session went on minting commands at a telescope.
+    const session = await openSession();
+    await database.missionSession.update({
+      where: { id: session.sessionId },
+      data: { revokedAt: NOW },
+    });
+
+    const result = await mintMissionCommand({
+      missionId,
+      request: { type: "ABORT", reason: "stop" },
+      actor: actor(ownerId),
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("MISSION_NOT_ACTIVE");
+    expect(await database.observatoryCommand.count()).toBe(0);
+  });
+
+  it("refuses a command once the owning session has expired", async () => {
+    // The other half of the same predicate. An expired session is not revoked,
+    // so only the `expiresAt` comparison refuses this one.
+    const session = await openSession();
+
+    const result = await mintMissionCommand({
+      missionId,
+      request: { type: "ABORT", reason: "stop" },
+      actor: actor(ownerId),
+      now: new Date(new Date(session.expiresAt).getTime() + 1),
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("MISSION_NOT_ACTIVE");
+    expect(await database.observatoryCommand.count()).toBe(0);
+  });
+
   it("refuses a NUDGE that carries no nudge payload", async () => {
     await openSession();
 
