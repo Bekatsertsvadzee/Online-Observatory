@@ -26,6 +26,8 @@
     "db:migrate": "npm run db:migrate --workspace @darkview/db",
     "db:seed": "npm run db:seed --workspace @darkview/db",
     "db:studio": "npm run db:studio --workspace @darkview/db",
+    "backup": "node scripts/backup.mjs",
+    "restore": "node scripts/restore.mjs",
     "contracts:generate": "node scripts/contracts-generate.mjs",
     "contracts:check": "node scripts/contracts-check.mjs",
     "postinstall": "npm run db:generate"
