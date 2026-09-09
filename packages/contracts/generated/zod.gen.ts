@@ -1088,6 +1088,28 @@ export const zAgentError = z.strictObject({
 });
 
 /**
+ * The agent asks for somewhere to put one capture asset (ADR-012).
+ *
+ * It does not propose a key. The cloud derives the object's identity from
+ * facts it already holds, so a compromised agent cannot choose to write over
+ * another customer's object -- and that is also what lets
+ * `CaptureAsset.storageKey` be trusted when the capture is finally recorded.
+ *
+ * The mission and command say which capture this is for. Together with
+ * `kind` they identify the object, so no correlation identifier is needed:
+ * a grant answers the request naming the same three.
+ *
+ */
+export const zAgentUploadGrantRequest = z.strictObject({
+    type: z.enum(['AGENT_UPLOAD_GRANT_REQUEST']),
+    messageId: z.uuid(),
+    sentAt: z.iso.datetime(),
+    missionId: z.uuid(),
+    commandId: z.uuid(),
+    kind: zCaptureAssetKind
+});
+
+/**
  * Every message the Observatory Agent may send over its outbound link.
  */
 export const zAgentToCloudMessage = z.discriminatedUnion('type', [
@@ -1097,6 +1119,7 @@ export const zAgentToCloudMessage = z.discriminatedUnion('type', [
     zAgentStateDelta.extend({ type: z.literal('AGENT_STATE_DELTA') }),
     zAgentMissionEvent.extend({ type: z.literal('AGENT_MISSION_EVENT') }),
     zLiveFrameHeader.extend({ type: z.literal('AGENT_LIVE_FRAME') }),
+    zAgentUploadGrantRequest.extend({ type: z.literal('AGENT_UPLOAD_GRANT_REQUEST') }),
     zAgentCaptureReady.extend({ type: z.literal('AGENT_CAPTURE_READY') }),
     zAgentError.extend({ type: z.literal('AGENT_ERROR') })
 ]);
@@ -1170,6 +1193,34 @@ export const zCloudError = z.strictObject({
 });
 
 /**
+ * Permission to write exactly one object, for a few minutes (ADR-012).
+ *
+ * The observatory holds no bucket credential. This URL is the whole of its
+ * authority over object storage: one key, one method, a short expiry. A
+ * stolen mini-PC yields a revocable device token and nothing else.
+ *
+ * `storageKey` is what the agent reports back as `imageStorageKey` on
+ * `AGENT_CAPTURE_READY`. It is the cloud's own derived key, echoed so the
+ * agent knows what it wrote rather than having to construct it.
+ *
+ * A request the cloud will not grant is answered with `CLOUD_ERROR`, not
+ * with a grant naming no URL.
+ *
+ */
+export const zCloudUploadGrant = z.strictObject({
+    type: z.enum(['CLOUD_UPLOAD_GRANT']),
+    messageId: z.uuid(),
+    sentAt: z.iso.datetime(),
+    missionId: z.uuid(),
+    commandId: z.uuid(),
+    kind: zCaptureAssetKind,
+    storageKey: z.string(),
+    url: z.url(),
+    method: z.enum(['PUT']),
+    expiresAt: z.iso.datetime()
+});
+
+/**
  * Every message the cloud may send down the agent link.
  */
 export const zCloudToAgentMessage = z.discriminatedUnion('type', [
@@ -1178,6 +1229,7 @@ export const zCloudToAgentMessage = z.discriminatedUnion('type', [
     zCloudHeartbeatAck.extend({ type: z.literal('CLOUD_HEARTBEAT_ACK') }),
     zCloudSessionUpdate.extend({ type: z.literal('CLOUD_SESSION_UPDATE') }),
     zCloudSafetyEnvelopeUpdate.extend({ type: z.literal('CLOUD_SAFETY_ENVELOPE_UPDATE') }),
+    zCloudUploadGrant.extend({ type: z.literal('CLOUD_UPLOAD_GRANT') }),
     zCloudError.extend({ type: z.literal('CLOUD_ERROR') })
 ]);
 

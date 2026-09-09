@@ -1254,8 +1254,33 @@ class AgentError(BaseModel):
     command_id: UUID | None = Field(None, alias='commandId')
 
 
-class AgentToCloudMessage(RootModel[AgentHello | AgentHeartbeat | AgentCommandAck | AgentStateDelta | AgentMissionEvent | LiveFrameHeader | AgentCaptureReady | AgentError]):
-    root: AgentHello | AgentHeartbeat | AgentCommandAck | AgentStateDelta | AgentMissionEvent | LiveFrameHeader | AgentCaptureReady | AgentError = Field(..., description='Every message the Observatory Agent may send over its outbound link.', discriminator='type')
+class AgentUploadGrantRequest(BaseModel):
+    """
+    The agent asks for somewhere to put one capture asset (ADR-012).
+
+    It does not propose a key. The cloud derives the object's identity from
+    facts it already holds, so a compromised agent cannot choose to write over
+    another customer's object -- and that is also what lets
+    `CaptureAsset.storageKey` be trusted when the capture is finally recorded.
+
+    The mission and command say which capture this is for. Together with
+    `kind` they identify the object, so no correlation identifier is needed:
+    a grant answers the request naming the same three.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    type: Literal['AGENT_UPLOAD_GRANT_REQUEST']
+    message_id: UUID = Field(..., alias='messageId')
+    sent_at: AwareDatetime = Field(..., alias='sentAt')
+    mission_id: UUID = Field(..., alias='missionId')
+    command_id: UUID = Field(..., alias='commandId')
+    kind: CaptureAssetKind
+
+
+class AgentToCloudMessage(RootModel[AgentHello | AgentHeartbeat | AgentCommandAck | AgentStateDelta | AgentMissionEvent | LiveFrameHeader | AgentUploadGrantRequest | AgentCaptureReady | AgentError]):
+    root: AgentHello | AgentHeartbeat | AgentCommandAck | AgentStateDelta | AgentMissionEvent | LiveFrameHeader | AgentUploadGrantRequest | AgentCaptureReady | AgentError = Field(..., description='Every message the Observatory Agent may send over its outbound link.', discriminator='type')
 
 
 class CloudWelcome(BaseModel):
@@ -1344,8 +1369,39 @@ class CloudError(BaseModel):
     fatal: bool | None = Field(False, description='When true the agent closes the link, backs off and re-dials. It does not stop enforcing safety while disconnected.')
 
 
-class CloudToAgentMessage(RootModel[CloudWelcome | CloudCommand | CloudHeartbeatAck | CloudSessionUpdate | CloudSafetyEnvelopeUpdate | CloudError]):
-    root: CloudWelcome | CloudCommand | CloudHeartbeatAck | CloudSessionUpdate | CloudSafetyEnvelopeUpdate | CloudError = Field(..., description='Every message the cloud may send down the agent link.', discriminator='type')
+class CloudUploadGrant(BaseModel):
+    """
+    Permission to write exactly one object, for a few minutes (ADR-012).
+
+    The observatory holds no bucket credential. This URL is the whole of its
+    authority over object storage: one key, one method, a short expiry. A
+    stolen mini-PC yields a revocable device token and nothing else.
+
+    `storageKey` is what the agent reports back as `imageStorageKey` on
+    `AGENT_CAPTURE_READY`. It is the cloud's own derived key, echoed so the
+    agent knows what it wrote rather than having to construct it.
+
+    A request the cloud will not grant is answered with `CLOUD_ERROR`, not
+    with a grant naming no URL.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    type: Literal['CLOUD_UPLOAD_GRANT']
+    message_id: UUID = Field(..., alias='messageId')
+    sent_at: AwareDatetime = Field(..., alias='sentAt')
+    mission_id: UUID = Field(..., alias='missionId')
+    command_id: UUID = Field(..., alias='commandId')
+    kind: CaptureAssetKind
+    storage_key: str = Field(..., alias='storageKey', description='Object storage key the cloud derived. Not a URL and never a public path.')
+    url: AnyUrl = Field(..., description='Presigned URL. Names one object and one method, and expires.')
+    method: Literal['PUT'] = Field(..., description='Always PUT. Stated rather than assumed, so a reader of a captured message knows what it permitted.')
+    expires_at: AwareDatetime = Field(..., alias='expiresAt')
+
+
+class CloudToAgentMessage(RootModel[CloudWelcome | CloudCommand | CloudHeartbeatAck | CloudSessionUpdate | CloudSafetyEnvelopeUpdate | CloudUploadGrant | CloudError]):
+    root: CloudWelcome | CloudCommand | CloudHeartbeatAck | CloudSessionUpdate | CloudSafetyEnvelopeUpdate | CloudUploadGrant | CloudError = Field(..., description='Every message the cloud may send down the agent link.', discriminator='type')
 
 
 class MissionStateUpdate(BaseModel):

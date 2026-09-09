@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 
 import type {
   AgentToCloudMessage,
+  CaptureAssetKind,
   CloudCommand,
   CloudError,
   CloudSafetyEnvelopeUpdate,
   CloudSessionUpdate,
   CloudToAgentMessage,
+  CloudUploadGrant,
   CloudWelcome,
   CommandEnvelope,
   ErrorCode,
@@ -86,6 +88,38 @@ export function cloudError(code: ErrorCode, message: string, fatal = false): Clo
  */
 export function cloudCommand(command: CommandEnvelope): CloudCommand {
   return { type: "CLOUD_COMMAND", ...messageHeader(), command };
+}
+
+/**
+ * Permission to write exactly one object, for a few minutes (ADR-012).
+ *
+ * This is the whole of the observatory's authority over object storage. It holds
+ * no bucket credential, so a stolen mini-PC yields a revocable device token and
+ * nothing that could read or overwrite another customer's images.
+ *
+ * `storageKey` is echoed so the agent knows what it wrote and can report it back
+ * on `AGENT_CAPTURE_READY`. It is the cloud's derived key -- the agent never
+ * proposes one, which is what lets `CaptureAsset.storageKey` be trusted.
+ */
+export function cloudUploadGrant(grant: {
+  missionId: string;
+  commandId: string;
+  kind: CaptureAssetKind;
+  storageKey: string;
+  url: string;
+  expiresAt: Date;
+}): CloudUploadGrant {
+  return {
+    type: "CLOUD_UPLOAD_GRANT",
+    ...messageHeader(),
+    missionId: grant.missionId,
+    commandId: grant.commandId,
+    kind: grant.kind,
+    storageKey: grant.storageKey,
+    url: grant.url,
+    method: "PUT",
+    expiresAt: grant.expiresAt.toISOString(),
+  };
 }
 
 /**

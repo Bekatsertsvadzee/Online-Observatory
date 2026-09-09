@@ -230,6 +230,69 @@ measured against `SimCamera`, because ADR-011 assigns the real measurement to th
 and that hardware does not exist yet. They are marked PROVISIONAL at every definition and
 DV-035 replaces them. They are not safety values; nothing in this path can move a mount.
 
+## What the capture storage work built, and what still has no bytes
+
+ADR-012 named its own first task: "A new cloud-to-agent message granting the
+presigned PUT, and an agent-to-cloud message asking for one. That is a contract
+change, and it is the first thing to do after this record is approved." That, and
+the cloud half behind it.
+
+**The contract change.** `AGENT_UPLOAD_GRANT_REQUEST` and `CLOUD_UPLOAD_GRANT`,
+regenerated into TypeScript, Zod and Pydantic. The request carries no key field at
+all -- the cloud derives the key, so there is nowhere for an agent to propose one,
+and `additionalProperties: false` turns an agent that tries into a validation
+failure rather than a decision this code has to make.
+
+| Piece | Where |
+| --- | --- |
+| Key derivation and presigning | `packages/storage` -- both services need it, the same reason `audit.ts` and `rate-limit.ts` live in `packages/db` |
+| The grant | `apps/realtime`, on the link that already authenticates the agent |
+| The download | `apps/api`, `GET /captures/{captureId}/download`, behind the ownership check `GET /captures/{id}` already applies |
+
+**SigV4 is `@smithy/signature-v4`, not hand-rolled.** A mistake in canonical
+request construction produces a URL that looks correct and is refused, and there is
+no way to prove a bespoke implementation right without the bucket this code exists
+to reach -- a pinned "expected signature" would be a constant nobody can check. The
+full S3 client is 3.3 MB to build a URL; the signer is 106 KB and signs identically
+for R2, B2 and MinIO, which is what ADR-012 requires. What this repository owns, and
+what its tests hold it to, is *what* gets signed: the object, the method, the
+expiry, the bucket. Each is proven by changing one and watching the signature move.
+
+**Two authority checks on a grant, worded identically.** The command is loaded
+first because it carries both the mission and the observatory it was minted for, so
+one read answers "is this real" and "is it ours". A request naming a command from
+another observatory, a command that does not exist, and a real command cited
+against the wrong mission all get the same sentence: a probing agent must not be
+able to tell them apart.
+
+**Both services refuse to start without a bucket.** ADR-012's words, and the
+contract leaves no alternative -- `GET /captures/{captureId}/download` declares 200,
+401 and 404 and has no way to say "this deployment has no storage". `apps/api` uses
+Next's `instrumentation.ts`, whose `register` runs once and must complete before the
+server accepts a request; `apps/realtime` reads the configuration before it accepts
+a socket.
+
+**Not built: the agent half.** The Python agent does not yet ask for a grant, does
+not upload, and still reports storage keys it invented. The Pydantic models exist,
+so the messages are typed on both sides, but nothing sends one. That is the other
+half of DV-061 and it is where DV-033's overlay output finally goes somewhere.
+
+**`thumbnailUrl` is still null, and that is still honest.** ADR-012 lists it as a
+consequence of the whole path landing. Until the agent uploads a THUMBNAIL there is
+no such asset to sign, and signing a URL for an object that does not exist would put
+a broken image in every card -- which is the exact thing null was chosen to avoid.
+
+**Orphaned objects are now possible**, as ADR-012 said they would be: an agent that
+uploads and loses the link before reporting leaves an object no row names. The sweep
+for unreferenced keys belongs with operator tooling and does not exist.
+
+**Verified by removing each protection and confirming a named test fails:** the
+download's ownership scope, its asset-kind scope, the grant's observatory check, the
+grant's mission check, and the key derivation's refusal of anything that is not a
+UUID. One test passed the first time and was rewritten -- the identical-wording check
+compared a set of one against itself, because the helper that brings a link online
+clears the recorded messages.
+
 ## What DV-115 metered, and the one rule behind it
 
 Rate limiting existed before this and was wired to two call sites: sign-in and

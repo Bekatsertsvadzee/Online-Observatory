@@ -9,6 +9,7 @@ import { FakeLinkStore } from "@/link/fake-store";
 import { PROTOCOL_VERSION } from "@/link/protocol";
 import type { ObservatoryRecord } from "@/link/store";
 import { RecordingBroadcast } from "@/mission/fake-broadcast";
+import { FAKE_STORAGE } from "@/link/fake-storage";
 
 const observatory: ObservatoryRecord = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -34,6 +35,7 @@ function makeLink(record: ObservatoryRecord = observatory) {
     (message) => sent.push(message),
     () => {},
     broadcast,
+    FAKE_STORAGE,
     () => now,
   );
 }
@@ -123,7 +125,7 @@ describe("pairing a header with its pixels", () => {
     // output, or real output as a simulation. The row decides.
     store.addMission(ELSEWHERE, { observatoryId: OTHER_OBSERVATORY, state: "OBSERVING" });
     const real: ObservatoryRecord = { ...observatory, mode: "REAL" };
-    const link = new AgentLink(real, store, () => {}, () => {}, broadcast, () => now);
+    const link = new AgentLink(real, store, () => {}, () => {}, broadcast, FAKE_STORAGE, () => now);
     await link.receive(
       JSON.stringify({
         type: "AGENT_HELLO",

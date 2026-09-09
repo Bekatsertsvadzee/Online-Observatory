@@ -187,6 +187,12 @@ One exception, by design: the ASCOM Remote / Alpaca bridge listens on `127.0.0.1
 for traffic between the agent and the local mount driver on the same machine. It must
 never bind `0.0.0.0`, never be port-forwarded, and never be reachable from another host.
 
+The agent has one further outbound destination: object storage, over HTTPS, to a
+presigned URL the cloud minted for exactly one object (ADR-012). It holds no bucket
+credential, opens no port for it, and accepts nothing inbound as a result of it — the
+URL is a permission to write one key for a few minutes, and it expires whether or not
+it was used.
+
 No browser or mobile client may address the mount or the camera. The live view is served
 by the cloud from the cloud's own memory (ADR-011); nothing in it gives anybody an address
 for the mount, the camera or the mini-PC.
