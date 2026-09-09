@@ -1,8 +1,9 @@
 # ADR-013 — Partner observatories, and what "attended" means when nobody is there
 
 - **Date:** 2026-09-09
-- **Status:** PROPOSED
-- **Decided by:** *pending — project maintainer*
+- **Status:** APPROVED
+- **Decided by:** project maintainer
+- **Approved:** 2026-09-09
 - **Relates to:** `ADR-003` (Phase 1 scope boundary), `ADR-005` (installation site),
   `CLAUDE.md` § Hardware safety
 - **Blocks:** any partner-facing onboarding, and the agent installer
@@ -140,9 +141,9 @@ breaking, and "the customer agreed" is not a safety mechanism.
 
 ## Consequences
 
-- **`CLAUDE.md` § Hardware safety must be amended** — the exact replacement is at
-  the end of this record. It does not land until this ADR is approved, because a
-  controlling document must not point at a decision that has not been made.
+- **`CLAUDE.md` § Hardware safety is amended**, in the commit that approved this
+  record. The replacement is quoted at the end, so the change to a controlling
+  document and the reasoning for it are one artefact rather than two.
 - **The first-party hardware qualification comes first.** A stranger's telescope
   cannot be certified with a procedure Darkview has never run on its own. DV-034
   precedes any partner node accepting a customer.
@@ -175,9 +176,9 @@ breaking, and "the customer agreed" is not a safety mechanism.
 - Evidence that qualification review does not scale, which would be an argument for
   fewer, better partners rather than a lighter procedure.
 
-## The amendment this record authorises
+## The amendment this record made
 
-On approval, `CLAUDE.md` § Hardware safety replaces:
+`CLAUDE.md` § Hardware safety replaced:
 
 > - No autonomous or background session may command the real mount or camera.
 > - Real-hardware mode requires an explicit, attended operator action outside the

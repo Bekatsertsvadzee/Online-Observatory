@@ -108,15 +108,15 @@ wired, and what it deferred** below before touching command intake.
 | DV-114 | Backup, restore and disaster recovery | M |
 | DV-115 | Security hardening and abuse controls | M |
 
-## Partner observatories (ADR-013, PROPOSED)
+## Partner observatories (ADR-013, APPROVED)
 
 A telescope somebody else owns joining the network by installing the agent -- no
 Darkview hardware, no dongle, no port forwarding -- available during hours the owner
 chooses, including while the owner is away.
 
-**Not startable until ADR-013 is approved.** It replaces the attended-operator rule
-for partner nodes, and that is a maintainer decision about risk to other people's
-property rather than an implementation choice.
+ADR-013 is **APPROVED** (2026-09-09). It replaces the attended-operator rule for
+partner nodes with a qualification an operator grants and can revoke, and leaves
+first-party operation unchanged.
 
 `ObservatoryNetworkNode` and `NetworkAvailabilityWindow` already exist in the schema,
 with `kind`, `approvalStatus`, `capabilities` and per-weekday windows. Nothing reads
