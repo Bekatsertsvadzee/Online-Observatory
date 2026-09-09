@@ -159,6 +159,22 @@ breaking, and "the customer agreed" is not a safety mechanism.
 - **`ADR-005` (installation site) is unaffected.** It records where the first-party
   observatory lives. A partner node has a site of its own, verified per node.
 
+## Correction, 2026-09-09
+
+The Decision section above says a node "returns to `DRAFT`" when an operator takes
+its qualification away. The implementation uses `SUSPENDED` instead, and the
+record is wrong rather than the code.
+
+`NetworkNodeApprovalStatus` already had four members — `DRAFT`, `UNDER_REVIEW`,
+`APPROVED`, `SUSPENDED` — before this record was written, and its author did not
+notice. Both `DRAFT` and `SUSPENDED` refuse everything, so no safety property
+changes; what the distinction preserves is the difference between a telescope
+nobody has ever qualified and one whose qualification was taken away, which is
+exactly the history an operator needs when deciding whether to grant it again.
+
+Read every "returns to `DRAFT`" above as "returns to a state that refuses
+everything".
+
 ## What this deliberately does not decide
 
 - **Revenue share with partners.** A payment question, behind DV-056.

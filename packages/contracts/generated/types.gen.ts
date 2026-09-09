@@ -1245,6 +1245,162 @@ export type CaptureDownload = {
     expiresAt: string;
 };
 
+/**
+ * FIRST_PARTY is an observatory Darkview owns and operates. PARTNER is one
+ * somebody else owns, running the same agent under a qualification an operator
+ * granted and can revoke.
+ *
+ */
+export const NetworkNodeKind = { FIRST_PARTY: 'FIRST_PARTY', PARTNER: 'PARTNER' } as const;
+
+/**
+ * FIRST_PARTY is an observatory Darkview owns and operates. PARTNER is one
+ * somebody else owns, running the same agent under a qualification an operator
+ * granted and can revoke.
+ *
+ */
+export type NetworkNodeKind = typeof NetworkNodeKind[keyof typeof NetworkNodeKind];
+
+/**
+ * DRAFT is the resting state and it refuses everything. UNDER_REVIEW is the
+ * owner saying the telescope is ready to be qualified; it grants nothing.
+ * APPROVED is the only state in which a partner observatory may be operated.
+ * SUSPENDED is an operator having taken that away.
+ *
+ * SUSPENDED and DRAFT both refuse everything, and they are kept distinct
+ * because they are different facts about a telescope: one has never been
+ * qualified, the other was and had it revoked. Collapsing them would lose
+ * exactly the history an operator needs when deciding whether to approve it
+ * again.
+ *
+ */
+export const NetworkNodeApprovalStatus = {
+    DRAFT: 'DRAFT',
+    UNDER_REVIEW: 'UNDER_REVIEW',
+    APPROVED: 'APPROVED',
+    SUSPENDED: 'SUSPENDED'
+} as const;
+
+/**
+ * DRAFT is the resting state and it refuses everything. UNDER_REVIEW is the
+ * owner saying the telescope is ready to be qualified; it grants nothing.
+ * APPROVED is the only state in which a partner observatory may be operated.
+ * SUSPENDED is an operator having taken that away.
+ *
+ * SUSPENDED and DRAFT both refuse everything, and they are kept distinct
+ * because they are different facts about a telescope: one has never been
+ * qualified, the other was and had it revoked. Collapsing them would lose
+ * exactly the history an operator needs when deciding whether to approve it
+ * again.
+ *
+ */
+export type NetworkNodeApprovalStatus = typeof NetworkNodeApprovalStatus[keyof typeof NetworkNodeApprovalStatus];
+
+/**
+ * One observatory in the network, and the terms on which it may be used.
+ *
+ * ADR-013: partner status widens who may host a telescope, never what a
+ * telescope may be asked to do. A node carries no authority of its own -- the
+ * agent still re-validates every command, still enforces its own safety
+ * envelope after the link dies, and still refuses a cloud-approved command
+ * that fails local safety.
+ *
+ */
+export type NetworkNode = {
+    nodeId: string;
+    observatoryId: string;
+    ownerId: string;
+    kind: NetworkNodeKind;
+    approvalStatus: NetworkNodeApprovalStatus;
+    siteName: string;
+    city: string;
+    countryCode: string;
+    timezone: string;
+    /**
+     * Whether a measured altitude limit exists for this instrument. Reported
+     * rather than asserted: it is the condition approval checks for itself,
+     * because the database knows the answer and a checkbox would let an
+     * unmeasured telescope be approved by clicking.
+     *
+     */
+    safetyEnvelopeMeasured: boolean;
+    /**
+     * Populated at qualification. Empty at registration.
+     */
+    capabilities: Array<string>;
+    approvedAt?: string | null;
+    createdAt: string;
+};
+
+export type NetworkNodeList = {
+    items: Array<NetworkNode>;
+};
+
+/**
+ * The site and the instrument, together. A partner has neither until they
+ * register, so both are created here.
+ *
+ * There is one `siteName` rather than a name per language. A telescope on a
+ * roof in Santiago has one name, and manufacturing a Georgian translation of
+ * it would be inventing data about somebody else's property.
+ *
+ */
+export type RegisterNetworkNodeRequest = {
+    siteName: string;
+    city: string;
+    countryCode: string;
+    latitude: number;
+    longitude: number;
+    timezone: string;
+    telescope: RegisterNetworkTelescope;
+};
+
+export type RegisterNetworkTelescope = {
+    name: string;
+    manufacturer: string;
+    model: string;
+    apertureMm: number;
+    focalLengthMm: number;
+};
+
+/**
+ * ADR-013's qualification, as the operator attests it.
+ *
+ * Every flag must be true. They are separate fields rather than one
+ * confirmation because they are separate things somebody had to go and do, and
+ * a single "I confirm" is a box that gets ticked without reading. The measured
+ * safety envelope is absent from this list deliberately: it is checked against
+ * the database instead.
+ *
+ */
+export type ApproveNetworkNodeRequest = {
+    /**
+     * The site was confirmed against the sky, by plate solve, rather than typed into a form.
+     */
+    coordinatesVerified: boolean;
+    /**
+     * The roofline, walls and obstructions at this site are recorded.
+     */
+    horizonMaskRecorded: boolean;
+    /**
+     * At least one full mission was run on this instrument with an operator watching.
+     */
+    firstLightSupervised: boolean;
+    /**
+     * Park was seen to work on this hardware, both commanded and on link loss.
+     */
+    parkProven: boolean;
+    /**
+     * The owner accepted the operating terms in writing, for this node.
+     */
+    ownerTermsAccepted: boolean;
+    reason: string;
+};
+
+export type SuspendNetworkNodeRequest = {
+    reason: string;
+};
+
 export const AuditCategory = {
     AUTH: 'AUTH',
     BOOKING: 'BOOKING',
@@ -1799,6 +1955,8 @@ export type AdminUpdateTargetRequest = {
     descriptionEn?: string | null;
     descriptionKa?: string | null;
 };
+
+export type NodeId = string;
 
 /**
  * Opaque forward pagination cursor from the previous page.
@@ -2841,3 +2999,166 @@ export type AdminListAuditEventsResponses = {
 };
 
 export type AdminListAuditEventsResponse = AdminListAuditEventsResponses[keyof AdminListAuditEventsResponses];
+
+export type ListMyNetworkNodesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/network/nodes';
+};
+
+export type ListMyNetworkNodesErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+};
+
+export type ListMyNetworkNodesError = ListMyNetworkNodesErrors[keyof ListMyNetworkNodesErrors];
+
+export type ListMyNetworkNodesResponses = {
+    /**
+     * The caller's nodes.
+     */
+    200: NetworkNodeList;
+};
+
+export type ListMyNetworkNodesResponse = ListMyNetworkNodesResponses[keyof ListMyNetworkNodesResponses];
+
+export type RegisterNetworkNodeData = {
+    body: RegisterNetworkNodeRequest;
+    path?: never;
+    query?: never;
+    url: '/network/nodes';
+};
+
+export type RegisterNetworkNodeErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type RegisterNetworkNodeError = RegisterNetworkNodeErrors[keyof RegisterNetworkNodeErrors];
+
+export type RegisterNetworkNodeResponses = {
+    /**
+     * The registered node, in DRAFT.
+     */
+    201: NetworkNode;
+};
+
+export type RegisterNetworkNodeResponse = RegisterNetworkNodeResponses[keyof RegisterNetworkNodeResponses];
+
+export type SubmitNetworkNodeForReviewData = {
+    body?: never;
+    path: {
+        nodeId: string;
+    };
+    query?: never;
+    url: '/network/nodes/{nodeId}/submit';
+};
+
+export type SubmitNetworkNodeForReviewErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+};
+
+export type SubmitNetworkNodeForReviewError = SubmitNetworkNodeForReviewErrors[keyof SubmitNetworkNodeForReviewErrors];
+
+export type SubmitNetworkNodeForReviewResponses = {
+    /**
+     * The node, now under review.
+     */
+    200: NetworkNode;
+};
+
+export type SubmitNetworkNodeForReviewResponse = SubmitNetworkNodeForReviewResponses[keyof SubmitNetworkNodeForReviewResponses];
+
+export type AdminApproveNetworkNodeData = {
+    body: ApproveNetworkNodeRequest;
+    path: {
+        nodeId: string;
+    };
+    query?: never;
+    url: '/admin/network/nodes/{nodeId}/approve';
+};
+
+export type AdminApproveNetworkNodeErrors = {
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type AdminApproveNetworkNodeError = AdminApproveNetworkNodeErrors[keyof AdminApproveNetworkNodeErrors];
+
+export type AdminApproveNetworkNodeResponses = {
+    /**
+     * The approved node.
+     */
+    200: NetworkNode;
+};
+
+export type AdminApproveNetworkNodeResponse = AdminApproveNetworkNodeResponses[keyof AdminApproveNetworkNodeResponses];
+
+export type AdminSuspendNetworkNodeData = {
+    body: SuspendNetworkNodeRequest;
+    path: {
+        nodeId: string;
+    };
+    query?: never;
+    url: '/admin/network/nodes/{nodeId}/suspend';
+};
+
+export type AdminSuspendNetworkNodeErrors = {
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type AdminSuspendNetworkNodeError = AdminSuspendNetworkNodeErrors[keyof AdminSuspendNetworkNodeErrors];
+
+export type AdminSuspendNetworkNodeResponses = {
+    /**
+     * The suspended node.
+     */
+    200: NetworkNode;
+};
+
+export type AdminSuspendNetworkNodeResponse = AdminSuspendNetworkNodeResponses[keyof AdminSuspendNetworkNodeResponses];

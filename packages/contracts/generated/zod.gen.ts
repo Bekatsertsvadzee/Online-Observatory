@@ -908,6 +908,114 @@ export const zCaptureDownload = z.strictObject({
     expiresAt: z.iso.datetime()
 });
 
+/**
+ * FIRST_PARTY is an observatory Darkview owns and operates. PARTNER is one
+ * somebody else owns, running the same agent under a qualification an operator
+ * granted and can revoke.
+ *
+ */
+export const zNetworkNodeKind = z.enum(['FIRST_PARTY', 'PARTNER']);
+
+/**
+ * DRAFT is the resting state and it refuses everything. UNDER_REVIEW is the
+ * owner saying the telescope is ready to be qualified; it grants nothing.
+ * APPROVED is the only state in which a partner observatory may be operated.
+ * SUSPENDED is an operator having taken that away.
+ *
+ * SUSPENDED and DRAFT both refuse everything, and they are kept distinct
+ * because they are different facts about a telescope: one has never been
+ * qualified, the other was and had it revoked. Collapsing them would lose
+ * exactly the history an operator needs when deciding whether to approve it
+ * again.
+ *
+ */
+export const zNetworkNodeApprovalStatus = z.enum([
+    'DRAFT',
+    'UNDER_REVIEW',
+    'APPROVED',
+    'SUSPENDED'
+]);
+
+/**
+ * One observatory in the network, and the terms on which it may be used.
+ *
+ * ADR-013: partner status widens who may host a telescope, never what a
+ * telescope may be asked to do. A node carries no authority of its own -- the
+ * agent still re-validates every command, still enforces its own safety
+ * envelope after the link dies, and still refuses a cloud-approved command
+ * that fails local safety.
+ *
+ */
+export const zNetworkNode = z.strictObject({
+    nodeId: z.uuid(),
+    observatoryId: z.uuid(),
+    ownerId: z.uuid(),
+    kind: zNetworkNodeKind,
+    approvalStatus: zNetworkNodeApprovalStatus,
+    siteName: z.string(),
+    city: z.string(),
+    countryCode: z.string().length(2),
+    timezone: z.string(),
+    safetyEnvelopeMeasured: z.boolean(),
+    capabilities: z.array(z.string()),
+    approvedAt: z.iso.datetime().nullish(),
+    createdAt: z.iso.datetime()
+});
+
+export const zNetworkNodeList = z.strictObject({
+    items: z.array(zNetworkNode)
+});
+
+export const zRegisterNetworkTelescope = z.strictObject({
+    name: z.string().min(1).max(120),
+    manufacturer: z.string().min(1),
+    model: z.string().min(1),
+    apertureMm: z.number().gt(0),
+    focalLengthMm: z.number().gt(0)
+});
+
+/**
+ * The site and the instrument, together. A partner has neither until they
+ * register, so both are created here.
+ *
+ * There is one `siteName` rather than a name per language. A telescope on a
+ * roof in Santiago has one name, and manufacturing a Georgian translation of
+ * it would be inventing data about somebody else's property.
+ *
+ */
+export const zRegisterNetworkNodeRequest = z.strictObject({
+    siteName: z.string().min(2).max(120),
+    city: z.string().min(1).max(120),
+    countryCode: z.string().length(2),
+    latitude: z.number().gte(-90).lte(90),
+    longitude: z.number().gte(-180).lte(180),
+    timezone: z.string().min(1),
+    telescope: zRegisterNetworkTelescope
+});
+
+/**
+ * ADR-013's qualification, as the operator attests it.
+ *
+ * Every flag must be true. They are separate fields rather than one
+ * confirmation because they are separate things somebody had to go and do, and
+ * a single "I confirm" is a box that gets ticked without reading. The measured
+ * safety envelope is absent from this list deliberately: it is checked against
+ * the database instead.
+ *
+ */
+export const zApproveNetworkNodeRequest = z.strictObject({
+    coordinatesVerified: z.boolean(),
+    horizonMaskRecorded: z.boolean(),
+    firstLightSupervised: z.boolean(),
+    parkProven: z.boolean(),
+    ownerTermsAccepted: z.boolean(),
+    reason: z.string().min(8)
+});
+
+export const zSuspendNetworkNodeRequest = z.strictObject({
+    reason: z.string().min(8)
+});
+
 export const zAuditCategory = z.enum([
     'AUTH',
     'BOOKING',
@@ -1367,6 +1475,8 @@ export const zAdminUpdateTargetRequest = z.strictObject({
     descriptionKa: z.string().nullish()
 });
 
+export const zNodeId = z.uuid();
+
 /**
  * Opaque forward pagination cursor from the previous page.
  */
@@ -1694,3 +1804,46 @@ export const zAdminListAuditEventsQuery = z.object({
  * Audit event page.
  */
 export const zAdminListAuditEventsResponse = zAuditEventPage;
+
+/**
+ * The caller's nodes.
+ */
+export const zListMyNetworkNodesResponse = zNetworkNodeList;
+
+export const zRegisterNetworkNodeBody = zRegisterNetworkNodeRequest;
+
+/**
+ * The registered node, in DRAFT.
+ */
+export const zRegisterNetworkNodeResponse = zNetworkNode;
+
+export const zSubmitNetworkNodeForReviewPath = z.object({
+    nodeId: z.uuid()
+});
+
+/**
+ * The node, now under review.
+ */
+export const zSubmitNetworkNodeForReviewResponse = zNetworkNode;
+
+export const zAdminApproveNetworkNodeBody = zApproveNetworkNodeRequest;
+
+export const zAdminApproveNetworkNodePath = z.object({
+    nodeId: z.uuid()
+});
+
+/**
+ * The approved node.
+ */
+export const zAdminApproveNetworkNodeResponse = zNetworkNode;
+
+export const zAdminSuspendNetworkNodeBody = zSuspendNetworkNodeRequest;
+
+export const zAdminSuspendNetworkNodePath = z.object({
+    nodeId: z.uuid()
+});
+
+/**
+ * The suspended node.
+ */
+export const zAdminSuspendNetworkNodeResponse = zNetworkNode;

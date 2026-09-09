@@ -24,14 +24,6 @@ import { handleStreamRequest } from "@/stream/http";
 import { LiveStream } from "@/stream/live-stream";
 import { getEnvironment } from "@/env";
 
-const STORAGE = {
-  S3_ENDPOINT: "https://s3.example.test",
-  S3_REGION: "eu-central-1",
-  S3_BUCKET: "darkview-test",
-  S3_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST",
-  S3_SECRET_ACCESS_KEY: "a-test-secret-that-signs-nothing-real",
-  S3_FORCE_PATH_STYLE: false,
-};
 const AGENT_PATH = "/ws/agent";
 
 /**

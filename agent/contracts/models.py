@@ -1047,6 +1047,113 @@ class CaptureDownload(BaseModel):
     expires_at: AwareDatetime = Field(..., alias='expiresAt')
 
 
+class NetworkNodeKind(StrEnum):
+    """
+    FIRST_PARTY is an observatory Darkview owns and operates. PARTNER is one
+    somebody else owns, running the same agent under a qualification an operator
+    granted and can revoke.
+
+    """
+    first_party = 'FIRST_PARTY'
+    partner = 'PARTNER'
+
+
+class NetworkNodeApprovalStatus(StrEnum):
+    """
+    DRAFT is the resting state and it refuses everything. UNDER_REVIEW is the
+    owner saying the telescope is ready to be qualified; it grants nothing.
+    APPROVED is the only state in which a partner observatory may be operated.
+    SUSPENDED is an operator having taken that away.
+
+    SUSPENDED and DRAFT both refuse everything, and they are kept distinct
+    because they are different facts about a telescope: one has never been
+    qualified, the other was and had it revoked. Collapsing them would lose
+    exactly the history an operator needs when deciding whether to approve it
+    again.
+
+    """
+    draft = 'DRAFT'
+    under_review = 'UNDER_REVIEW'
+    approved = 'APPROVED'
+    suspended = 'SUSPENDED'
+
+
+class NetworkNode(BaseModel):
+    """
+    One observatory in the network, and the terms on which it may be used.
+
+    ADR-013: partner status widens who may host a telescope, never what a
+    telescope may be asked to do. A node carries no authority of its own -- the
+    agent still re-validates every command, still enforces its own safety
+    envelope after the link dies, and still refuses a cloud-approved command
+    that fails local safety.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    node_id: UUID = Field(..., alias='nodeId')
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    owner_id: UUID = Field(..., alias='ownerId')
+    kind: NetworkNodeKind
+    approval_status: NetworkNodeApprovalStatus = Field(..., alias='approvalStatus')
+    site_name: str = Field(..., alias='siteName')
+    city: str
+    country_code: str = Field(..., alias='countryCode', max_length=2, min_length=2)
+    timezone: str
+    safety_envelope_measured: bool = Field(..., alias='safetyEnvelopeMeasured', description='Whether a measured altitude limit exists for this instrument. Reported\nrather than asserted: it is the condition approval checks for itself,\nbecause the database knows the answer and a checkbox would let an\nunmeasured telescope be approved by clicking.\n')
+    capabilities: list[str] = Field(..., description='Populated at qualification. Empty at registration.')
+    approved_at: AwareDatetime | None = Field(None, alias='approvedAt')
+    created_at: AwareDatetime = Field(..., alias='createdAt')
+
+
+class NetworkNodeList(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    items: list[NetworkNode]
+
+
+class RegisterNetworkTelescope(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    name: str = Field(..., max_length=120, min_length=1)
+    manufacturer: str = Field(..., min_length=1)
+    model: str = Field(..., min_length=1)
+    aperture_mm: float = Field(..., alias='apertureMm', gt=0.0)
+    focal_length_mm: float = Field(..., alias='focalLengthMm', gt=0.0)
+
+
+class ApproveNetworkNodeRequest(BaseModel):
+    """
+    ADR-013's qualification, as the operator attests it.
+
+    Every flag must be true. They are separate fields rather than one
+    confirmation because they are separate things somebody had to go and do, and
+    a single "I confirm" is a box that gets ticked without reading. The measured
+    safety envelope is absent from this list deliberately: it is checked against
+    the database instead.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    coordinates_verified: bool = Field(..., alias='coordinatesVerified', description='The site was confirmed against the sky, by plate solve, rather than typed into a form.')
+    horizon_mask_recorded: bool = Field(..., alias='horizonMaskRecorded', description='The roofline, walls and obstructions at this site are recorded.')
+    first_light_supervised: bool = Field(..., alias='firstLightSupervised', description='At least one full mission was run on this instrument with an operator watching.')
+    park_proven: bool = Field(..., alias='parkProven', description='Park was seen to work on this hardware, both commanded and on link loss.')
+    owner_terms_accepted: bool = Field(..., alias='ownerTermsAccepted', description='The owner accepted the operating terms in writing, for this node.')
+    reason: str = Field(..., min_length=8)
+
+
+class SuspendNetworkNodeRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    reason: str = Field(..., min_length=8)
+
+
 class AuditCategory(StrEnum):
     auth = 'AUTH'
     booking = 'BOOKING'
@@ -1607,3 +1714,25 @@ class MissionSession(BaseModel):
     expires_at: AwareDatetime = Field(..., alias='expiresAt')
     mission_channel_url: str = Field(..., alias='missionChannelUrl', description="Relative WSS path for this mission's client channel.")
     allowed_commands: list[ClientCommandType] | None = Field(None, alias='allowedCommands')
+
+
+class RegisterNetworkNodeRequest(BaseModel):
+    """
+    The site and the instrument, together. A partner has neither until they
+    register, so both are created here.
+
+    There is one `siteName` rather than a name per language. A telescope on a
+    roof in Santiago has one name, and manufacturing a Georgian translation of
+    it would be inventing data about somebody else's property.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    site_name: str = Field(..., alias='siteName', max_length=120, min_length=2)
+    city: str = Field(..., max_length=120, min_length=1)
+    country_code: str = Field(..., alias='countryCode', max_length=2, min_length=2)
+    latitude: float = Field(..., ge=-90.0, le=90.0)
+    longitude: float = Field(..., ge=-180.0, le=180.0)
+    timezone: str = Field(..., min_length=1)
+    telescope: RegisterNetworkTelescope

@@ -260,6 +260,70 @@ measured against `SimCamera`, because ADR-011 assigns the real measurement to th
 and that hardware does not exist yet. They are marked PROVISIONAL at every definition and
 DV-035 replaces them. They are not safety values; nothing in this path can move a mount.
 
+## What DV-120 built, and the one number an operator may not attest
+
+The path out of refusal for a partner observatory (ADR-013). Everything else about
+a partner node already refuses; this is the single deliberate act that lets a
+telescope somebody else owns be operated by somebody neither of them has met.
+
+| State | What it grants |
+| --- | --- |
+| `DRAFT` | Nothing. The resting state, and where registration leaves a node. |
+| `UNDER_REVIEW` | Nothing. The owner saying the telescope is set up. |
+| `APPROVED` | Unattended operation, and only this. |
+| `SUSPENDED` | Nothing. Distinct from DRAFT on purpose -- see below. |
+
+**Registration creates the site, the instrument and the node in one transaction.**
+A partner has none of the three beforehand, and a site with no node is a
+half-registration somebody has to clean up. The observatory is created OFFLINE,
+SIMULATED and with **no device token**, which is what the link service reads as "no
+agent may connect" -- so a freshly registered node cannot be reached even by
+somebody who knows its identifiers.
+
+**Five conditions are attested; the sixth is checked.** No query can tell whether a
+person watched a park or walked a horizon, so ADR-013's five human conditions are
+attested by the operator as separate fields -- separate because they are separate
+things somebody had to go and do, and one combined "I confirm" is a box that gets
+ticked without reading. Each is recorded verbatim in the audit row, so an approval
+is a statement somebody can be held to.
+
+**The sixth is `MAX_ALT_SAFE`, and it is deliberately absent from that list.** It is
+where the optical train meets the mount, the database knows whether it has been
+measured, and a checkbox for it would let an unmeasured telescope be approved by
+clicking -- on somebody else's property. Approval reads the envelope and refuses
+with `SAFETY_NOT_CONFIGURED`. A missing envelope row and a row with a null limit are
+the same fact and both refuse; only one of them looks like a mistake.
+
+**`SUSPENDED`, not `DRAFT`.** ADR-013's prose says a suspended node "returns to
+DRAFT"; the schema already had four states, its author had not noticed, and the
+schema is right. Both refuse everything. What the distinction preserves is the
+difference between a telescope nobody has ever qualified and one whose
+qualification was taken away, which is the history an operator needs before
+granting it again. The record now carries a dated correction saying so.
+
+**Suspension is never refused, and it stops what is running.** The same rule DV-115
+applies to Park: anything that stops a telescope is not something a limiter or a
+conflict check may delay. An already-suspended node suspends again without
+complaint, and a live mission is a reason to suspend rather than a reason to wait --
+the opposite of how a mode switch behaves, because a mode switch starts something.
+The running mission is ended through DV-063's operator cancel rather than by writing
+mission rows here: that path already parks the mount, revokes the session and tells
+the agent, and a second implementation would be a second chance to get stopping a
+telescope wrong.
+
+**Verified by removing each protection and confirming a named test fails:** the
+measured-envelope check, the five attestations, the UNDER_REVIEW gate, the owner
+scope on submit, the clearing of `approvedAt`, and the cancellation of a running
+mission. That last one had no test until the injection asked for it -- the code was
+written and nothing held it, which would have made "an operator can revoke it in one
+row" a claim about paperwork rather than about a mount that is moving.
+
+**Two things the run caught that were not DV-120's.** The metered-routes invariant
+flagged the suspend route, which is unmetered on purpose and is now recorded as
+such. And a stray test fixture had been left in `apps/realtime/src/server.ts` by the
+capture-storage work -- an unused const in a production file, which lint reported as
+a warning and nothing failed on. Both fixed here.
+
 ## What the capture storage work built, and what still has no bytes
 
 ADR-012 named its own first task: "A new cloud-to-agent message granting the
