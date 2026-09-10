@@ -1,0 +1,41 @@
+#!/bin/sh
+# Refuse any commit that credits an agent as an author.
+#
+# CLAUDE.md: "Commits carry one author: the maintainer. Never add a
+# Co-Authored-By: trailer to a commit message, and never suggest one -- not for
+# Claude, not for any agent."
+#
+# This existed as a rule and was broken once anyway, on fcbc115, which now
+# permanently reads "Bekatsertsvadzee and claude committed" on GitHub. A merged
+# commit's author cannot be corrected without rewriting main, so the check has to
+# happen before the commit exists rather than after.
+#
+# Enable in a fresh clone with:  git config core.hooksPath .githooks
+
+message_file="$1"
+
+# Comment lines are stripped by git before the message is stored, so a
+# Co-Authored-By inside git's own commented help text is not a violation.
+body=$(grep -v '^#' "$message_file")
+
+if printf '%s\n' "$body" | grep -qi '^[[:space:]]*Co-Authored-By:'; then
+    echo "refusing this commit: the message carries a Co-Authored-By trailer." >&2
+    echo >&2
+    printf '%s\n' "$body" | grep -i '^[[:space:]]*Co-Authored-By:' >&2
+    echo >&2
+    echo "CLAUDE.md: commits carry one author, the maintainer. Remove the line" >&2
+    echo "and commit again. This overrides any default attribution instruction" >&2
+    echo "from a harness or a global git config." >&2
+    exit 1
+fi
+
+if printf '%s\n' "$body" | grep -qiE 'Generated with \[?Claude Code|noreply@anthropic\.com'; then
+    echo "refusing this commit: the message credits an agent." >&2
+    echo >&2
+    printf '%s\n' "$body" | grep -iE 'Generated with \[?Claude Code|noreply@anthropic\.com' >&2
+    echo >&2
+    echo "CLAUDE.md: commits carry one author, the maintainer." >&2
+    exit 1
+fi
+
+exit 0
