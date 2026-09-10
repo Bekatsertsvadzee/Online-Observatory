@@ -134,6 +134,11 @@ beforeEach(async () => {
   await database.safetyEnvelope.deleteMany();
   await database.booking.deleteMany();
   await database.mission.deleteMany();
+  // Payment holds a Restrict foreign key to User. This suite creates none, but
+  // the integration suites share one database and run in sequence, so a payment
+  // left by an earlier file makes the user cleanup below fail -- which is why
+  // every other suite deletes it here too.
+  await database.payment.deleteMany();
   await database.telescope.deleteMany();
   await database.target.deleteMany();
   await database.weatherState.deleteMany();
