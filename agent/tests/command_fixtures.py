@@ -99,6 +99,11 @@ def nudge(**kwargs) -> dict:
     return envelope(command_type="NUDGE", payload=payload, **kwargs)
 
 
+def capture(**kwargs) -> dict:
+    payload = kwargs.pop("payload", None) or capture_payload()
+    return envelope(command_type="CAPTURE", payload=payload, **kwargs)
+
+
 def park(**kwargs) -> dict:
     return envelope(command_type="PARK", payload={"kind": "PARK"}, **kwargs)
 

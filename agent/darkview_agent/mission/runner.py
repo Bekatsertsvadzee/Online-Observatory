@@ -25,11 +25,12 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
-from contracts.models import MissionFailureReason, MissionState
-from darkview_agent.capture.stack import LiveStack
+from contracts.models import ImagingProfile, MissionFailureReason, MissionState
+from darkview_agent.capture.profiles import Profile
+from darkview_agent.capture.stack import LiveStack, integration_seconds
 from darkview_agent.clock import Clock, SystemClock, wire_timestamp
 from darkview_agent.devices.base import DeviceError
 from darkview_agent.devices.frame import Frame
@@ -55,6 +56,22 @@ DEFAULT_CAPTURE_FRAMES = 10
 
 # After COMPLETE, how long the mount waits for a following mission before parking.
 DEFAULT_IDLE_PARK_SECONDS = 120.0
+
+#: How long the mission holds at OBSERVING waiting for the customer to capture.
+#:
+#: This is the part of the slot the customer actually watches: the live view is
+#: running, the target is centred, and nothing is being kept yet. A capture
+#: request ends the wait immediately; this is only what happens when none comes.
+#:
+#: Bounded, and it proceeds to CAPTURING rather than to COMPLETE when it lapses.
+#: The mission state machine in CLAUDE.md is linear and every mission passes
+#: through CAPTURING -- what an uncaptured run produces is a stack nobody asked
+#: to keep, which PROCESSING then does not deliver.
+#:
+#: PROVISIONAL: the real figure is the observation slot's length, which the agent
+#: is not told. Ninety seconds is long enough to be a live view and short enough
+#: that a customer who walks away does not hold the telescope for their whole slot.
+DEFAULT_OBSERVING_SECONDS = 90.0
 
 TERMINAL_STATES = {
     MissionState.complete,
@@ -115,6 +132,30 @@ class MissionEvent:
         }
 
 
+@dataclass(frozen=True)
+class FinishedCapture:
+    """A capture run that produced an image, waiting to be uploaded.
+
+    The runner does not upload it. Object storage is reached over HTTP with a
+    grant the cloud has to be asked for, and the runner holds the watchdog's
+    device lock -- so it produces this, hands it over, and goes back to parking
+    the mount. What happens to it next is `Supervisor`'s problem.
+    """
+
+    mission_id: str
+    command_id: str
+    imaging_profile: ImagingProfile
+    frame: Frame
+    frames_stacked: int
+    exposure_milliseconds: float
+    gain: int
+    captured_at: datetime
+
+    @property
+    def integration_seconds(self) -> float:
+        return integration_seconds(self.exposure_milliseconds, self.frames_stacked)
+
+
 class MissionAlreadyActive(Exception):
     """A mission was offered while one is already running."""
 
@@ -130,6 +171,15 @@ class _Progress:
     solve_attempts: int = 0
     frames_captured: int = 0
     exposure_started: bool = False
+    #: The CAPTURE command this run is being kept for, and the profile it named.
+    #: Both None on a mission nobody has pressed Capture on -- the mission still
+    #: runs the state machine, and PROCESSING has nothing to deliver.
+    capture_command_id: str | None = None
+    imaging_profile: ImagingProfile | None = None
+    #: The stack as it stood after the last accepted frame. Kept because
+    #: `LiveStack` has no way to hand back the current stack without being given
+    #: another exposure, and PROCESSING has no further exposure to give it.
+    stacked: Frame | None = None
     parked: bool = False
     park_failure: str | None = None
     completed_monotonic: float | None = None
@@ -147,8 +197,10 @@ class MissionRunner:
         clock: Clock | None = None,
         emit: Callable[[MissionEvent], None] | None = None,
         idle_park_seconds: float = DEFAULT_IDLE_PARK_SECONDS,
+        observing_seconds: float = DEFAULT_OBSERVING_SECONDS,
         show: Callable[[Frame], None] | None = None,
         stack: LiveStack | None = None,
+        on_capture: Callable[[FinishedCapture], None] | None = None,
     ) -> None:
         self._devices = devices
         self._envelope = envelope
@@ -156,6 +208,7 @@ class MissionRunner:
         self._clock = clock or SystemClock()
         self._emit = emit or (lambda event: None)
         self._idle_park_seconds = idle_park_seconds
+        self._observing_seconds = observing_seconds
         # Every frame the camera returns is offered to the live view, whatever the
         # runner wanted it for. A customer watching during VERIFYING should see the
         # sky the plate solver is looking at, not a blank panel until CAPTURING --
@@ -165,6 +218,9 @@ class MissionRunner:
         # Not `stack or LiveStack()`: an injected stack must not be discarded, and
         # a caller passing one is usually a test that means to inspect it.
         self._stack = LiveStack() if stack is None else stack
+        # Handed the finished image at PROCESSING. Like `emit`, it must not block:
+        # this is called while the device lock is held.
+        self._on_capture = on_capture or (lambda capture: None)
 
         self._state = MissionState.scheduled
         self._failure_reason: MissionFailureReason | None = None
@@ -431,8 +487,71 @@ class MissionRunner:
         )
         self._begin_slew(horizontal.altitude_degrees, horizontal.azimuth_degrees, at_time)
 
+    def request_capture(
+        self, command_id: str, profile: ImagingProfile, settings: Profile
+    ) -> bool:
+        """Keep the run that is about to happen. Returns whether it was accepted.
+
+        Phase 1's mission state machine is linear -- OBSERVING, CAPTURING,
+        PROCESSING, COMPLETE -- so every mission captures whether or not anybody
+        asked. What CAPTURE decides is what the run is made of, and whether the
+        result is kept: a mission with no capture request still stacks frames for
+        the live view and delivers nothing at PROCESSING.
+
+        Refused once the run has started. Changing the exposure halfway through
+        would leave a stack averaged from two different exposures, which is not a
+        capture of anything.
+        """
+        progress = self._progress
+        if progress is None or self._state in TERMINAL_STATES:
+            return False
+        if self._state in {MissionState.capturing, MissionState.processing}:
+            return False
+
+        progress.capture_command_id = command_id
+        progress.imaging_profile = profile
+        progress.request = replace(
+            progress.request,
+            requested_frames=settings.frames,
+            exposure_milliseconds=settings.exposure_milliseconds,
+            gain=settings.gain,
+        )
+        # A stack built from the frames the plate solver was looking at is a
+        # stack of a different exposure at a different gain. The run starts here.
+        self._stack.reset()
+        progress.frames_captured = 0
+        progress.exposure_started = False
+        progress.stacked = None
+        logger.info(
+            "capture requested for mission %s: %s, %d x %.0fms at gain %d",
+            progress.request.mission_id,
+            profile.value,
+            settings.frames,
+            settings.exposure_milliseconds,
+            settings.gain,
+        )
+        return True
+
     def _do_observing(self, at_time: datetime) -> None:
-        self._transition(MissionState.capturing, at_time)
+        """Hold on the target with the live view running, until Capture or timeout.
+
+        The one state in the machine that waits for a person. Everything before
+        it is the observatory getting ready and everything after it is the
+        observatory finishing; this is the part the customer is here for.
+        """
+        progress = self._require_progress()
+
+        if progress.capture_command_id is not None:
+            self._transition(MissionState.capturing, at_time)
+            return
+
+        elapsed = self._clock.monotonic() - progress.state_entered_monotonic
+        if elapsed >= self._observing_seconds:
+            logger.info(
+                "no capture was requested within %.0fs; finishing the mission",
+                self._observing_seconds,
+            )
+            self._transition(MissionState.capturing, at_time)
 
     def _do_capturing(self, at_time: datetime) -> None:
         progress = self._require_progress()
@@ -454,6 +573,7 @@ class MissionRunner:
         # the field costs a second of improvement rather than blanking the view.
         stacked = self._stack.add(self._devices.camera.read_frame())
         self._show(stacked.frame)
+        progress.stacked = stacked.frame
         progress.exposure_started = False
         progress.frames_captured += 1
 
@@ -461,12 +581,58 @@ class MissionRunner:
             self._transition(MissionState.processing, at_time)
 
     def _do_processing(self, at_time: datetime) -> None:
-        # Live stacking and upload are DV-033. The state exists now so the
-        # machine is complete and the transition is observable.
+        """Hand over the finished stack, then finish the mission.
+
+        The capture is offered before COMPLETE rather than after, so the mission
+        cannot reach a terminal state with an image still nobody's
+        responsibility. It is offered exactly once: `capture_command_id` is
+        cleared as it goes, and a second pass through PROCESSING -- which cannot
+        happen today and would be a bug if it did -- delivers nothing rather than
+        a duplicate.
+
+        A failure here does not fail the mission. The customer watched the sky
+        for the length of their slot; losing the keepsake is bad, and telling
+        them the observation itself failed would be worse and untrue.
+        """
+        self._deliver_capture()
         self._transition(MissionState.complete, at_time)
         self._park("mission complete")
         progress = self._require_progress()
         progress.completed_monotonic = self._clock.monotonic()
+
+    def _deliver_capture(self) -> None:
+        progress = self._require_progress()
+        command_id = progress.capture_command_id
+        stacked = progress.stacked
+
+        if command_id is None or progress.imaging_profile is None:
+            # Nobody pressed Capture. The mission ran, the customer watched, and
+            # there is nothing to keep.
+            return
+
+        progress.capture_command_id = None
+
+        if stacked is None or self._stack.frames_stacked == 0:
+            logger.warning(
+                "capture %s produced no stacked frame; nothing to deliver", command_id
+            )
+            return
+
+        try:
+            self._on_capture(
+                FinishedCapture(
+                    mission_id=str(progress.request.mission_id),
+                    command_id=command_id,
+                    imaging_profile=progress.imaging_profile,
+                    frame=stacked,
+                    frames_stacked=self._stack.frames_stacked,
+                    exposure_milliseconds=progress.request.exposure_milliseconds,
+                    gain=progress.request.gain,
+                    captured_at=stacked.captured_at,
+                )
+            )
+        except Exception as error:  # noqa: BLE001 - see the docstring above
+            logger.error("could not hand over capture %s: %s", command_id, error)
 
     def _park_when_idle(self, at_time: datetime) -> None:
         """Criterion 5: park if no mission follows within the configured window.

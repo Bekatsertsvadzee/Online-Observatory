@@ -185,8 +185,15 @@ def build_agent(
     online: bool = True,
     state_path: Path | None = None,
     mount: SimMount | None = None,
+    uploader=None,
+    observing_seconds: float = 4.0,
 ) -> Agent:
     """Assemble one agent. Passing the same `state_path` twice is a restart.
+
+    `observing_seconds` is short by default. OBSERVING waits for a person, and
+    the production default is a minute and a half -- which every full-mission
+    test would otherwise pump through two seconds at a time. The real default is
+    exercised on its own, in `test_capture_upload.py`.
 
     `mount` exists for the restart tests. A crashed agent does not park anything
     on its way out -- the mount keeps tracking wherever it was -- so a test about
@@ -227,6 +234,8 @@ def build_agent(
         store=store,
         clock=clock,
         now=wall,
+        uploader=uploader,
+        observing_seconds=observing_seconds,
     )
     # Before the first pump, because the hello that pump sends is where a
     # recovered mission is reported.

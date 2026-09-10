@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from contracts.models import OpticalConfig
 from darkview_agent.safety.sun import SiteLocation
 
 
@@ -55,6 +56,16 @@ class AgentConfig:
     observatory_id: uuid.UUID | None = None
     site: SiteLocation | None = None
     state_path: Path = DEFAULT_STATE_PATH
+    optical_config: OpticalConfig = OpticalConfig.f10_native
+    """Which optical train is fitted, reported on every capture.
+
+    F10_NATIVE is the C6 as it comes: 1500 mm, nothing added. That is the only
+    configuration that is true by default, because fitting a barlow or a reducer
+    is a physical act somebody performs and can therefore be asked to declare.
+    Unlike MAX_ALT_SAFE this is not a safety value -- getting it wrong mislabels
+    a capture's focal length rather than letting a telescope hit something --
+    which is why it has a default at all.
+    """
 
     @property
     def is_simulated(self) -> bool:
@@ -103,7 +114,21 @@ def load_config(environment: dict[str, str] | None = None) -> AgentConfig:
         observatory_id=_observatory_id(env),
         site=_site(env),
         state_path=_state_path(env),
+        optical_config=_optical_config(env),
     )
+
+
+def _optical_config(environment: dict[str, str]) -> OpticalConfig:
+    raw = environment.get("DARKVIEW_AGENT_OPTICAL_CONFIG", "").strip().upper()
+    if raw == "":
+        return OpticalConfig.f10_native
+    try:
+        return OpticalConfig(raw)
+    except ValueError:
+        raise ConfigurationError(
+            f"DARKVIEW_AGENT_OPTICAL_CONFIG={raw!r} is not an optical configuration. "
+            f"Valid values: {', '.join(o.value for o in OpticalConfig)}."
+        ) from None
 
 
 def _state_path(environment: dict[str, str]) -> Path:
