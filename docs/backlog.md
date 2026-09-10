@@ -76,6 +76,33 @@ wired, and what it deferred** below before touching command intake.
 | DV-062 | Audit and event log | M |
 | DV-063 | Operator/admin API | M |
 | DV-064 | Notifications | M |
+| DV-065 | Contract: `AGENT_CAPTURE_READY` cannot announce a thumbnail | S |
+| DV-066 | Contract: the booking surface has no observatory dimension (ADR-015) | L |
+
+### The two contract issues, and why they exist
+
+Both were raised by work that stopped rather than inventing a field, which is what
+`CLAUDE.md` requires: "If a task needs a field that does not exist in the contract,
+stop."
+
+**DV-065** is small. `CaptureAssetKind` has a THUMBNAIL and `AGENT_CAPTURE_READY`
+has no field to announce one, so `thumbnailUrl` cannot become non-null by any
+amount of agent work. ADR-012 listed it as a consequence of the capture path
+landing; it is not.
+
+**DV-066 is the one that matters.** DV-120 registers a partner node, DV-121 reads
+the hours its owner offered, and neither makes a partner telescope bookable,
+because `Slot` cannot say which telescope it belongs to and `CreateBookingRequest`
+cannot name one. Both booking surfaces still resolve the observatory with
+`findFirst`. Until it lands, the entire partner track is plumbing with no product
+at the end of it.
+
+It also carries a defect that is not yet live and becomes live the moment ADR-015's
+two slot lengths ship: `Booking_held_slot_unique` keys on the start instant, which
+is airtight for one fixed duration and silently wrong for mixed ones. A sixty-minute
+booking at 21:00 and a twenty-minute one at 21:20 both insert. **No
+variable-duration slot may be sold before that index is replaced with an exclusion
+constraint over the booked interval.**
 
 ## Observer Pack — server side (ADR-007)
 
@@ -174,7 +201,8 @@ DV-102 lands with DV-056.
 **Stage 4 — the live experience:** DV-032, DV-033, DV-039, DV-061, DV-063.
 
 **Stage 5 — booking and payment:** DV-054, DV-055, DV-056, DV-064, DV-110, DV-111,
-DV-112, DV-115.
+DV-112, DV-115. **DV-066 comes before anything sells a second slot length**, and
+before DV-122 or DV-123 are worth building.
 
 **Stage 6.5 — loyalty:** DV-090 … DV-096, behind DV-056.
 
