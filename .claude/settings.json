@@ -1,0 +1,58 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git worktree list)",
+      "Bash(npm run lint *)",
+      "Bash(npm test *)",
+      "Bash(npm run typecheck *)",
+      "Bash(npm run build *)",
+      "Bash(npx vitest *)",
+      "Bash(npx playwright test *)",
+      "Bash(pytest *)",
+      "Bash(python -m pytest *)",
+      "Bash(npm run contracts:check *)"
+    ],
+    "ask": [
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr merge --squash *)",
+      "Bash(npm install *)",
+      "Bash(npm add *)",
+      "Bash(npx prisma migrate dev *)",
+      "Bash(npm run contracts:generate *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.*.local)",
+      "Read(./.env.development)",
+      "Read(./.env.production)",
+      "Read(./.env.test)",
+      "Read(./secrets/**)",
+      "Bash(cat .env)",
+      "Bash(cat .env.local)",
+      "Bash(cat .env.production)",
+      "Bash(cat */.env)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git push *--force*)",
+      "Bash(git push --force-with-lease*)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean -fd *)",
+      "Bash(git commit --date *)",
+      "Bash(git commit --amend*)",
+      "Bash(git rebase *)",
+      "Bash(git filter-branch *)",
+      "Bash(gh release create *)",
+      "Bash(vercel --prod *)",
+      "Bash(railway up *)",
+      "Bash(railway deploy *)",
+      "Bash(npx prisma migrate deploy *)",
+      "Bash(npm run prisma migrate deploy *)"
+    ]
+  }
+}

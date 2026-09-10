@@ -207,7 +207,10 @@ Every change in this repository must be independently verifiable. Treat it accor
 - Never read, print or commit secrets.
 - Never fabricate timestamps, commits, tests or hardware evidence.
 - Never backdate a commit. Real history only.
-- Never merge directly to `main`.
+- Never merge directly to `main` **except** under ADR-014, which requires the
+  maintainer's approval of that specific merge in that session, green CI on the
+  parent, a squash, no agent in the authorship, and `main` as the only target.
+  An agent that merges states the CI run id it read.
 - Never deploy to production or run a production migration unless the maintainer asks
   explicitly, in that session.
 - Material that predates this repository is recorded in the private provenance record
@@ -226,11 +229,14 @@ Every change in this repository must be independently verifiable. Treat it accor
 7. Risks and assumptions listed explicitly.
 8. Work stays on its branch until reviewed. An agent may **request** to push the
    branch, but must wait for the maintainer's explicit approval on that prompt before
-   the push happens. Never merge and never deploy.
+   the push happens. Never deploy. Merging is governed by ADR-014: permitted only
+   with the maintainer's approval of that specific merge, and never as a standing
+   permission.
 
 Pushing is maintainer-approved, per push. Do not batch several branches into one
 approval request, and do not treat an earlier approval as standing permission for
-later pushes in the same session.
+later pushes in the same session. The same rule governs merging under ADR-014: one
+approval, one merge.
 
 ## Commit attribution
 
