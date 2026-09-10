@@ -10,6 +10,7 @@ import type {
 import { recordAuditEvent } from "@darkview/db/audit";
 
 import { getDatabase } from "@/lib/db/client";
+import { openIntervals, type LocalWindow } from "@/lib/slots/availability";
 import { nightWindow } from "@/lib/slots/darkness";
 import { generateSlots, SLOT_DURATION_MINUTES } from "@/lib/slots/generate";
 import { getServerEnvironment } from "@/lib/validation/env";
@@ -205,6 +206,21 @@ export async function reserveSlot(input: {
     };
   }
 
+  // The same narrowing GET /slots applies (DV-121). Without it the booking path
+  // would accept an instant the slot list refuses to show: a customer who knows
+  // the grid could reserve an hour the owner never offered, and the first anyone
+  // would know of it is a telescope somebody else owns waking up at 03:00.
+  const node = await database.observatoryNetworkNode.findFirst({
+    where: { observatoryId: observatory.id, approvalStatus: "APPROVED" },
+    select: {
+      availabilityWindows: {
+        where: { enabled: true },
+        select: { weekday: true, startMinute: true, endMinute: true },
+      },
+    },
+  });
+  const windows: LocalWindow[] = node?.availabilityWindows ?? [];
+
   const target = await database.target.findUnique({ where: { id: request.targetId } });
   if (!target || !target.enabled) {
     return {
@@ -225,7 +241,7 @@ export async function reserveSlot(input: {
     };
   }
 
-  const slot = findGeneratedSlot(slotStartAt, observatory, now);
+  const slot = findGeneratedSlot(slotStartAt, observatory, now, windows);
 
   if (!slot) {
     return {
@@ -234,7 +250,8 @@ export async function reserveSlot(input: {
       code: "VALIDATION_FAILED",
       message:
         "That instant is not a slot this observatory offers. Slots come from " +
-        "GET /slots and start on the grid inside astronomical darkness.",
+        "GET /slots and start on the grid inside astronomical darkness, within " +
+        "the hours the observatory is available.",
     };
   }
 
@@ -427,6 +444,7 @@ function findGeneratedSlot(
     weatherState: { holdActive: boolean } | null;
   },
   now: Date,
+  windows: readonly LocalWindow[],
 ) {
   const site = {
     latitudeDegrees: observatory.latitude,
@@ -444,14 +462,19 @@ function findGeneratedSlot(
     const window = nightWindow(date, observatory.timezone, site);
     if (!window) continue;
 
-    const match = generateSlots({
-      window,
-      now,
-      observatory: observatoryState,
-      bookedStartAt: new Set(),
-    }).find((slot) => Date.parse(slot.startAt) === slotStartAt.getTime());
+    // Generated per open interval, exactly as GET /slots does. Tiling the whole
+    // night and then filtering would accept a slot whose start only exists
+    // because the stride ran across a gap the owner left.
+    for (const interval of openIntervals(window, windows, observatory.timezone)) {
+      const match = generateSlots({
+        window: interval,
+        now,
+        observatory: observatoryState,
+        bookedStartAt: new Set(),
+      }).find((slot) => Date.parse(slot.startAt) === slotStartAt.getTime());
 
-    if (match) return match;
+      if (match) return match;
+    }
   }
 
   return null;
