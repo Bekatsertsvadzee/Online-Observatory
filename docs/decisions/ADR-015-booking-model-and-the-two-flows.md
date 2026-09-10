@@ -1,8 +1,9 @@
 # ADR-015 — A customer books an instrument and a time, and there are two flows
 
 - **Date:** 2026-09-10
-- **Status:** PROPOSED
+- **Status:** APPROVED
 - **Decided by:** project maintainer, in session
+- **Approved:** 2026-09-10, with the minimum slot amended from ten minutes to twenty
 - **Relates to:** `ADR-003` (Phase 1 scope boundary), `ADR-013` (partner observatories),
   `CLAUDE.md` § Product
 - **Blocks:** the contract change that makes any partner node bookable
@@ -35,9 +36,9 @@ other, which is not the thing ADR-013 set out to enable.
 
 ### 2. Slot duration varies, and the duration decides which targets are offered
 
-The maintainer named ten minutes and one hour. Both are **PROVISIONAL** — no
-controlling document states session lengths, the Build Plan puts them on the
-`/pricing` page, and pricing is not settled.
+**Twenty minutes is the minimum.** Twenty and sixty are the two lengths, and both
+are **PROVISIONAL** — no controlling document states session lengths, the Build
+Plan puts them on the `/pricing` page, and pricing is not settled.
 
 `generate.ts` today sells one length on purpose: "Selling a 15-minute slot and then
 letting a customer choose M13 would be selling something we cannot deliver." That
@@ -47,11 +48,20 @@ bright doubles; a long one opens the catalogue. A customer never sees a target t
 slot cannot deliver, so the promise is kept by construction rather than by a
 warning.
 
-**Ten minutes is shorter than anything yet measured.** DV-052 derived fifteen
-minutes for short-exposure targets, and a session also spends time on slew, plate
-solve and centring before a single frame is kept. What fits in ten minutes is a
-measurement nobody has taken. It is taken before a ten-minute slot is sold, not
-assumed.
+**Twenty minutes clears the only figure anyone has derived, with margin.** DV-052
+put fifteen minutes on short-exposure targets and thirty on the ones that need
+live stacking. Twenty exceeds the first by five minutes and falls ten short of the
+second, which is what makes the filter in this section real rather than
+decorative: a twenty-minute slot offers the Moon, the planets and bright doubles,
+and a sixty-minute slot opens the catalogue.
+
+**It is still a derivation, not a measurement.** Fifteen and thirty were both read
+off the observing method rather than off a telescope, and neither explicitly
+accounts for the slew, the plate solve and the centring that happen before a
+single frame is kept. Twenty minutes has margin over that unknown where ten had
+none, which is why it can be planned against now — but DV-035 measures what a
+session actually costs at first light, and the target filter is set from that
+figure rather than from this one.
 
 ### 3. Flow A — Live Observation — is Phase 1, and it is what exists
 
@@ -119,6 +129,11 @@ watch a named test double-book, restore it.
 
 ## When this would be revisited
 
-If the measurement in §2 shows that no catalogue target fits ten minutes once slew,
-solve and centring are counted, then the short slot is not a product and §2's filter
-has nothing to offer. That would not reopen §1 or §3.
+If DV-035 shows that slew, solve and centring cost enough that no catalogue target
+fits twenty minutes, the short slot is not a product and §2's filter has nothing to
+offer. The lengths move; §1, §3 and §4 do not.
+
+An earlier draft of this record set the minimum at ten minutes. It was amended to
+twenty before approval, because ten sat below the only derived figure for even the
+shortest targets and would have needed a measurement before anything could be
+planned against it.
