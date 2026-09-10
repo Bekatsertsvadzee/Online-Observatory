@@ -132,6 +132,10 @@ beforeEach(async () => {
   await database.missionEvent.deleteMany();
   await database.booking.deleteMany();
   await database.mission.deleteMany();
+  // ObservatoryNetworkNode holds Restrict foreign keys to Observatory and User
+  // (ADR-013), so a node left behind blocks every later suite's cleanup.
+  await database.networkAvailabilityWindow.deleteMany();
+  await database.observatoryNetworkNode.deleteMany();
   await database.safetyEnvelope.deleteMany();
   await database.telescope.deleteMany();
   await database.weatherState.deleteMany();

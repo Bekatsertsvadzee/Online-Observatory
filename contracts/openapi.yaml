@@ -87,6 +87,10 @@ tags:
     description: Mission lifecycle and the client command boundary.
   - name: captures
     description: Captures and the user's Collection.
+  - name: network
+    description: |
+      Partner observatories (ADR-013). A telescope somebody else owns, joining by
+      installing the agent on their own machine.
   - name: admin
     description: Operator-only. Separately audited.
 
@@ -922,6 +926,144 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /network/nodes:
+    get:
+      operationId: listMyNetworkNodes
+      tags: [network]
+      summary: The signed-in owner's observatories.
+      responses:
+        "200":
+          description: The caller's nodes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkNodeList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      operationId: registerNetworkNode
+      tags: [network]
+      summary: Register a telescope you own.
+      description: |
+        Creates the site, the instrument and the node together, in DRAFT. A node in
+        DRAFT accepts no customer and commands no hardware: ADR-013 requires a
+        qualification an operator granted before a partner telescope may be operated
+        by anyone, and DRAFT is the resting state until then.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterNetworkNodeRequest"
+      responses:
+        "201":
+          description: The registered node, in DRAFT.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkNode"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /network/nodes/{nodeId}/submit:
+    post:
+      operationId: submitNetworkNodeForReview
+      tags: [network]
+      summary: Offer a node for operator review.
+      description: |
+        DRAFT to UNDER_REVIEW. The owner is saying the telescope is set up and ready
+        to be qualified; it is not an approval and changes nothing about what the
+        node may do.
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "200":
+          description: The node, now under review.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkNode"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /admin/network/nodes/{nodeId}/approve:
+    post:
+      operationId: adminApproveNetworkNode
+      tags: [admin]
+      summary: Qualify a partner observatory to operate unattended.
+      description: |
+        ADR-013. Five of the six conditions are things only a person can attest, and
+        the operator attests each one explicitly. The sixth -- a measured safety
+        envelope for that instrument -- is checked here rather than asserted, because
+        the database knows the answer and a checkbox would let an unmeasured
+        telescope be approved by clicking.
+      security:
+        - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveNetworkNodeRequest"
+      responses:
+        "200":
+          description: The approved node.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkNode"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/network/nodes/{nodeId}/suspend:
+    post:
+      operationId: adminSuspendNetworkNode
+      tags: [admin]
+      summary: Return a node to DRAFT, immediately.
+      description: |
+        The emergency stop for a telescope nobody is standing next to. It is never
+        refused on the grounds that the node is busy: a live mission is a reason to
+        suspend, not a reason to wait.
+      security:
+        - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuspendNetworkNodeRequest"
+      responses:
+        "200":
+          description: The suspended node.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkNode"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+
 components:
   securitySchemes:
     userSession:
@@ -949,6 +1091,13 @@ components:
         provider's own documentation before implementation. Nothing here is invented.
 
   parameters:
+    NodeId:
+      name: nodeId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     Cursor:
       name: cursor
       in: query
@@ -2708,6 +2857,204 @@ components:
     # ---------------------------------------------------------------------------
     # Audit
     # ---------------------------------------------------------------------------
+
+    # ---------------------------------------------------------------------------
+    # Partner observatories (ADR-013)
+    # ---------------------------------------------------------------------------
+
+    NetworkNodeKind:
+      type: string
+      description: |
+        FIRST_PARTY is an observatory Darkview owns and operates. PARTNER is one
+        somebody else owns, running the same agent under a qualification an operator
+        granted and can revoke.
+      enum: [FIRST_PARTY, PARTNER]
+
+    NetworkNodeApprovalStatus:
+      type: string
+      description: |
+        DRAFT is the resting state and it refuses everything. UNDER_REVIEW is the
+        owner saying the telescope is ready to be qualified; it grants nothing.
+        APPROVED is the only state in which a partner observatory may be operated.
+        SUSPENDED is an operator having taken that away.
+
+        SUSPENDED and DRAFT both refuse everything, and they are kept distinct
+        because they are different facts about a telescope: one has never been
+        qualified, the other was and had it revoked. Collapsing them would lose
+        exactly the history an operator needs when deciding whether to approve it
+        again.
+      enum: [DRAFT, UNDER_REVIEW, APPROVED, SUSPENDED]
+
+    NetworkNode:
+      type: object
+      description: |
+        One observatory in the network, and the terms on which it may be used.
+
+        ADR-013: partner status widens who may host a telescope, never what a
+        telescope may be asked to do. A node carries no authority of its own -- the
+        agent still re-validates every command, still enforces its own safety
+        envelope after the link dies, and still refuses a cloud-approved command
+        that fails local safety.
+      additionalProperties: false
+      required:
+        [nodeId, observatoryId, ownerId, kind, approvalStatus, siteName, city,
+         countryCode, timezone, safetyEnvelopeMeasured, capabilities, createdAt]
+      properties:
+        nodeId:
+          type: string
+          format: uuid
+        observatoryId:
+          type: string
+          format: uuid
+        ownerId:
+          type: string
+          format: uuid
+        kind:
+          $ref: "#/components/schemas/NetworkNodeKind"
+        approvalStatus:
+          $ref: "#/components/schemas/NetworkNodeApprovalStatus"
+        siteName:
+          type: string
+        city:
+          type: string
+        countryCode:
+          type: string
+          minLength: 2
+          maxLength: 2
+        timezone:
+          type: string
+        safetyEnvelopeMeasured:
+          type: boolean
+          description: |
+            Whether a measured altitude limit exists for this instrument. Reported
+            rather than asserted: it is the condition approval checks for itself,
+            because the database knows the answer and a checkbox would let an
+            unmeasured telescope be approved by clicking.
+        capabilities:
+          type: array
+          items:
+            type: string
+          description: Populated at qualification. Empty at registration.
+        approvedAt:
+          type: [string, "null"]
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+
+    NetworkNodeList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NetworkNode"
+
+    RegisterNetworkNodeRequest:
+      type: object
+      description: |
+        The site and the instrument, together. A partner has neither until they
+        register, so both are created here.
+
+        There is one `siteName` rather than a name per language. A telescope on a
+        roof in Santiago has one name, and manufacturing a Georgian translation of
+        it would be inventing data about somebody else's property.
+      additionalProperties: false
+      required:
+        [siteName, city, countryCode, latitude, longitude, timezone, telescope]
+      properties:
+        siteName:
+          type: string
+          minLength: 2
+          maxLength: 120
+        city:
+          type: string
+          minLength: 1
+          maxLength: 120
+        countryCode:
+          type: string
+          minLength: 2
+          maxLength: 2
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+        timezone:
+          type: string
+          minLength: 1
+        telescope:
+          $ref: "#/components/schemas/RegisterNetworkTelescope"
+
+    RegisterNetworkTelescope:
+      type: object
+      additionalProperties: false
+      required: [name, manufacturer, model, apertureMm, focalLengthMm]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        manufacturer:
+          type: string
+          minLength: 1
+        model:
+          type: string
+          minLength: 1
+        apertureMm:
+          type: number
+          exclusiveMinimum: 0
+        focalLengthMm:
+          type: number
+          exclusiveMinimum: 0
+
+    ApproveNetworkNodeRequest:
+      type: object
+      description: |
+        ADR-013's qualification, as the operator attests it.
+
+        Every flag must be true. They are separate fields rather than one
+        confirmation because they are separate things somebody had to go and do, and
+        a single "I confirm" is a box that gets ticked without reading. The measured
+        safety envelope is absent from this list deliberately: it is checked against
+        the database instead.
+      additionalProperties: false
+      required:
+        [coordinatesVerified, horizonMaskRecorded, firstLightSupervised,
+         parkProven, ownerTermsAccepted, reason]
+      properties:
+        coordinatesVerified:
+          type: boolean
+          description: The site was confirmed against the sky, by plate solve, rather than typed into a form.
+        horizonMaskRecorded:
+          type: boolean
+          description: The roofline, walls and obstructions at this site are recorded.
+        firstLightSupervised:
+          type: boolean
+          description: At least one full mission was run on this instrument with an operator watching.
+        parkProven:
+          type: boolean
+          description: Park was seen to work on this hardware, both commanded and on link loss.
+        ownerTermsAccepted:
+          type: boolean
+          description: The owner accepted the operating terms in writing, for this node.
+        reason:
+          type: string
+          minLength: 8
+
+    SuspendNetworkNodeRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 8
 
     AuditCategory:
       type: string

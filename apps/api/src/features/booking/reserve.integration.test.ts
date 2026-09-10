@@ -157,6 +157,10 @@ beforeEach(async () => {
   // Captures first. Capture holds Restrict foreign keys to Mission, Target,
   // Telescope, Observatory and User, so a capture left behind by another suite
   // blocks every delete below it -- and these suites share one database.
+  // ObservatoryNetworkNode holds Restrict foreign keys to Observatory and User
+  // (ADR-013), so a node left behind blocks every later suite's cleanup.
+  await database.networkAvailabilityWindow.deleteMany();
+  await database.observatoryNetworkNode.deleteMany();
   await database.capture.deleteMany();
   await database.observatoryCommand.deleteMany();
   await database.missionSession.deleteMany();

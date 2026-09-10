@@ -63,6 +63,12 @@ export type AuditAction =
   | "WEATHER_HOLD_CLEARED"
   // OBSERVATORY_MODE
   | "OBSERVATORY_MODE_CHANGED"
+  // OBSERVATORY_MODE -- partner observatories (ADR-013). They share the category
+  // because they are all statements about what an observatory is permitted to do.
+  | "NETWORK_NODE_REGISTERED"
+  | "NETWORK_NODE_SUBMITTED"
+  | "NETWORK_NODE_APPROVED"
+  | "NETWORK_NODE_SUSPENDED"
   // OPERATOR_OVERRIDE
   | "OPERATOR_OVERRIDE_ISSUED"
   | "OPERATOR_MISSION_CANCELLED"

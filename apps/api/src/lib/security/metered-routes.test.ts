@@ -55,6 +55,11 @@ const UNMETERED_BY_DESIGN = [
   // flood of anything else deny an operator the one control that frees a
   // telescope nobody can book behind.
   "admin/missions/[missionId]/cancel/route.ts",
+  // Suspending a partner node is the emergency stop for a telescope nobody is
+  // standing next to (ADR-013). It follows Park: a limiter able to delay it would
+  // be a regression dressed as hardening, and the moment an operator most needs
+  // it is the moment they have been hammering the console.
+  "admin/network/nodes/[nodeId]/suspend/route.ts",
 ];
 
 describe("every mutating route is metered", () => {
