@@ -129,6 +129,7 @@ runs. It is development-only — the seed refuses to run unless `NODE_ENV=develo
 | `DARKVIEW_AGENT_DRIVER_MODE` | no | `SIMULATED` (default) or `REAL`. |
 | `DARKVIEW_AGENT_ATTENDED` | no | Set only when an operator is physically at the observatory. `REAL` without it refuses to start. |
 | `DARKVIEW_AGENT_STATE_PATH` | no | The local state store. Defaults to `~/.darkview/agent-state.sqlite3`. |
+| `DARKVIEW_AGENT_OPTICAL_CONFIG` | no | Which optical train is fitted, reported on every capture. `F10_NATIVE` (default), `F20_BARLOW` or `F6_3_REDUCER`. Set it when a barlow or reducer is on the telescope. |
 
 The agent refuses to start without the first three: one that cannot reach the cloud
 cannot be told to stop.

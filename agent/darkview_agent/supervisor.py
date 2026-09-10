@@ -41,19 +41,25 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from contracts.models import (
+    CaptureAssetKind,
     CommandAcceptanceStatus,
     CommandEnvelope,
     CommandRejectionReason,
     MissionFailureReason,
     SafetyEnvelopeConfig,
 )
-from darkview_agent.clock import Clock, SystemClock
+from darkview_agent.capture import profiles
+from darkview_agent.capture.deliverable import Deliverable, RenderedAsset, render
+from darkview_agent.capture.overlay import Caption
+from darkview_agent.capture.upload import Uploader, UploadJob, UploadResult
+from darkview_agent.clock import Clock, SystemClock, wire_timestamp
 from darkview_agent.command.audit import AuditEvent, AuditLog
 from darkview_agent.command.validator import Ack, CommandValidator, SessionOwnership
 from darkview_agent.config import AgentConfig
 from darkview_agent.devices.base import DeviceError
 from darkview_agent.link.session import LinkSession
 from darkview_agent.mission.runner import (
+    FinishedCapture,
     MissionAlreadyActive,
     MissionEvent,
     MissionRequest,
@@ -80,10 +86,6 @@ DEFAULT_LOOP_INTERVAL_SECONDS = 0.25
 #: an ACCEPTED ack for a command nothing performs tells the cloud, the operator
 #: and the customer that the telescope did something it did not do.
 UNIMPLEMENTED_COMMANDS: dict[str, str] = {
-    "CAPTURE": (
-        "CAPTURE needs the live-stack and upload pipeline (DV-033) and the media "
-        "store (DV-061). This agent build has neither, so nothing would be kept"
-    ),
     "FOCUS": "FOCUS needs the focuser driver and autofocus routine (DV-031)",
     "SET_PROFILE": (
         "SET_PROFILE needs the imaging profile table that maps a profile to "
@@ -101,6 +103,43 @@ class _Owner:
 
     ownership: SessionOwnership
     expires_at: datetime | None
+
+
+#: The assets one capture delivers, and the order they are asked for.
+#:
+#: IMAGE first because it is the only one `AGENT_CAPTURE_READY` requires: if the
+#: cloud refuses a grant or an upload fails, the asset that decides whether the
+#: capture exists at all has already had its turn.
+CAPTURE_ASSETS: tuple[CaptureAssetKind, ...] = (
+    CaptureAssetKind.image,
+    CaptureAssetKind.unmarked,
+)
+
+
+@dataclass
+class _PendingCapture:
+    """One finished capture, between the stack and AGENT_CAPTURE_READY.
+
+    It exists for as long as the round trip takes: a grant is asked for per
+    asset, each grant that comes back starts an upload, and the capture is
+    reported once every asset has settled one way or the other.
+    """
+
+    finished: FinishedCapture
+    deliverable: Deliverable
+    optical_config: str
+    #: Every asset still owed an answer -- no grant yet, or uploading.
+    outstanding: set[CaptureAssetKind]
+    #: The cloud's own derived key, per asset that was written.
+    written: dict[CaptureAssetKind, str]
+    reported: bool = False
+
+    def asset(self, kind: CaptureAssetKind) -> RenderedAsset | None:
+        if kind is CaptureAssetKind.image:
+            return self.deliverable.image
+        if kind is CaptureAssetKind.unmarked:
+            return self.deliverable.unmarked
+        return None
 
 
 class Supervisor:
@@ -122,6 +161,8 @@ class Supervisor:
         validator: CommandValidator,
         envelope: SafetyEnvelope,
         outbox: list[MissionEvent],
+        captures: list[FinishedCapture] | None = None,
+        uploader: Uploader | None = None,
         store: StateStore | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -138,6 +179,15 @@ class Supervisor:
         # up a Park. Required rather than defaulted: a Supervisor whose outbox is
         # not the one the runner writes to would silently lose every event.
         self._outbox = outbox
+        # The runner's second outbox. Same reason as the first: it appends while
+        # holding the device lock, and everything that follows a capture --
+        # encoding a JPEG, asking the cloud for a grant -- must happen outside it.
+        self._captures: list[FinishedCapture] = [] if captures is None else captures
+        # Not `uploader or Uploader()`: an injected uploader is how a test drives
+        # a failed PUT, and silently replacing one would make that test pass for
+        # the wrong reason.
+        self._uploader = Uploader() if uploader is None else uploader
+        self._pending: dict[str, _PendingCapture] = {}
         self._store = store
         self._now = now or (lambda: datetime.now(UTC))
 
@@ -183,6 +233,14 @@ class Supervisor:
     # ------------------------------------------------------------------
     # Coming back
     # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        """Start the parts that run on their own. Called once, before pumping."""
+        self._uploader.start()
+
+    def stop(self) -> None:
+        """Stop them again. An upload in flight is given a moment to finish."""
+        self._uploader.stop()
 
     def recover(self) -> None:
         """Pick up what the last run left behind. Called once, before pumping.
@@ -297,6 +355,14 @@ class Supervisor:
         while self._outbox:
             self._link.send(self._outbox.pop(0).to_message())
 
+        # Also outside the lock: encoding a capture is CPU the mount must not
+        # wait on, and asking for a grant is a network round trip.
+        while self._captures:
+            self._begin_capture(self._captures.pop(0))
+
+        for result in self._uploader.take_results():
+            self._record_upload(result)
+
         self._persist_mission()
 
         # Told at every pass, read only at the next hello. An agent that
@@ -322,6 +388,8 @@ class Supervisor:
             self._handle_session_update(message)
         elif message_type == "CLOUD_SAFETY_ENVELOPE_UPDATE":
             self._handle_envelope_update(message)
+        elif message_type == "CLOUD_UPLOAD_GRANT":
+            self._handle_upload_grant(message)
         elif message_type == "CLOUD_ERROR":
             self._handle_cloud_error(message)
         elif message_type == "CLOUD_HEARTBEAT_ACK":
@@ -528,6 +596,8 @@ class Supervisor:
             try:
                 if payload.kind == "GOTO":
                     return self._execute_goto(envelope, payload, at_time)
+                if payload.kind == "CAPTURE":
+                    return self._execute_capture(envelope, payload)
                 if payload.kind == "NUDGE":
                     return self._execute_nudge(payload)
                 if payload.kind == "ABORT":
@@ -593,6 +663,53 @@ class Supervisor:
             )
         except MissionAlreadyActive as error:
             return (CommandRejectionReason.mission_already_active, str(error))
+        return None
+
+    def _execute_capture(self, envelope: CommandEnvelope, payload) -> Refusal | None:
+        """Keep the run that follows, at the profile the customer chose.
+
+        The exposure and gain come from the profile table, not from the payload.
+        `CapturePayload` names an imaging profile and may ask for a frame count
+        or a total integration; what a globular cluster is worth exposing for is
+        a property of the instrument, and a payload that could set gain directly
+        would be a customer tuning a camera they cannot see.
+        """
+        if not self._runner.is_active:
+            return (
+                CommandRejectionReason.no_active_mission,
+                "a capture arrived with no mission running; there is nothing on target",
+            )
+        if self._runner.mission_id != str(envelope.mission_id):
+            # The validator refuses a command naming a mission the session does
+            # not own, so arriving here means the cloud contradicted itself.
+            return (
+                CommandRejectionReason.mission_already_active,
+                f"mission {self._runner.mission_id} is running; "
+                f"{envelope.mission_id} is not the mission on target",
+            )
+
+        settings = profiles.resolve(
+            payload.imaging_profile,
+            requested_frames=payload.requested_frames,
+            target_integration_seconds=payload.target_integration_seconds,
+        )
+
+        if not self._runner.request_capture(
+            str(envelope.command_id), payload.imaging_profile, settings
+        ):
+            return (
+                CommandRejectionReason.device_unavailable,
+                f"the mission is {self._runner.state.value} and the capture run has "
+                "already started; its exposure cannot be changed part-way through",
+            )
+
+        self._audit_event(
+            "CAPTURE_REQUESTED",
+            command_id=str(envelope.command_id),
+            detail=f"{payload.imaging_profile.value}: {settings.frames} x "
+            f"{settings.exposure_milliseconds:.0f}ms at gain {settings.gain}",
+            context={"missionId": str(envelope.mission_id)},
+        )
         return None
 
     def _execute_nudge(self, payload) -> Refusal | None:
@@ -685,6 +802,220 @@ class Supervisor:
         return None
 
     # ------------------------------------------------------------------
+    # Captures
+    # ------------------------------------------------------------------
+
+    def _begin_capture(self, finished: FinishedCapture) -> None:
+        """Encode the finished stack and ask the cloud where to put it.
+
+        The agent proposes no key. `AgentUploadGrantRequest` has no field for one
+        -- the cloud derives the object's identity from facts it already holds --
+        so this asks for permission per asset and waits to be told.
+        """
+        caption = Caption(
+            captured_at=finished.captured_at,
+            integration_seconds=finished.integration_seconds,
+            frames_stacked=finished.frames_stacked,
+            mode=finished.frame.mode,
+            optical_config=self._config.optical_config.value,
+        )
+
+        try:
+            deliverable = render(finished.frame, caption)
+        except Exception as error:  # noqa: BLE001 - a lost keepsake, not a lost mission
+            logger.error("could not encode capture %s: %s", finished.command_id, error)
+            self._audit_event(
+                "CAPTURE_ENCODE_FAILED",
+                command_id=finished.command_id,
+                detail=str(error),
+                context={"missionId": finished.mission_id},
+            )
+            return
+
+        self._pending[finished.command_id] = _PendingCapture(
+            finished=finished,
+            deliverable=deliverable,
+            optical_config=self._config.optical_config.value,
+            outstanding=set(CAPTURE_ASSETS),
+            written={},
+        )
+
+        for kind in CAPTURE_ASSETS:
+            self._link.send(
+                {
+                    "type": "AGENT_UPLOAD_GRANT_REQUEST",
+                    "messageId": str(uuid.uuid4()),
+                    "sentAt": wire_timestamp(),
+                    "missionId": finished.mission_id,
+                    "commandId": finished.command_id,
+                    "kind": kind.value,
+                }
+            )
+
+        logger.info(
+            "capture %s encoded (%d frames, %.0fs); asked for %d upload grant(s)",
+            finished.command_id,
+            finished.frames_stacked,
+            finished.integration_seconds,
+            len(CAPTURE_ASSETS),
+        )
+
+    def _handle_upload_grant(self, message: dict) -> None:
+        """Turn one grant into one upload, or refuse to use it.
+
+        Three things are checked before the bytes go anywhere, and all three are
+        about this agent not being talked into writing something it did not
+        produce: the grant must name a capture this agent is holding, the mission
+        that capture belongs to, and an asset kind it actually rendered.
+        """
+        command_id = message.get("commandId")
+        pending = self._pending.get(command_id) if isinstance(command_id, str) else None
+        if pending is None:
+            logger.warning("discarding an upload grant for an unknown capture")
+            return
+
+        if message.get("missionId") != pending.finished.mission_id:
+            logger.error(
+                "discarding an upload grant for capture %s: it names a different mission",
+                command_id,
+            )
+            return
+
+        try:
+            kind = CaptureAssetKind(message.get("kind"))
+        except ValueError:
+            logger.error("discarding an upload grant naming an unknown asset kind")
+            return
+
+        asset = pending.asset(kind)
+        if asset is None or kind not in pending.outstanding:
+            # A grant for something already written, or never asked for. Not an
+            # error worth raising: a duplicate is harmless once ignored, and
+            # uploading twice would be a second object nothing names.
+            logger.info("ignoring a grant for %s that is not outstanding", kind.value)
+            return
+
+        expires_at = _parse_time(message.get("expiresAt"))
+        storage_key = message.get("storageKey")
+        url = message.get("url")
+        if expires_at is None or not isinstance(storage_key, str) or not isinstance(url, str):
+            logger.error("discarding an unreadable upload grant for %s", kind.value)
+            return
+
+        try:
+            job = UploadJob(
+                mission_id=pending.finished.mission_id,
+                command_id=pending.finished.command_id,
+                kind=kind,
+                storage_key=storage_key,
+                url=url,
+                method=str(message.get("method")),
+                expires_at=expires_at,
+                payload=asset.payload,
+                content_type=asset.content_type,
+            )
+        except ValueError as error:
+            # The URL is deliberately not in this line. `UploadJob` refuses a
+            # grant naming anything but PUT, and the message says which verb --
+            # not where it pointed.
+            logger.error("refusing an upload grant for %s: %s", kind.value, error)
+            self._settle_asset(pending, kind, written_key=None)
+            return
+
+        self._uploader.submit(job)
+
+    def _record_upload(self, result: UploadResult) -> None:
+        pending = self._pending.get(result.command_id)
+        if pending is None:  # pragma: no cover - a capture cannot be dropped mid-upload
+            logger.warning("an upload finished for a capture no longer held")
+            return
+
+        if not result.ok:
+            self._audit_event(
+                "CAPTURE_UPLOAD_FAILED",
+                command_id=result.command_id,
+                detail=f"{result.kind.value}: {result.error}",
+                context={"missionId": result.mission_id},
+            )
+
+        self._settle_asset(
+            pending, result.kind, written_key=result.storage_key if result.ok else None
+        )
+
+    def _settle_asset(
+        self, pending: _PendingCapture, kind: CaptureAssetKind, written_key: str | None
+    ) -> None:
+        """Mark one asset done, and report the capture once none are outstanding."""
+        pending.outstanding.discard(kind)
+        if written_key is not None:
+            pending.written[kind] = written_key
+
+        if pending.outstanding:
+            return
+        self._report_capture(pending)
+
+    def _report_capture(self, pending: _PendingCapture) -> None:
+        """Tell the cloud what was written -- and only what was written.
+
+        A capture with no IMAGE is not reported at all. `imageStorageKey` is
+        required, so there is no honest message to send: announcing a capture
+        whose one required object does not exist would put a broken download in
+        the customer's Collection, which is precisely what the nullable optional
+        keys exist to avoid.
+        """
+        if pending.reported:  # pragma: no cover - settled once, by construction
+            return
+        pending.reported = True
+
+        finished = pending.finished
+        self._pending.pop(finished.command_id, None)
+
+        image_key = pending.written.get(CaptureAssetKind.image)
+        if image_key is None:
+            logger.error(
+                "capture %s has no uploaded image; nothing will be recorded",
+                finished.command_id,
+            )
+            self._audit_event(
+                "CAPTURE_LOST",
+                command_id=finished.command_id,
+                detail="no IMAGE asset was written, so the capture cannot be reported",
+                context={"missionId": finished.mission_id},
+            )
+            return
+
+        self._link.send(
+            {
+                "type": "AGENT_CAPTURE_READY",
+                "messageId": str(uuid.uuid4()),
+                "sentAt": wire_timestamp(),
+                "missionId": finished.mission_id,
+                "commandId": finished.command_id,
+                "capturedAt": wire_timestamp(finished.captured_at),
+                "imagingProfile": finished.imaging_profile.value,
+                "opticalConfig": pending.optical_config,
+                "exposureMilliseconds": finished.exposure_milliseconds,
+                "gain": finished.gain,
+                "framesStacked": finished.frames_stacked,
+                "integrationSeconds": finished.integration_seconds,
+                "imageStorageKey": image_key,
+                "unmarkedStorageKey": pending.written.get(CaptureAssetKind.unmarked),
+                "fitsStorageKey": None,
+                # Not plate-solved. The solver reports where the mount is
+                # pointing, not what focal length produced the frame, and
+                # deriving it from the configured optical train would be
+                # restating configuration as a measurement.
+                "solvedFocalLengthMm": None,
+                "widthPx": pending.deliverable.image.width_px,
+                "heightPx": pending.deliverable.image.height_px,
+                # From the frame, never from configuration. A capture carries its
+                # own provenance for the same reason a live frame does.
+                "mode": finished.frame.mode.value,
+            }
+        )
+        logger.info("capture %s reported: %s", finished.command_id, image_key)
+
+    # ------------------------------------------------------------------
     # Plumbing
     # ------------------------------------------------------------------
 
@@ -769,6 +1100,8 @@ def build_supervisor(
     clock: Clock | None = None,
     now: Callable[[], datetime] | None = None,
     stream_settings: StreamSettings | None = None,
+    uploader: Uploader | None = None,
+    observing_seconds: float | None = None,
 ) -> Supervisor:
     """Assemble a supervisor from configuration. The only place the wiring lives.
 
@@ -805,6 +1138,7 @@ def build_supervisor(
 
     audit = AuditLog(sink=store.append_audit if store else None)
     outbox: list[MissionEvent] = []
+    captures: list[FinishedCapture] = []
 
     link = LinkSession(
         observatory_id=config.observatory_id,
@@ -831,6 +1165,10 @@ def build_supervisor(
         clock=clock,
         emit=outbox.append,
         show=lambda frame: live_view.offer(runner.mission_id, frame),
+        on_capture=captures.append,
+        **(
+            {} if observing_seconds is None else {"observing_seconds": observing_seconds}
+        ),
     )
     validator = CommandValidator(
         envelope=envelope,
@@ -849,6 +1187,8 @@ def build_supervisor(
         validator=validator,
         envelope=envelope,
         outbox=outbox,
+        captures=captures,
+        uploader=uploader,
         store=store,
         now=now,
     )

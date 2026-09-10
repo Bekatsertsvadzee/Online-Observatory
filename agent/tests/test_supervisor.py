@@ -347,7 +347,6 @@ def test_a_second_mission_is_refused_rather_than_queued():
 @pytest.mark.parametrize(
     ("command_type", "payload", "owed_to"),
     [
-        ("CAPTURE", {"kind": "CAPTURE", "imagingProfile": "GLOBULAR_CLUSTER"}, "DV-033"),
         ("FOCUS", {"kind": "FOCUS", "mode": "AUTOFOCUS"}, "DV-031"),
         (
             "SET_PROFILE",

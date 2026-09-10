@@ -302,15 +302,25 @@ Next's `instrumentation.ts`, whose `register` runs once and must complete before
 server accepts a request; `apps/realtime` reads the configuration before it accepts
 a socket.
 
-**Not built: the agent half.** The Python agent does not yet ask for a grant, does
-not upload, and still reports storage keys it invented. The Pydantic models exist,
-so the messages are typed on both sides, but nothing sends one. That is the other
-half of DV-061 and it is where DV-033's overlay output finally goes somewhere.
+**Not built at the time: the agent half.** The Python agent did not ask for a
+grant and did not upload. The Pydantic models existed, so the messages were typed
+on both sides, but nothing sent one. That is the other half of DV-061; it is now
+built, and the section below records what that turned out to involve.
 
-**`thumbnailUrl` is still null, and that is still honest.** ADR-012 lists it as a
-consequence of the whole path landing. Until the agent uploads a THUMBNAIL there is
-no such asset to sign, and signing a URL for an object that does not exist would put
-a broken image in every card -- which is the exact thing null was chosen to avoid.
+**A dated correction to this record.** The sentence above originally read that the
+agent "still reports storage keys it invented". It did not. The agent had never
+sent `AGENT_CAPTURE_READY` at all: `CAPTURE` was on the supervisor's
+`UNIMPLEMENTED_COMMANDS` list and was refused outright, and `_do_processing` was a
+stub that transitioned straight to COMPLETE. The missing work was the whole capture
+path, not an upload bolted onto an existing one. Corrected 2026-09-10, when the
+agent half was picked up and the claim did not survive contact with the code.
+
+**`thumbnailUrl` is still null, and it is not the agent's to fix.** ADR-012 lists
+it as a consequence of the whole path landing. It is not: `AGENT_CAPTURE_READY`
+carries `imageStorageKey`, `unmarkedStorageKey` and `fitsStorageKey` and has **no
+field for a thumbnail**, so an agent that rendered and uploaded one would leave an
+object in the bucket that no message can name and no row can reference. It needs a
+contract change. See the open question below.
 
 **Orphaned objects are now possible**, as ADR-012 said they would be: an agent that
 uploads and loses the link before reporting leaves an object no row names. The sweep
@@ -322,6 +332,76 @@ grant's mission check, and the key derivation's refusal of anything that is not 
 UUID. One test passed the first time and was rewritten -- the identical-wording check
 compared a set of one against itself, because the helper that brings a link online
 clears the recorded messages.
+
+## What the agent capture path built, and the field the contract is missing
+
+The other half of DV-061. `CAPTURE` was refused as unimplementable, `_do_processing`
+was a stub, and the cloud's grant and download surfaces had nothing to talk to.
+
+| Piece | Where |
+| --- | --- |
+| Profile to exposure, gain and frames | `agent/darkview_agent/capture/profiles.py` |
+| The caption burned into the delivered image | `capture/overlay.py` |
+| The stack rendered as IMAGE and UNMARKED | `capture/deliverable.py` |
+| The presigned PUT, on its own thread | `capture/upload.py` |
+| Grant request, grant handling, `AGENT_CAPTURE_READY` | `supervisor.py` |
+
+**OBSERVING now waits for a person.** It used to transition to CAPTURING on the
+next pass, which left no window in which a customer could press Capture at all. It
+holds for a bounded dwell instead, and a capture request ends the wait. When none
+comes the mission still passes through CAPTURING -- CLAUDE.md's state list is
+linear and every mission visits it -- and PROCESSING delivers nothing. The dwell is
+PROVISIONAL: the real figure is the slot's length, which the agent is not told.
+
+**The upload runs off the run loop, on a worker thread.** Everything else in the
+agent is a polled state machine, and the loop holds the watchdog's device lock on
+every pass. A capture is hundreds of kilobytes over an observatory uplink, so a
+blocking PUT inside `pump()` would put a network stall between a heartbeat and a
+Park. stdlib `urllib`, so no new dependency.
+
+**The agent proposes no key and reports the cloud's.** `AgentUploadGrantRequest`
+has no field for one and `additionalProperties: false` makes an agent that invents
+one a validation failure. What comes back on the grant is what is uploaded to and
+what `AGENT_CAPTURE_READY` reports, which is what makes `CaptureAsset.storageKey`
+trustworthy.
+
+**The presigned URL is treated as a credential.** It is the observatory's entire
+authority over object storage, so every message leaving `upload.py` is scrubbed of
+it -- the same rule `link/websocket.py` applies to the device token.
+
+**A simulated capture says SIMULATED on the face of the image.** CLAUDE.md forbids
+presenting simulator output as real telescope output. A `mode` column does not
+survive a screenshot; the caption does.
+
+**A capture with no IMAGE is not reported at all.** `imageStorageKey` is required,
+so there is no honest message to send. A lost UNMARKED costs the optional asset and
+nothing else.
+
+**Not built: FITS.** Nullable in the contract, and writing one means a FITS library
+and a header convention that has to agree with whatever a customer opens it in.
+`fitsStorageKey` stays null.
+
+**Open contract question: there is no `thumbnailStorageKey`.** THUMBNAIL is a
+`CaptureAssetKind` the cloud can store and the agent has no way to announce.
+Until `AGENT_CAPTURE_READY` gains the field, `thumbnailUrl` cannot become non-null
+by any amount of agent work. Two things need deciding together: the new field, and
+whether `apps/api/src/features/shared-observations/data.ts` should keep deriving a
+thumbnail from `capture.assets.at(0)` -- which today takes whichever asset happens
+to be first rather than the THUMBNAIL.
+
+**New optional setting: `DARKVIEW_AGENT_OPTICAL_CONFIG`.** Which optical train is
+fitted, reported on every capture. Defaults to `F10_NATIVE` -- the C6 with nothing
+added, the only configuration that is true by default. Unlike `MAX_ALT_SAFE` it is
+not a safety value: getting it wrong mislabels a focal length rather than letting a
+telescope hit something, which is why it has a default at all.
+
+**Verified by removing each protection and confirming a named test fails:** the
+grant's mission check, the unknown-capture check, the PUT-only rule, both halves of
+the URL scrub, the grant-expiry check, the required-IMAGE rule, the SIMULATED
+marking, and the refusal of a second capture once the run has started. The
+query-string half of the scrub was found to be unheld on the first pass -- the
+whole-URL replacement was catching every case the test tried -- and has its own
+test now.
 
 ## What DV-114 can prove, and what it cannot
 
