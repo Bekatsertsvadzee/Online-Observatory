@@ -316,6 +316,160 @@ describe("reserving a slot", () => {
   });
 });
 
+/**
+ * The hours an owner offered, enforced on the booking path as well as the list.
+ *
+ * `GET /slots` narrowing without `POST /bookings` narrowing would be worse than
+ * neither: the grid is public and predictable, so a customer who read one page of
+ * it could name an instant the list refuses to show and have it accepted.
+ */
+describe("availability windows", () => {
+  /** Minutes after local midnight, at the observatory. */
+  function localMinutes(at: Date): number {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: SITE.timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(at);
+    const value = (type: string) =>
+      Number(parts.find((part) => part.type === type)?.value ?? "0");
+    return value("hour") * 60 + value("minute");
+  }
+
+  /** The weekday, at the observatory. 0 = Sunday. */
+  function localWeekday(at: Date): number {
+    const iso = new Intl.DateTimeFormat("en-CA", {
+      timeZone: SITE.timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(at);
+    const [year, month, day] = iso.split("-").map(Number);
+    return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  }
+
+  async function offerHours(options: {
+    around: Date;
+    spanMinutes: number;
+    approvalStatus?: "DRAFT" | "UNDER_REVIEW" | "APPROVED" | "SUSPENDED";
+    enabled?: boolean;
+  }) {
+    const start = localMinutes(options.around);
+    const node = await database.observatoryNetworkNode.create({
+      data: {
+        ownerId: userId,
+        observatoryId,
+        primaryTelescopeId: telescopeId,
+        kind: "FIRST_PARTY",
+        approvalStatus: options.approvalStatus ?? "APPROVED",
+        capabilities: [],
+        approvedAt: NOW,
+      },
+    });
+
+    await database.networkAvailabilityWindow.create({
+      data: {
+        nodeId: node.id,
+        weekday: localWeekday(options.around),
+        startMinute: start,
+        endMinute: Math.min(1440, start + options.spanMinutes),
+        enabled: options.enabled ?? true,
+      },
+    });
+  }
+
+  /** A slot the night offers that falls well outside a one-hour opening. */
+  function laterSlotStartAt(after: Date): Date {
+    const window = nightWindow(NIGHT, SITE.timezone, {
+      latitudeDegrees: SITE.latitude,
+      longitudeDegrees: SITE.longitude,
+    });
+    if (!window) throw new Error("no astronomical darkness on the fixture night");
+
+    const slot = generateSlots({
+      window,
+      now: NOW,
+      observatory: { online: true, weatherHold: false },
+      bookedStartAt: new Set(),
+    }).find(
+      (candidate) =>
+        candidate.available &&
+        Date.parse(candidate.startAt) > after.getTime() + 2 * 60 * 60_000,
+    );
+
+    if (!slot) throw new Error("the fixture night is too short for this test");
+    return new Date(slot.startAt);
+  }
+
+  it("still sells a slot inside the hours the owner offered", async () => {
+    const slotStartAt = firstSlotStartAt();
+    await offerHours({ around: slotStartAt, spanMinutes: 60 });
+
+    const result = await reserve({ slotStartAt });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("refuses a slot outside them, even though darkness allows it", async () => {
+    const opening = firstSlotStartAt();
+    const outside = laterSlotStartAt(opening);
+    await offerHours({ around: opening, spanMinutes: 60 });
+
+    const result = await reserve({ slotStartAt: outside });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(422);
+    expect(result.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("keeps that slot off the list too, so the two surfaces agree", async () => {
+    const opening = firstSlotStartAt();
+    const outside = laterSlotStartAt(opening);
+    await offerHours({ around: opening, spanMinutes: 60 });
+
+    const list = await listSlotsForDate(NIGHT, NOW);
+    const offered = list.items.map((slot) => Date.parse(slot.startAt));
+
+    expect(offered).toContain(opening.getTime());
+    expect(offered).not.toContain(outside.getTime());
+  });
+
+  it("ignores the windows of a node that is not approved", async () => {
+    // A SUSPENDED node is not offered to anybody, so its recorded hours are not
+    // a statement about availability. Reading them would let a suspended
+    // telescope keep shaping the booking page.
+    const opening = firstSlotStartAt();
+    const outside = laterSlotStartAt(opening);
+    await offerHours({ around: opening, spanMinutes: 60, approvalStatus: "SUSPENDED" });
+
+    const result = await reserve({ slotStartAt: outside });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("treats a switched-off window as no window at all", async () => {
+    const opening = firstSlotStartAt();
+    const outside = laterSlotStartAt(opening);
+    await offerHours({ around: opening, spanMinutes: 60, enabled: false });
+
+    const result = await reserve({ slotStartAt: outside });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("sells the whole night when the owner has recorded no hours", async () => {
+    // The behaviour every deployment has today, unchanged. An owner who has not
+    // thought about hours has not withdrawn their telescope.
+    const outside = laterSlotStartAt(firstSlotStartAt());
+
+    const result = await reserve({ slotStartAt: outside });
+
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe("two people, one slot", () => {
   /**
    * DV-055 acceptance criterion 1.

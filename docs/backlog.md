@@ -397,6 +397,70 @@ UUID. One test passed the first time and was rewritten -- the identical-wording 
 compared a set of one against itself, because the helper that brings a link online
 clears the recorded messages.
 
+## What DV-121 built, and why a partner still cannot be booked
+
+`NetworkAvailabilityWindow` has existed since the schema landed, the seed fills
+seven rows of it, and nothing read any of them. Now the slot generator does.
+
+**Windows intersect darkness; they never replace it.** An owner offering two in
+the afternoon has not created a slot -- the agent's Sun avoidance would refuse the
+slew, so selling it would be selling something the observatory is built to refuse.
+Availability can only take hours away from the dark window.
+
+**No windows means no restriction.** A node with nothing recorded is offered
+across the whole night, which is what every deployment does today. Treating
+silence as "not offered" would have emptied the slot list of every existing
+installation the moment this shipped, and an owner who has not thought about
+hours has not thereby withdrawn their telescope. A window switched off with
+`enabled` is indistinguishable from one never recorded, deliberately.
+
+**A night spanning midnight is two rows, not one that wraps.** The table is keyed
+by weekday, so Friday night's late hours are Saturday's early window, and both
+weekdays are read for one night. A row whose end is not after its start is
+discarded rather than guessed at: 22:00-02:00 is ambiguous about which day it
+lands on, and inventing an answer would offer somebody else's telescope on a
+night nobody chose. `endMinute` 1439 is 23:59, not midnight -- an owner who means
+one unbroken night writes 1440, and the tests hold both readings.
+
+**Slots are tiled per opening, not across the night and filtered.** A gap the
+owner left is a gap: carrying the stride over it would place a slot start inside
+hours they did not offer.
+
+**The booking path narrows identically, and that is the half that matters.**
+`GET /slots` hiding a slot while `POST /bookings` still accepted it would be worse
+than neither, because the grid is public and predictable -- a customer who read one
+page of it could name the instant directly. `findGeneratedSlot` now generates per
+open interval too.
+
+**Only an APPROVED node's windows are read.** A node in DRAFT, UNDER_REVIEW or
+SUSPENDED is not offered to anybody, so its recorded hours are not a statement
+about availability; reading them would let a suspended telescope keep shaping the
+booking page.
+
+**What this does not deliver: a partner telescope anybody can book.** That is a
+contract wall, not an omission.
+
+| Missing | Where |
+| --- | --- |
+| No endpoint for an owner to set their hours | "availability" appears nowhere in `contracts/openapi.yaml` |
+| `Slot` cannot say which telescope it is on | `Slot` has no `observatoryId` |
+| `CreateBookingRequest` cannot name one | nor does it |
+| `GET /slots` takes only a date | no observatory parameter |
+
+`reserve.ts` has said so since DV-055: "Phase 1 is one observatory. When there is
+more than one this takes an id." Both surfaces still resolve the observatory with
+`findFirst` ordered by `createdAt`, so a second bookable observatory is invisible
+whatever its windows say. Until that contract change lands, DV-121 constrains the
+one observatory the platform already serves -- which is real and testable, and is
+not the same as partner bookability. It needs a contract issue, alongside the
+`thumbnailStorageKey` one.
+
+**Verified by removing each protection and confirming a named test fails:** the
+two-weekday read, the merge of touching intervals, the discard of a backwards
+window, the no-windows fallback, and the clip to darkness. The booking-path
+enforcement and the APPROVED-only filter are covered by integration tests that
+need PostgreSQL and were not run on this machine -- CI runs them.
+
 ## What the agent capture path built, and the field the contract is missing
 
 The other half of DV-061. `CAPTURE` was refused as unimplementable, `_do_processing`
