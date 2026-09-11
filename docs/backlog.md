@@ -1246,3 +1246,49 @@ compatibility table (`Observatory.compatibleTargets`) that nothing reads. Every
 bookable telescope is offered the whole catalogue, assessed at its own sky. Whether
 a partner's instrument should be offered a narrower list is a product decision
 nobody has taken, not a gap in this change.
+
+## What DV-122 built: the platform half of the review surface
+
+Two operator-only reads. Before this an operator could approve or suspend a node
+but had no way to find the ones waiting, or to see what they were approving: the
+only node read was `GET /network/nodes`, scoped to the caller's own. The console
+itself is darkview-clients'; this repository has no UI.
+
+| Endpoint | What it is for |
+| --- | --- |
+| `GET /admin/network/nodes?approvalStatus=` | The queue, keyset-paged, **oldest first** — a queue, unlike the mission list, which answers "what is happening now". An unrecognised status is refused, never ignored. |
+| `GET /admin/network/nodes/{nodeId}` | The review: the node, its owner, the site's exact coordinates, the registered instrument, the evidence per ADR-013 condition, and its history. |
+
+**Evidence, reported and not judged.** For each of ADR-013's conditions, what the
+database can actually say:
+
+| Condition | What the review shows |
+| --- | --- |
+| Measured safety envelope | The limit, who measured it, when, and their note |
+| Coordinates verified against the sky | The coordinates themselves, which the reviewer checks against a plate solve |
+| Horizon mask and azimuth sectors | How many of each are recorded; zero means nothing surveyed |
+| Supervised first light | Missions that reached COMPLETE in **REAL** mode; simulated ones prove nothing about hardware |
+| Park proven, owner terms | Nothing — no record exists, and they stay attestations |
+
+**The approval rule is unchanged, by the maintainer's choice.** Approval still
+checks the measured envelope for itself and takes the other five as attestations.
+The review now shows the horizon mask count beside the `horizonMaskRecorded`
+checkbox, so an operator attesting a survey that has zero entries is doing so with
+the number in front of them; making approval refuse it was offered and not taken.
+
+**The history comes from the audit log**, not a column on the node. Every
+transition already writes an audit row with the operator's verbatim reason, and a
+second record of the same events would be a second chance to disagree about who
+suspended a telescope and why.
+
+**The review carries what public surfaces withhold** — the owner's identity and
+exact coordinates — which is why it is operator-only, and why
+`admin-routes-guarded.test.ts` covering it matters. The coordinates are there
+because ADR-013 requires them verified against the sky, and nobody can compare a
+plate solve with a number they are not shown.
+
+**Verified by removing each protection and confirming a named test fails:** the
+oldest-first order (two tests), the status filter, counting simulated missions
+toward first light, and scoping the history to the one node — the last only after
+the history test gained a second node, since with one node a leak had nothing to
+leak.

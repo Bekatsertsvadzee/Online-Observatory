@@ -1071,6 +1071,68 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /admin/network/nodes:
+    get:
+      operationId: adminListNetworkNodes
+      tags: [admin]
+      summary: The qualification queue, and every node by status.
+      description: |
+        DV-122. Unscoped by owner, which is what makes it an admin route. Oldest
+        first, because this is a queue: the node that has waited longest for review
+        is the one an operator should reach first. Keyset-paged, since nodes are
+        registered and moved between states while an operator reads it.
+
+        `approvalStatus` narrows it; `UNDER_REVIEW` is the review queue. An
+        unrecognised status is refused rather than ignored, so an operator who asked
+        for the queue is never silently shown every node.
+      security:
+        - userSession: [operator]
+      parameters:
+        - name: approvalStatus
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/NetworkNodeApprovalStatus"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Node page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkNodePage"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/network/nodes/{nodeId}:
+    get:
+      operationId: adminGetNetworkNodeReview
+      tags: [admin]
+      summary: Everything an operator reads before deciding a qualification.
+      description: |
+        DV-122. What the database knows about each of ADR-013's conditions, beside
+        the node itself, so an approval is a decision made against evidence rather
+        than a set of boxes. It grants nothing and changes nothing: approving and
+        suspending remain the two POSTs below.
+      security:
+        - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "200":
+          description: The node, under review.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkNodeReview"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /admin/network/nodes/{nodeId}/approve:
     post:
       operationId: adminApproveNetworkNode
@@ -3112,6 +3174,143 @@ components:
         createdAt:
           type: string
           format: date-time
+
+    NetworkNodePage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NetworkNode"
+        page:
+          $ref: "#/components/schemas/PageMeta"
+
+    NetworkNodeReview:
+      type: object
+      description: |
+        One node, and the evidence for and against qualifying it (DV-122).
+
+        Operator-only, and it carries what the public surfaces deliberately do not:
+        the owner's identity and the site's exact coordinates. The coordinates are
+        here because ADR-013 requires them verified against the sky, and the
+        operator cannot compare a plate solve with a number they are not shown.
+      additionalProperties: false
+      required: [node, owner, site, telescope, evidence, history]
+      properties:
+        node:
+          $ref: "#/components/schemas/NetworkNode"
+        owner:
+          $ref: "#/components/schemas/NetworkNodeOwner"
+        site:
+          $ref: "#/components/schemas/NetworkNodeSite"
+        telescope:
+          description: The node's primary instrument as registered. Null if it has been removed, which also makes the node unbookable.
+          oneOf:
+            - $ref: "#/components/schemas/RegisterNetworkTelescope"
+            - type: "null"
+        evidence:
+          $ref: "#/components/schemas/NetworkNodeEvidence"
+        history:
+          type: array
+          description: Every state change the node has been through, oldest first.
+          items:
+            $ref: "#/components/schemas/NetworkNodeHistoryEntry"
+
+    NetworkNodeOwner:
+      type: object
+      additionalProperties: false
+      required: [id, name, email]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+
+    NetworkNodeSite:
+      type: object
+      additionalProperties: false
+      required: [latitude, longitude, timezone]
+      properties:
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+        timezone:
+          type: string
+
+    NetworkNodeEvidence:
+      type: object
+      description: |
+        What the database can say about ADR-013's conditions. It reports; it does not
+        judge. Park proven and the owner's acceptance of terms have no record here
+        and remain the operator's attestation on approval.
+      additionalProperties: false
+      required:
+        [safetyEnvelope, horizonMaskEntries, forbiddenAzimuthSectors, completedRealMissions]
+      properties:
+        safetyEnvelope:
+          description: The measurement approval checks for itself. Null when no envelope row exists.
+          oneOf:
+            - $ref: "#/components/schemas/NetworkNodeEnvelopeEvidence"
+            - type: "null"
+        horizonMaskEntries:
+          type: integer
+          minimum: 0
+          description: Bearings recorded in the horizon mask. Zero means nothing has been surveyed.
+        forbiddenAzimuthSectors:
+          type: integer
+          minimum: 0
+        completedRealMissions:
+          type: integer
+          minimum: 0
+          description: |
+            Missions that reached COMPLETE on this observatory in REAL mode. A
+            supervised first light is at least one; simulated missions prove nothing
+            about the hardware and are not counted.
+
+    NetworkNodeEnvelopeEvidence:
+      type: object
+      additionalProperties: false
+      required: [maxAltitudeDegrees, measuredAt, measuredBy, measurementNote]
+      properties:
+        maxAltitudeDegrees:
+          type: [number, "null"]
+          description: Null is UNMEASURED, and approval refuses it.
+        measuredAt:
+          type: [string, "null"]
+          format: date-time
+        measuredBy:
+          type: [string, "null"]
+        measurementNote:
+          type: [string, "null"]
+
+    NetworkNodeHistoryEntry:
+      type: object
+      additionalProperties: false
+      required: [action, occurredAt, actorUserId, reason]
+      properties:
+        action:
+          type: string
+          enum: [REGISTERED, SUBMITTED, APPROVED, SUSPENDED]
+        occurredAt:
+          type: string
+          format: date-time
+        actorUserId:
+          type: [string, "null"]
+          format: uuid
+        reason:
+          type: [string, "null"]
+          description: Verbatim, for an approval or a suspension. The operator's own words.
 
     NetworkNodeList:
       type: object
