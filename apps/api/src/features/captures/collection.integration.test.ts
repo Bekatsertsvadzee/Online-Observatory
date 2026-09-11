@@ -192,7 +192,7 @@ describe("whose Collection this is", () => {
     await addCapture({ userId: ownerId, minutesAgo: 10 });
     await addCapture({ userId: strangerId, minutesAgo: 5 });
 
-    const page = await listCaptures({ userId: ownerId, limit: 20 });
+    const page = await listCaptures({ now: NOW, userId: ownerId, limit: 20 });
 
     expect(page.items).toHaveLength(1);
     expect(page.items[0].userId).toBe(ownerId);
@@ -201,7 +201,7 @@ describe("whose Collection this is", () => {
   it("is empty for somebody who has taken none", async () => {
     await addCapture({ userId: ownerId, minutesAgo: 10 });
 
-    const page = await listCaptures({ userId: strangerId, limit: 20 });
+    const page = await listCaptures({ now: NOW, userId: strangerId, limit: 20 });
 
     expect(page.items).toEqual([]);
     expect(page.page).toEqual({ hasMore: false, nextCursor: null });
@@ -212,14 +212,14 @@ describe("whose Collection this is", () => {
     // a 404, identical to the answer for an id that never existed.
     const theirs = await addCapture({ userId: strangerId, minutesAgo: 5 });
 
-    expect(await getCapture({ userId: ownerId, captureId: theirs })).toBeNull();
-    expect(await getCapture({ userId: strangerId, captureId: theirs })).not.toBeNull();
+    expect(await getCapture({ now: NOW, userId: ownerId, captureId: theirs })).toBeNull();
+    expect(await getCapture({ now: NOW, userId: strangerId, captureId: theirs })).not.toBeNull();
   });
 
   it("answers null for a capture id that is not an id at all", async () => {
     // Capture.id is text rather than a uuid column, so an arbitrary string reaches
     // the database and must come back as nothing rather than as an error.
-    expect(await getCapture({ userId: ownerId, captureId: "not-an-id" })).toBeNull();
+    expect(await getCapture({ now: NOW, userId: ownerId, captureId: "not-an-id" })).toBeNull();
   });
 });
 
@@ -229,7 +229,7 @@ describe("the order a customer reads it in", () => {
     const newest = await addCapture({ userId: ownerId, minutesAgo: 5 });
     const middle = await addCapture({ userId: ownerId, minutesAgo: 40 });
 
-    const page = await listCaptures({ userId: ownerId, limit: 20 });
+    const page = await listCaptures({ now: NOW, userId: ownerId, limit: 20 });
 
     expect(page.items.map((capture) => capture.id)).toEqual([newest, middle, oldest]);
   });
@@ -245,7 +245,7 @@ describe("the order a customer reads it in", () => {
     // Written second, taken first.
     const delayed = await addCapture({ userId: ownerId, minutesAgo: 200 });
 
-    const page = await listCaptures({ userId: ownerId, limit: 20 });
+    const page = await listCaptures({ now: NOW, userId: ownerId, limit: 20 });
 
     expect(page.items.map((capture) => capture.id)).toEqual([later, earlier, delayed]);
   });
@@ -256,15 +256,15 @@ describe("the order a customer reads it in", () => {
       ids.push(await addCapture({ userId: ownerId, minutesAgo: index }));
     }
 
-    const first = await listCaptures({ userId: ownerId, limit: 3 });
+    const first = await listCaptures({ now: NOW, userId: ownerId, limit: 3 });
     expect(first.page.hasMore).toBe(true);
 
-    const second = await listCaptures({
+    const second = await listCaptures({ now: NOW,
       userId: ownerId,
       limit: 3,
       cursor: first.page.nextCursor ?? undefined,
     });
-    const third = await listCaptures({
+    const third = await listCaptures({ now: NOW,
       userId: ownerId,
       limit: 3,
       cursor: second.page.nextCursor ?? undefined,
@@ -286,13 +286,13 @@ describe("the order a customer reads it in", () => {
       ids.push(await addCapture({ userId: ownerId, minutesAgo: 30 }));
     }
 
-    const first = await listCaptures({ userId: ownerId, limit: 2 });
-    const second = await listCaptures({
+    const first = await listCaptures({ now: NOW, userId: ownerId, limit: 2 });
+    const second = await listCaptures({ now: NOW,
       userId: ownerId,
       limit: 2,
       cursor: first.page.nextCursor ?? undefined,
     });
-    const third = await listCaptures({
+    const third = await listCaptures({ now: NOW,
       userId: ownerId,
       limit: 2,
       cursor: second.page.nextCursor ?? undefined,
@@ -308,7 +308,7 @@ describe("what crosses the boundary", () => {
   it("is exactly what the contract declares", async () => {
     await addCapture({ userId: ownerId, minutesAgo: 5, fits: true });
 
-    const page = await listCaptures({ userId: ownerId, limit: 20 });
+    const page = await listCaptures({ now: NOW, userId: ownerId, limit: 20 });
 
     // strictObject: an extra property fails. This is what keeps observatoryId,
     // telescopeId, processingPreset, commandId and isDemo from leaking into a
@@ -317,20 +317,72 @@ describe("what crosses the boundary", () => {
     expect(zCapture.safeParse(page.items[0]).success).toBe(true);
   });
 
-  it("carries no thumbnail URL yet", async () => {
-    // A signed, short-expiry URL and nothing to sign against. Null is the
-    // contract's own word for it; a fabricated path would be a broken image.
-    await addCapture({ userId: ownerId, minutesAgo: 5 });
+  it("carries no thumbnail URL when no thumbnail was written", async () => {
+    // An agent that predates DV-065 writes none. Null is the contract's own word
+    // for it; a fabricated path would be a broken image in every card.
+    await addCapture({
+      userId: ownerId,
+      minutesAgo: 5,
+      assets: [{ kind: "IMAGE", storageKey: "captures/obs/mission/command/IMAGE" }],
+    });
 
-    const page = await listCaptures({ userId: ownerId, limit: 20 });
+    const page = await listCaptures({ now: NOW, userId: ownerId, limit: 20 });
 
     expect(page.items[0].thumbnailUrl).toBeNull();
+  });
+
+  /**
+   * DV-065. The thumbnail is signed the way a download is -- the same object
+   * naming, the same signature, the same short expiry -- and it names the
+   * THUMBNAIL object, not the full-size IMAGE beside it.
+   */
+  it("signs the thumbnail, on the list and on the single read", async () => {
+    const THUMBNAIL = "captures/obs/mission/command/THUMBNAIL";
+    const captureId = await addCapture({
+      userId: ownerId,
+      minutesAgo: 5,
+      assets: [
+        { kind: "IMAGE", storageKey: "captures/obs/mission/command/IMAGE" },
+        { kind: "THUMBNAIL", storageKey: THUMBNAIL },
+      ],
+    });
+
+    const page = await listCaptures({ now: NOW, userId: ownerId, limit: 20 });
+    const one = await getCapture({ now: NOW, userId: ownerId, captureId });
+
+    for (const thumbnailUrl of [page.items[0].thumbnailUrl, one?.thumbnailUrl]) {
+      expect(thumbnailUrl).toBeTruthy();
+      const url = new URL(thumbnailUrl as string);
+      expect(url.pathname).toBe(`/${THUMBNAIL}`);
+      expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
+      expect(url.searchParams.get("X-Amz-Expires")).toBe("300");
+    }
+    expect(zCapturePage.safeParse(page).success).toBe(true);
+  });
+
+  it("signs each capture's own thumbnail on a mixed page", async () => {
+    // One card per capture, and each card's image is that capture's. A page that
+    // shared one thumbnail across its items would show every capture as the first.
+    const withThumbnail = await addCapture({
+      userId: ownerId,
+      minutesAgo: 5,
+      assets: [{ kind: "THUMBNAIL", storageKey: "captures/obs/mission/a/THUMBNAIL" }],
+    });
+    const without = await addCapture({ userId: ownerId, minutesAgo: 10 });
+
+    const page = await listCaptures({ now: NOW, userId: ownerId, limit: 20 });
+    const byId = new Map(page.items.map((item) => [item.id, item.thumbnailUrl]));
+
+    expect(new URL(byId.get(withThumbnail) as string).pathname).toBe(
+      "/captures/obs/mission/a/THUMBNAIL",
+    );
+    expect(byId.get(without)).toBeNull();
   });
 
   it("never presents simulator output as telescope output", async () => {
     await addCapture({ userId: ownerId, minutesAgo: 5 });
 
-    const page = await listCaptures({ userId: ownerId, limit: 20 });
+    const page = await listCaptures({ now: NOW, userId: ownerId, limit: 20 });
 
     expect(page.items[0].mode).toBe("SIMULATED");
   });

@@ -1007,7 +1007,9 @@ class OperatorOverrideRequest(BaseModel):
 class CaptureAssetKind(StrEnum):
     """
     IMAGE is the delivered, stretched, watermarked image. FITS is the real frame
-    data. UNMARKED is the stored copy without the overlay.
+    data. UNMARKED is the stored copy without the overlay. THUMBNAIL is a small
+    preview of the same picture, for a Collection card; it is what
+    `Capture.thumbnailUrl` signs.
 
     """
     image = 'IMAGE'
@@ -1334,6 +1336,12 @@ class LiveFrameHeader(BaseModel):
 class AgentCaptureReady(BaseModel):
     """
     A finished capture has been uploaded by the agent and is ready for the cloud to record.
+
+    Every storage key must be the one the cloud granted for that kind. The cloud
+    re-derives each and refuses the whole capture if any differs: a key the
+    agent could choose would let it attach another customer's object to a
+    capture it reported (DV-065).
+
     """
     model_config = ConfigDict(
         extra='forbid',
@@ -1353,6 +1361,7 @@ class AgentCaptureReady(BaseModel):
     image_storage_key: str = Field(..., alias='imageStorageKey', description='Object storage key written by the agent. Not a URL and never a public path.')
     unmarked_storage_key: str | None = Field(None, alias='unmarkedStorageKey')
     fits_storage_key: str | None = Field(None, alias='fitsStorageKey')
+    thumbnail_storage_key: str | None = Field(None, alias='thumbnailStorageKey', description='The THUMBNAIL the agent wrote, if it wrote one (DV-065). Optional, so an\nagent that predates it still sends a valid message.\n')
     solved_focal_length_mm: float | None = Field(None, alias='solvedFocalLengthMm')
     width_px: int | None = Field(None, alias='widthPx')
     height_px: int | None = Field(None, alias='heightPx')

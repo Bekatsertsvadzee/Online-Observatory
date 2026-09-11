@@ -109,9 +109,11 @@ class _Owner:
 #:
 #: IMAGE first because it is the only one `AGENT_CAPTURE_READY` requires: if the
 #: cloud refuses a grant or an upload fails, the asset that decides whether the
-#: capture exists at all has already had its turn.
+#: capture exists at all has already had its turn. THUMBNAIL next, because it is
+#: what a customer sees first in their Collection and it is the smallest to send.
 CAPTURE_ASSETS: tuple[CaptureAssetKind, ...] = (
     CaptureAssetKind.image,
+    CaptureAssetKind.thumbnail,
     CaptureAssetKind.unmarked,
 )
 
@@ -139,6 +141,8 @@ class _PendingCapture:
             return self.deliverable.image
         if kind is CaptureAssetKind.unmarked:
             return self.deliverable.unmarked
+        if kind is CaptureAssetKind.thumbnail:
+            return self.deliverable.thumbnail
         return None
 
 
@@ -1001,6 +1005,10 @@ class Supervisor:
                 "imageStorageKey": image_key,
                 "unmarkedStorageKey": pending.written.get(CaptureAssetKind.unmarked),
                 "fitsStorageKey": None,
+                # Only what was written. A thumbnail whose grant was refused or
+                # whose upload failed is absent, and the card shows no image
+                # rather than a broken one.
+                "thumbnailStorageKey": pending.written.get(CaptureAssetKind.thumbnail),
                 # Not plate-solved. The solver reports where the mount is
                 # pointing, not what focal length produced the frame, and
                 # deriving it from the configured optical train would be

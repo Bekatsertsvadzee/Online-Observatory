@@ -22,6 +22,7 @@ export async function GET(request: Request) {
       userId: guard.session.user.id,
       cursor: query.get("cursor") ?? undefined,
       limit: pageLimitOf(query.get("limit")),
+      now: new Date(),
     }),
   );
 }

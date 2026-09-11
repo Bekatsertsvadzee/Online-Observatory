@@ -11,6 +11,7 @@ the named test fails. They are listed in the branch's evidence note.
 
 from __future__ import annotations
 
+import io
 import logging
 import time
 from datetime import UTC, datetime, timedelta
@@ -30,7 +31,7 @@ from contracts.models import (
     OpticalConfig,
 )
 from darkview_agent.capture import profiles
-from darkview_agent.capture.deliverable import render
+from darkview_agent.capture.deliverable import DEFAULT_THUMBNAIL_MAX_EDGE_PX, render
 from darkview_agent.capture.overlay import Caption
 from darkview_agent.capture.overlay import apply as apply_caption
 from darkview_agent.capture.upload import Uploader, UploadJob, UploadResult
@@ -227,6 +228,49 @@ def test_the_image_carries_the_caption_and_the_unmarked_copy_does_not():
     assert deliverable.image.height_px == deliverable.unmarked.height_px
 
 
+def _mean_difference(a: bytes, b: bytes) -> float:
+    left = np.asarray(Image.open(io.BytesIO(a)).convert("L"), dtype=np.float64)
+    right = np.asarray(Image.open(io.BytesIO(b)).convert("L"), dtype=np.float64)
+    return float(np.abs(left - right).mean())
+
+
+def test_the_thumbnail_previews_the_unmarked_picture_not_the_captioned_one():
+    """DV-065. At a few hundred pixels a caption is a smudge, and the card that
+    shows the thumbnail carries the capture's mode beside it. So the thumbnail is
+    the uncaptioned picture -- and at a size the frame already fits, it should be
+    that picture and measurably not the captioned one."""
+    deliverable = render(frame(), caption())
+
+    assert deliverable.thumbnail.width_px == deliverable.unmarked.width_px
+    to_unmarked = _mean_difference(deliverable.thumbnail.payload, deliverable.unmarked.payload)
+    to_image = _mean_difference(deliverable.thumbnail.payload, deliverable.image.payload)
+    assert to_unmarked < to_image
+
+
+def test_the_thumbnail_is_the_same_picture_made_smaller():
+    """Downscaled, never re-stretched or re-cropped: same aspect, smaller file."""
+    deliverable = render(frame(), caption(), thumbnail_max_edge_px=160)
+
+    assert (deliverable.thumbnail.width_px, deliverable.thumbnail.height_px) == (160, 120)
+    assert len(deliverable.thumbnail.payload) < len(deliverable.unmarked.payload)
+
+
+def test_the_thumbnail_is_bounded_by_default():
+    """A full-resolution sensor frame must not become a full-resolution card."""
+    big = Frame(
+        pixels=np.full((1500, 2000), 600, dtype=np.uint16),
+        exposure_milliseconds=2000.0,
+        gain=200,
+        captured_at=datetime(2026, 6, 21, 22, 5, tzinfo=UTC),
+        mode=ObservatoryMode.simulated,
+        stacked_frames=12,
+    )
+
+    thumbnail = render(big, caption()).thumbnail
+
+    assert max(thumbnail.width_px, thumbnail.height_px) == DEFAULT_THUMBNAIL_MAX_EDGE_PX
+
+
 # --------------------------------------------------------------------------
 # The uploader
 # --------------------------------------------------------------------------
@@ -375,7 +419,7 @@ def test_a_capture_runs_and_reports_the_key_the_cloud_derived():
     agent = build_agent(max_altitude_degrees=70.0, uploader=uploader)
 
     requests = capture_through_processing(agent, uploader)
-    assert {request["kind"] for request in requests} == {"IMAGE", "UNMARKED"}
+    assert {request["kind"] for request in requests} == {"IMAGE", "THUMBNAIL", "UNMARKED"}
 
     for request in requests:
         agent.deliver(grant(request))
@@ -389,6 +433,9 @@ def test_a_capture_runs_and_reports_the_key_the_cloud_derived():
     assert reported["imageStorageKey"] == image_grant.storage_key
     assert reported["unmarkedStorageKey"] == uploader.job_for(
         CaptureAssetKind.unmarked
+    ).storage_key
+    assert reported["thumbnailStorageKey"] == uploader.job_for(
+        CaptureAssetKind.thumbnail
     ).storage_key
     assert reported["fitsStorageKey"] is None
     assert reported["framesStacked"] > 0
@@ -493,6 +540,25 @@ def test_a_capture_whose_unmarked_copy_failed_is_still_reported():
     assert len(ready) == 1
     assert ready[0]["imageStorageKey"]
     assert ready[0]["unmarkedStorageKey"] is None
+    agent.close()
+
+
+def test_a_capture_whose_thumbnail_failed_is_still_reported_without_one():
+    """THUMBNAIL is nullable. Losing it costs the card its picture, not the
+    customer their capture -- and the key is absent rather than naming an object
+    that was never written, which would be a broken image in the Collection."""
+    uploader = SyncUploader(fail={CaptureAssetKind.thumbnail})
+    agent = build_agent(max_altitude_degrees=70.0, uploader=uploader)
+
+    requests = capture_through_processing(agent, uploader)
+    for request in requests:
+        agent.deliver(grant(request))
+    agent.pump()
+
+    ready = agent.sent("AGENT_CAPTURE_READY")
+    assert len(ready) == 1
+    assert ready[0]["imageStorageKey"]
+    assert ready[0]["thumbnailStorageKey"] is None
     agent.close()
 
 

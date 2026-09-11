@@ -381,8 +381,9 @@ export class AgentLink {
    * MISSION_CAPTURE_READY would show the customer an image that is not a second
    * image.
    *
-   * The storage keys are taken as given and nothing is fetched. This service does
-   * not read the objects, does not size them, and does not check they exist: it
+   * Each storage key is checked against the key the grant derived, and nothing is
+   * fetched. This service does not read the objects, does not size them, and does
+   * not check they exist: it
    * transports and records (architecture section 2), and a capture whose object is
    * missing is a storage incident, not a reason to lose the row that names it.
    */
@@ -399,6 +400,34 @@ export class AgentLink {
     }
     if (message.fitsStorageKey) {
       assets.push({ kind: "FITS", storageKey: message.fitsStorageKey });
+    }
+    if (message.thumbnailStorageKey) {
+      assets.push({ kind: "THUMBNAIL", storageKey: message.thumbnailStorageKey });
+    }
+
+    // Every key must be the one the grant derived, and the cloud can say what
+    // that is without asking anybody. Before DV-065 the keys were recorded as
+    // reported, which made the grant's derivation a promise nothing kept: an agent
+    // -- and under ADR-013 that is a stranger's -- could report a capture on its
+    // own mission whose IMAGE was another customer's object, and the API would
+    // then sign a download of it for whoever owned this capture.
+    //
+    // The whole capture is refused rather than the one asset dropped. A message
+    // carrying one key this agent was never granted says nothing trustworthy
+    // about the others.
+    for (const asset of assets) {
+      const granted = captureObjectKey({
+        observatoryId: this.observatory.id,
+        missionId: message.missionId,
+        commandId: message.commandId,
+        kind: asset.kind,
+      });
+      if (asset.storageKey !== granted) {
+        this.refuse(
+          `Capture ${message.commandId} reports a ${asset.kind} key this observatory was not granted.`,
+        );
+        return;
+      }
     }
 
     const result = await this.store.recordCapture({
