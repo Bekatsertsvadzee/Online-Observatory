@@ -55,9 +55,13 @@ maintenanceUrl.pathname = "/postgres";
 const repositoryRoot = path.resolve(import.meta.dirname, "../../../../..");
 
 function psql(url: URL, statement: string) {
-  return execFileSync("psql", [url.toString(), "-v", "ON_ERROR_STOP=1", "-tAc", statement], {
-    encoding: "utf8",
-  });
+  return execFileSync(
+    "psql",
+    [url.toString(), "-v", "ON_ERROR_STOP=1", "-tAc", statement],
+    {
+      encoding: "utf8",
+    },
+  );
 }
 
 function node(script: string, args: string[], environment: Record<string, string> = {}) {
@@ -204,24 +208,22 @@ describe("a backup restores into an empty database", () => {
   });
 
   it("brings back the partial unique indexes, WHERE clauses and all", async () => {
-    // The strongest thing this drill can assert about correctness. These three
-    // are not conventions the application maintains -- they are what stops two
-    // people booking the same half hour (DV-055), two sessions owning one
-    // mission, and a mission holding an observatory twice over. A dump that
-    // brought back their names without their WHERE clauses would restore a
-    // database that looks right and double-books.
+    // The strongest thing this drill can assert about correctness. These are not
+    // conventions the application maintains -- they are what stops two sessions
+    // owning one mission and a mission holding an observatory twice over. A dump
+    // that brought back their names without their WHERE clauses would restore a
+    // database that looks right and lets both happen.
     restored = new PrismaClient({
       adapter: new PrismaPg({ connectionString: scratchUrl.toString() }),
     });
 
     const partial = await restored.$queryRaw<{ indexname: string; indexdef: string }[]>`
       SELECT indexname, indexdef FROM pg_indexes
-      WHERE schemaname = 'public' AND indexdef LIKE '%WHERE%'
+      WHERE schemaname = 'public' AND indexdef LIKE '%UNIQUE INDEX%WHERE%'
       ORDER BY indexname
     `;
 
     expect(partial.map((index) => index.indexname)).toEqual([
-      "Booking_held_slot_unique",
       "MissionSession_active_owner_unique",
       "Mission_active_per_observatory_unique",
     ]);
@@ -229,6 +231,30 @@ describe("a backup restores into an empty database", () => {
     for (const index of partial) {
       expect(index.indexdef).toMatch(/UNIQUE INDEX .* WHERE /);
     }
+  });
+
+  /**
+   * DV-066. What stops two people booking the same half hour is no longer an
+   * index, so it is no longer covered by the assertion above: it is an exclusion
+   * constraint, and the operators it excludes on live in `pg_constraint`, not in
+   * `indexdef`. A dump that restored the GiST index without `conexclop` would
+   * bring back a table whose constraint list looks right and double-books.
+   *
+   * `pg_get_constraintdef` renders both halves, so asserting on it is asserting on
+   * the thing itself rather than on its name.
+   */
+  it("brings back the booking exclusion constraint, operators and all", async () => {
+    const rows = await restored.$queryRaw<{ conname: string; def: string }[]>`
+      SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
+      WHERE conrelid = '"Booking"'::regclass AND contype = 'x'
+    `;
+
+    expect(rows.map((row) => row.conname)).toEqual(["Booking_held_slot_exclusion"]);
+    expect(rows[0].def).toContain("EXCLUDE USING gist");
+    expect(rows[0].def).toContain(`"observatoryId" WITH =`);
+    expect(rows[0].def).toContain("WITH &&");
+    expect(rows[0].def).toContain("PENDING_PAYMENT");
+    expect(rows[0].def).toContain("CONFIRMED");
   });
 
   it("brings back the data", async () => {
@@ -240,7 +266,9 @@ describe("a backup restores into an empty database", () => {
   it("does not bring back a usable session", async () => {
     // A restored Session row is a live cookie from a past moment. Recovery is
     // exactly the situation where that must not be true.
-    const session = await restored.session.findUnique({ where: { id: MARKER_SESSION_ID } });
+    const session = await restored.session.findUnique({
+      where: { id: MARKER_SESSION_ID },
+    });
 
     expect(session).toBeNull();
     await restored.$disconnect();

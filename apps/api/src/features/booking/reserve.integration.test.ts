@@ -54,7 +54,25 @@ const POOL_SIZE = 32;
 /** Acceptance criterion 2: "at least 20". */
 const CONCURRENCY = 20;
 
-const HELD_SLOT_INDEX = "Booking_held_slot_unique";
+/**
+ * The most two-way races the deadlock test will run before giving up on
+ * provoking one. With the retry removed, 60 rounds surfaced a deadlock in 8 of
+ * 10 runs and 200 rounds in 10 of 10, on the machine this was written on.
+ */
+const RACE_ROUNDS = 200;
+
+const HELD_SLOT_CONSTRAINT = "Booking_held_slot_exclusion";
+
+/**
+ * The constraint's definition, as the migration writes it. Restoring it after the
+ * drop test uses this, and so does the assertion that the restore really happened,
+ * so the two cannot drift apart.
+ */
+const HELD_SLOT_CONSTRAINT_SQL =
+  `ALTER TABLE "Booking" ADD CONSTRAINT "${HELD_SLOT_CONSTRAINT}" EXCLUDE USING gist (` +
+  `"observatoryId" WITH =, ` +
+  `tsrange("slotStartAt", "slotStartAt" + make_interval(mins => "durationMinutes")) WITH &&` +
+  `) WHERE ("status" IN ('PENDING_PAYMENT', 'CONFIRMED'))`;
 
 const SITE = {
   latitude: 41.7151,
@@ -520,23 +538,80 @@ describe("two people, one slot", () => {
   });
 
   /**
-   * DV-055 acceptance criterion 3 -- "dropping the unique index makes the test
-   * fail, proving the index, not the application logic, is what holds".
+   * DV-066. An exclusion constraint deadlocks where a unique index did not: two
+   * transactions reserving overlapping time each write their index entry, each
+   * find the other's uncommitted row, and each wait on the other until PostgreSQL
+   * aborts one with 40P01. Unhandled, the loser of a few races in a hundred was
+   * handed a 500 instead of a 409.
+   *
+   * One race per test run is how that got through: the two tests above passed
+   * most of the time. This races until PostgreSQL has actually deadlocked, and
+   * asserts every loser -- including the deadlock's victim -- was still told the
+   * truth.
+   *
+   * It stops at the first deadlock rather than running a fixed number of rounds,
+   * because each one costs a full `deadlock_timeout` (one second by default) before
+   * the detector runs. Watching for it is what makes the test short once the retry
+   * works, and the round ceiling is what bounds it on a machine where the race is
+   * rarer.
+   */
+  it("answers every lost race with a 409, never a deadlock", async () => {
+    const slotStartAt = firstSlotStartAt();
+
+    // Two customers for every round. Nothing about a hold is unique per user
+    // without an idempotency key.
+    const [first, second] = await Promise.all([createUser(), createUser()]);
+
+    // Counts deadlocks as the reservation's transactions meet them, and passes
+    // every call and every error straight through.
+    let deadlocks = 0;
+    const transaction = database.$transaction.bind(database);
+    const watch = vi.spyOn(database, "$transaction").mockImplementation(((
+      ...args: Parameters<typeof transaction>
+    ) =>
+      (transaction(...args) as Promise<unknown>).catch((error: unknown) => {
+        if (String(error).includes("40P01")) deadlocks += 1;
+        throw error;
+      })) as typeof database.$transaction);
+
+    try {
+      for (let round = 0; round < RACE_ROUNDS && deadlocks === 0; round += 1) {
+        const results = await Promise.all([
+          reserve({ userId: first, slotStartAt }),
+          reserve({ userId: second, slotStartAt }),
+        ]);
+
+        expect(results.filter((result) => result.ok)).toHaveLength(1);
+        const loser = results.find((result) => !result.ok);
+        expect(loser).toMatchObject({ status: 409, code: "SLOT_UNAVAILABLE" });
+
+        await database.booking.deleteMany({ where: { slotStartAt } });
+      }
+    } finally {
+      watch.mockRestore();
+    }
+  });
+
+  /**
+   * DV-055 acceptance criterion 3 -- "dropping the constraint makes the test fail,
+   * proving the constraint, not the application logic, is what holds".
    *
    * Rather than leave that as a manual experiment someone has to remember to
    * re-run, the drop happens here. If this test ever starts finding one booking
-   * with the index gone, something above the database has quietly taken over the
-   * exclusivity guarantee -- and that something cannot be correct, because it
-   * would be racing in application memory. The index is restored afterwards.
+   * with the constraint gone, something above the database has quietly taken over
+   * the exclusivity guarantee -- and that something cannot be correct, because it
+   * would be racing in application memory. The constraint is restored afterwards.
    */
-  it("double-books once the partial unique index is dropped", async () => {
+  it("double-books once the exclusion constraint is dropped", async () => {
     const slotStartAt = firstSlotStartAt();
 
     const users = await Promise.all(
       Array.from({ length: CONCURRENCY }, () => createUser()),
     );
 
-    await database.$executeRawUnsafe(`DROP INDEX "${HELD_SLOT_INDEX}"`);
+    await database.$executeRawUnsafe(
+      `ALTER TABLE "Booking" DROP CONSTRAINT "${HELD_SLOT_CONSTRAINT}"`,
+    );
 
     try {
       const results = await Promise.all(
@@ -547,22 +622,160 @@ describe("two people, one slot", () => {
       expect(await heldBookingsAt(slotStartAt)).toBeGreaterThan(1);
     } finally {
       await database.booking.deleteMany({ where: { slotStartAt } });
-      await database.$executeRawUnsafe(
-        `CREATE UNIQUE INDEX "${HELD_SLOT_INDEX}" ON "Booking" ("observatoryId", "slotStartAt") ` +
-          `WHERE "status" IN ('PENDING_PAYMENT', 'CONFIRMED')`,
-      );
+      await database.$executeRawUnsafe(HELD_SLOT_CONSTRAINT_SQL);
     }
   });
 
-  it("restores the index the previous test dropped", async () => {
+  it("restores the constraint the previous test dropped", async () => {
     const rows = (await database.$queryRaw`
-      SELECT indexdef FROM pg_indexes
-      WHERE tablename = 'Booking' AND indexname = ${HELD_SLOT_INDEX}
-    `) as { indexdef: string }[];
+      SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+      WHERE conrelid = '"Booking"'::regclass AND conname = ${HELD_SLOT_CONSTRAINT}
+    `) as { def: string }[];
 
     expect(rows).toHaveLength(1);
-    expect(rows[0].indexdef).toContain("PENDING_PAYMENT");
-    expect(rows[0].indexdef).toContain("CONFIRMED");
+    expect(rows[0].def).toContain("EXCLUDE USING gist");
+    expect(rows[0].def).toContain("PENDING_PAYMENT");
+    expect(rows[0].def).toContain("CONFIRMED");
+  });
+});
+
+/**
+ * DV-066 -- the defect ADR-015 identified, closed.
+ *
+ * These go through Prisma rather than through `reserveSlot`, because the generator
+ * sells one length and so cannot produce a mixed pair. That is the point: the
+ * blind spot is not reachable from the application *today*, and the constraint has
+ * to be in place before it becomes reachable. What is under test is the database
+ * rule, which is where DV-055 put the guarantee and where it stays.
+ */
+describe("mixed slot lengths", () => {
+  /** A held booking, written directly. Everything the row needs and nothing else. */
+  async function hold(startAt: Date, durationMinutes: number) {
+    return database.booking.create({
+      data: {
+        userId: await createUser(),
+        targetId,
+        observatoryId,
+        telescopeId,
+        slotStartAt: startAt,
+        durationMinutes,
+        status: "PENDING_PAYMENT",
+        holdExpiresAt: new Date(NOW.getTime() + 60 * 60_000),
+        priceMinor: PROVISIONAL_SLOT_PRICE_MINOR,
+        currency: "GEL",
+      },
+    });
+  }
+
+  const at = (iso: string) => new Date(`2026-12-15T${iso}:00.000Z`);
+
+  /**
+   * The exact pair ADR-015 names: "a sixty-minute booking at 21:00 and a
+   * twenty-minute one at 21:20 have different start instants, so both inserts
+   * succeed and two customers hold one telescope at the same time." Under the old
+   * start-instant index this test passed twice; the second insert must now fail.
+   */
+  it("refuses a short booking that starts inside a long one", async () => {
+    await hold(at("21:00"), 60);
+
+    await expect(hold(at("21:20"), 20)).rejects.toThrow();
+    expect(await database.booking.count()).toBe(1);
+  });
+
+  it("refuses a long booking that swallows a short one already held", async () => {
+    await hold(at("21:20"), 20);
+
+    await expect(hold(at("21:00"), 60)).rejects.toThrow();
+    expect(await database.booking.count()).toBe(1);
+  });
+
+  /**
+   * '[)' bounds, and why they are the right ones. A stride of adjacent slots is
+   * the ordinary case -- if touching counted as overlapping, the constraint would
+   * refuse the night's second slot.
+   */
+  it("allows a booking that begins exactly when another ends", async () => {
+    await hold(at("21:00"), 20);
+    await hold(at("21:20"), 20);
+
+    expect(await database.booking.count()).toBe(2);
+  });
+
+  /**
+   * The constraint is scoped per observatory, the same way the index it replaced
+   * was. Two telescopes are two telescopes, and DV-066 exists so that they can be.
+   */
+  it("allows the same interval at a different observatory", async () => {
+    const other = await database.observatory.create({
+      data: {
+        slug: `test-other-${randomUUID()}`,
+        nameEn: "Second Observatory",
+        nameKa: "მეორე ობსერვატორია",
+        city: "Tbilisi",
+        countryCode: "GE",
+        latitude: SITE.latitude,
+        longitude: SITE.longitude,
+        timezone: SITE.timezone,
+        status: "ONLINE",
+      },
+    });
+
+    const otherTelescope = await database.telescope.create({
+      data: {
+        observatoryId: other.id,
+        name: "NexStar 8SE",
+        manufacturer: "Celestron",
+        model: "NexStar 8SE",
+        apertureMm: 203,
+        focalLengthMm: 2032,
+        status: "ONLINE",
+      },
+    });
+
+    await hold(at("21:00"), 60);
+
+    await database.booking.create({
+      data: {
+        userId: await createUser(),
+        targetId,
+        observatoryId: other.id,
+        telescopeId: otherTelescope.id,
+        slotStartAt: at("21:00"),
+        durationMinutes: 60,
+        status: "PENDING_PAYMENT",
+        holdExpiresAt: new Date(NOW.getTime() + 60 * 60_000),
+        priceMinor: PROVISIONAL_SLOT_PRICE_MINOR,
+        currency: "GEL",
+      },
+    });
+
+    expect(await database.booking.count()).toBe(2);
+  });
+
+  /**
+   * A released booking gives its interval back. The WHERE clause is DV-055's and
+   * this is what it is for: CANCELLED, EXPIRED and REFUNDED hold nothing.
+   */
+  it("frees the interval once the booking is no longer held", async () => {
+    const first = await hold(at("21:00"), 60);
+    await database.booking.update({
+      where: { id: first.id },
+      data: { status: "CANCELLED", holdExpiresAt: null },
+    });
+
+    await hold(at("21:20"), 20);
+    expect(await heldBookingsAt(at("21:20"))).toBe(1);
+  });
+
+  /**
+   * A zero-minute booking would be an empty range, and an empty range overlaps
+   * nothing -- not even itself. Without `booking_duration_is_positive` such a row
+   * would sit outside the exclusivity rule while still holding a telescope, which
+   * is the one failure mode of this constraint that is silent.
+   */
+  it("refuses a booking with no duration at all", async () => {
+    await expect(hold(at("21:00"), 0)).rejects.toThrow();
+    expect(await database.booking.count()).toBe(0);
   });
 });
 

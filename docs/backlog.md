@@ -97,12 +97,12 @@ cannot name one. Both booking surfaces still resolve the observatory with
 `findFirst`. Until it lands, the entire partner track is plumbing with no product
 at the end of it.
 
-It also carries a defect that is not yet live and becomes live the moment ADR-015's
-two slot lengths ship: `Booking_held_slot_unique` keys on the start instant, which
-is airtight for one fixed duration and silently wrong for mixed ones. A sixty-minute
-booking at 21:00 and a twenty-minute one at 21:20 both insert. **No
-variable-duration slot may be sold before that index is replaced with an exclusion
-constraint over the booked interval.**
+It also carried a defect that was not yet live and would have become live the moment
+ADR-015's two slot lengths shipped: `Booking_held_slot_unique` keyed on the start
+instant, which is airtight for one fixed duration and silently wrong for mixed ones.
+A sixty-minute booking at 21:00 and a twenty-minute one at 21:20 both inserted.
+**That half is done** — see *What the slot exclusion constraint closed* below. The
+observatory dimension itself is not.
 
 ## Observer Pack — server side (ADR-007)
 
@@ -1019,3 +1019,84 @@ UNMEASURED — in which state both the API and the agent refuse every slew with
 `SAFETY_ENVELOPE_UNMEASURED`. Provisional values printed in earlier planning documents
 are not values. No agent may ship one, seed one, or use one as a test fixture outside a
 clearly-named fake.
+
+## What the slot exclusion constraint closed
+
+The first of DV-066's three parts, and the only one that is a safety property rather
+than a product one. No contract change, no API surface: a migration, the guard that
+reads its refusal, and the tests that hold both.
+
+```sql
+ALTER TABLE "Booking" ADD CONSTRAINT "Booking_held_slot_exclusion" EXCLUDE USING gist (
+  "observatoryId" WITH =,
+  tsrange("slotStartAt", "slotStartAt" + make_interval(mins => "durationMinutes")) WITH &&
+) WHERE ("status" IN ('PENDING_PAYMENT', 'CONFIRMED'));
+```
+
+**Exclusivity is still the database's rule and still nothing else's.** DV-055 put it
+there so application code could not quietly weaken it, and this widens what "taken"
+means from an equal start instant to an overlapping interval without moving it. The
+test that proves it is the one DV-055 established: drop the constraint, watch a named
+test double-book at a concurrency of twenty, restore it. `reserveSlot` needed no new
+logic — which is the point of having put the rule where it is.
+
+**`tsrange`, not ADR-015's `tstzrange`.** `slotStartAt` is `TIMESTAMP(3) WITHOUT TIME
+ZONE`; casting it inside an index expression reads the session `TimeZone` and
+PostgreSQL refuses to index a non-immutable expression. Prisma writes UTC in that
+column, so the two forms mean the same thing here. The record carries a dated
+correction, along with `make_interval` over a text-concatenated interval literal for
+the same immutability reason.
+
+**The one thing that had to change, and would not have been noticed.** Prisma reports
+an exclusion violation as **`P2039`**, its opaque "unknown database error" bucket —
+not `P2002`. `isUniqueViolation` checked `P2002`, so every customer who lost a race
+would have been handed a 500 instead of a 409, and the losing insert would have been
+rethrown from inside the transaction. The guard now reads the PostgreSQL SQLSTATE
+underneath (`23P01`, or `23505` for the idempotency-key index), because Prisma's code
+for this case is undocumented and the SQLSTATE is a standard. Verified by restoring
+the `P2002`-only check and watching four named tests fail.
+
+**And the one that was noticed only by running the race enough times.** An
+exclusion constraint deadlocks where a unique index does not. A unique btree checks
+for a duplicate before it writes, under a page lock, so the second inserter simply
+waits for the first. An exclusion constraint writes its index entry first and checks
+after: two reservations of overlapping time each write, each find the other's
+uncommitted row, and each wait on the other until PostgreSQL aborts one with
+**`40P01`**. Nothing double-books — the constraint is sound — but the victim was
+handed a 500. Measured at a few races in a hundred, which is why the existing
+two-request test passed most runs and the defect reached a pushed branch.
+
+The reservation transaction now reruns on `40P01`, up to five attempts. That is the
+correct resolution rather than a hopeful one: by the time the victim is told, the
+survivor is no longer waiting on it, so a rerun either meets a committed overlap and
+gets the clean `23P01` it was owed, or finds the survivor failed and takes the slot.
+Reporting the deadlock itself as "taken" would be a guess about the second case.
+
+The test races two customers until PostgreSQL has actually deadlocked — observed, not
+assumed — and asserts every loser, the victim included, got a 409. It stops at the
+first deadlock because each costs a full `deadlock_timeout` (one second by default),
+with a ceiling of 200 rounds. With the retry removed it failed 10 runs in 10; with it,
+it passed 10 in 10, and every one of those runs saw a real deadlock.
+
+**A `CHECK ("durationMinutes" > 0)` landed with it.** `tsrange(t, t)` is the empty
+range and the empty range overlaps nothing, not even itself, so a zero-duration
+booking would sit outside the exclusivity rule while still holding a telescope. A
+negative duration raises, which is loud and therefore harmless; zero is the silent
+case, and it is closed in the database for the same reason the exclusion is.
+
+**`btree_gist` is not a trusted extension**, so the migration's `CREATE EXTENSION`
+needs a superuser on PostgreSQL 13 and later. CI's postgres container is one. A
+managed production database may not be; the runbook says to have an administrator
+install it before the first deploy that carries this migration.
+
+**The restore drill asserts the constraint, not just its index.** An exclusion
+constraint's operators live in `pg_constraint.conexclop`, which `indexdef` does not
+render — a dump that brought back the GiST index without them would restore a table
+whose constraint list looks right and double-books. The drill now reads
+`pg_get_constraintdef` and holds the equality, the overlap and the WHERE clause.
+
+**Still open in DV-066:** the observatory dimension itself — `observatoryId` on
+`Slot`, `SlotList`, `Booking` and `CreateBookingRequest`, the `observatoryId` query
+parameter on `GET /slots`, a public endpoint listing bookable observatories, and the
+two `findFirst` calls in `slots.ts` and `reserve.ts`. Nothing sells a second slot
+length yet, and nothing may until that lands.
