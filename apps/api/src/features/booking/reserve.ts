@@ -41,6 +41,30 @@ export const PAYMENT_HOLD_MINUTES = 15;
  */
 const PHASE_1_PROVIDER = "SANDBOX" as const;
 
+/**
+ * How many times a reservation is attempted in total when PostgreSQL aborts it to
+ * break a deadlock.
+ *
+ * DV-066 made exclusivity an exclusion constraint, and an exclusion constraint
+ * deadlocks where a unique index does not. A unique btree checks for a duplicate
+ * before it writes, under a page lock, so the second inserter simply waits for the
+ * first. An exclusion constraint writes its index entry first and checks after;
+ * two transactions reserving overlapping time each write, each find the other's
+ * uncommitted row, and each wait for the other. PostgreSQL breaks the cycle by
+ * aborting one of them with 40P01.
+ *
+ * Retrying is the correct answer, not an optimistic one. By the time the victim is
+ * told, the survivor is no longer waiting on it: if the survivor commits, the retry
+ * finds a committed overlap and gets a clean 23P01, which is the 409 the customer
+ * was always owed; if the survivor fails, the retry is free to take the slot.
+ * Reporting the deadlock itself as "taken" would be a guess about the second case.
+ *
+ * Bounded because a retry can meet a third reservation in the same way, however
+ * unlikely that is. Past this the error is rethrown, and a 500 is honest about a
+ * database that has deadlocked this many times on one request.
+ */
+const DEADLOCK_ATTEMPTS = 5;
+
 export type ReserveSlotFailure = {
   ok: false;
   status: 404 | 409 | 422 | 500;
@@ -314,66 +338,68 @@ export async function reserveSlot(input: {
   const holdExpiresAt = new Date(now.getTime() + PAYMENT_HOLD_MINUTES * 60_000);
 
   try {
-    const created = await database.$transaction(async (tx) => {
-      await expireLapsedHolds(
-        tx as unknown as Parameters<typeof expireLapsedHolds>[0],
-        observatory.id,
-        now,
-      );
+    const created = await retryOnDeadlock(() =>
+      database.$transaction(async (tx) => {
+        await expireLapsedHolds(
+          tx as unknown as Parameters<typeof expireLapsedHolds>[0],
+          observatory.id,
+          now,
+        );
 
-      const payment = await tx.payment.create({
-        data: {
-          userId,
-          provider: PHASE_1_PROVIDER,
-          status: "PENDING",
-          amountMinor: slot.priceMinor,
-          currency: slot.currency,
-          isDemo: observatory.isDemo,
-        },
-      });
+        const payment = await tx.payment.create({
+          data: {
+            userId,
+            provider: PHASE_1_PROVIDER,
+            status: "PENDING",
+            amountMinor: slot.priceMinor,
+            currency: slot.currency,
+            isDemo: observatory.isDemo,
+          },
+        });
 
-      const booking = await tx.booking.create({
-        data: {
-          userId,
-          targetId: target.id,
-          observatoryId: observatory.id,
-          telescopeId: telescope.id,
-          paymentId: payment.id,
-          slotStartAt,
-          durationMinutes: slot.durationMinutes,
-          status: "PENDING_PAYMENT",
-          holdExpiresAt,
-          priceMinor: slot.priceMinor,
-          currency: slot.currency,
-          idempotencyKey,
-          isDemo: observatory.isDemo,
-        },
-      });
-
-      await recordAuditEvent(
-        {
-          category: "BOOKING",
-          action: "BOOKING_RESERVED",
-          actorUserId: userId,
-          entityType: "Booking",
-          entityId: booking.id,
-          detail: {
+        const booking = await tx.booking.create({
+          data: {
+            userId,
             targetId: target.id,
             observatoryId: observatory.id,
-            slotStartAt: slotStartAt.toISOString(),
+            telescopeId: telescope.id,
+            paymentId: payment.id,
+            slotStartAt,
             durationMinutes: slot.durationMinutes,
+            status: "PENDING_PAYMENT",
+            holdExpiresAt,
             priceMinor: slot.priceMinor,
             currency: slot.currency,
-            holdExpiresAt: holdExpiresAt.toISOString(),
-            paymentId: payment.id,
+            idempotencyKey,
+            isDemo: observatory.isDemo,
           },
-          isDemo: observatory.isDemo,
-        },
-        tx,
-      );
+        });
 
-      return { booking, payment };
-    });
+        await recordAuditEvent(
+          {
+            category: "BOOKING",
+            action: "BOOKING_RESERVED",
+            actorUserId: userId,
+            entityType: "Booking",
+            entityId: booking.id,
+            detail: {
+              targetId: target.id,
+              observatoryId: observatory.id,
+              slotStartAt: slotStartAt.toISOString(),
+              durationMinutes: slot.durationMinutes,
+              priceMinor: slot.priceMinor,
+              currency: slot.currency,
+              holdExpiresAt: holdExpiresAt.toISOString(),
+              paymentId: payment.id,
+            },
+            isDemo: observatory.isDemo,
+          },
+          tx,
+        );
+
+        return { booking, payment };
+      }),
+    );
 
     return {
       ok: true,
@@ -507,6 +533,23 @@ function sqlState(error: unknown): string | null {
 
   const code = (cause as { code?: unknown }).code;
   return typeof code === "string" ? code : null;
+}
+
+/**
+ * Run a whole reservation transaction again if PostgreSQL chose it as a deadlock
+ * victim. See DEADLOCK_ATTEMPTS for why this is right and not merely hopeful.
+ *
+ * The transaction is rerun from the top -- lapsed holds, payment, booking, audit
+ * row -- because an aborted transaction left none of them behind.
+ */
+async function retryOnDeadlock<T>(attempt: () => Promise<T>): Promise<T> {
+  for (let tries = 1; ; tries += 1) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (tries >= DEADLOCK_ATTEMPTS || sqlState(error) !== "40P01") throw error;
+    }
+  }
 }
 
 /**

@@ -1056,6 +1056,28 @@ underneath (`23P01`, or `23505` for the idempotency-key index), because Prisma's
 for this case is undocumented and the SQLSTATE is a standard. Verified by restoring
 the `P2002`-only check and watching four named tests fail.
 
+**And the one that was noticed only by running the race enough times.** An
+exclusion constraint deadlocks where a unique index does not. A unique btree checks
+for a duplicate before it writes, under a page lock, so the second inserter simply
+waits for the first. An exclusion constraint writes its index entry first and checks
+after: two reservations of overlapping time each write, each find the other's
+uncommitted row, and each wait on the other until PostgreSQL aborts one with
+**`40P01`**. Nothing double-books — the constraint is sound — but the victim was
+handed a 500. Measured at a few races in a hundred, which is why the existing
+two-request test passed most runs and the defect reached a pushed branch.
+
+The reservation transaction now reruns on `40P01`, up to five attempts. That is the
+correct resolution rather than a hopeful one: by the time the victim is told, the
+survivor is no longer waiting on it, so a rerun either meets a committed overlap and
+gets the clean `23P01` it was owed, or finds the survivor failed and takes the slot.
+Reporting the deadlock itself as "taken" would be a guess about the second case.
+
+The test races two customers until PostgreSQL has actually deadlocked — observed, not
+assumed — and asserts every loser, the victim included, got a 409. It stops at the
+first deadlock because each costs a full `deadlock_timeout` (one second by default),
+with a ceiling of 200 rounds. With the retry removed it failed 10 runs in 10; with it,
+it passed 10 in 10, and every one of those runs saw a real deadlock.
+
 **A `CHECK ("durationMinutes" > 0)` landed with it.** `tsrange(t, t)` is the empty
 range and the empty range overlaps nothing, not even itself, so a zero-duration
 booking would sit outside the exclusivity rule while still holding a telescope. A

@@ -54,6 +54,13 @@ const POOL_SIZE = 32;
 /** Acceptance criterion 2: "at least 20". */
 const CONCURRENCY = 20;
 
+/**
+ * The most two-way races the deadlock test will run before giving up on
+ * provoking one. With the retry removed, 60 rounds surfaced a deadlock in 8 of
+ * 10 runs and 200 rounds in 10 of 10, on the machine this was written on.
+ */
+const RACE_ROUNDS = 200;
+
 const HELD_SLOT_CONSTRAINT = "Booking_held_slot_exclusion";
 
 /**
@@ -527,6 +534,61 @@ describe("two people, one slot", () => {
       if (result.ok) continue;
       expect(result.status).toBe(409);
       expect(result.code).toBe("SLOT_UNAVAILABLE");
+    }
+  });
+
+  /**
+   * DV-066. An exclusion constraint deadlocks where a unique index did not: two
+   * transactions reserving overlapping time each write their index entry, each
+   * find the other's uncommitted row, and each wait on the other until PostgreSQL
+   * aborts one with 40P01. Unhandled, the loser of a few races in a hundred was
+   * handed a 500 instead of a 409.
+   *
+   * One race per test run is how that got through: the two tests above passed
+   * most of the time. This races until PostgreSQL has actually deadlocked, and
+   * asserts every loser -- including the deadlock's victim -- was still told the
+   * truth.
+   *
+   * It stops at the first deadlock rather than running a fixed number of rounds,
+   * because each one costs a full `deadlock_timeout` (one second by default) before
+   * the detector runs. Watching for it is what makes the test short once the retry
+   * works, and the round ceiling is what bounds it on a machine where the race is
+   * rarer.
+   */
+  it("answers every lost race with a 409, never a deadlock", async () => {
+    const slotStartAt = firstSlotStartAt();
+
+    // Two customers for every round. Nothing about a hold is unique per user
+    // without an idempotency key.
+    const [first, second] = await Promise.all([createUser(), createUser()]);
+
+    // Counts deadlocks as the reservation's transactions meet them, and passes
+    // every call and every error straight through.
+    let deadlocks = 0;
+    const transaction = database.$transaction.bind(database);
+    const watch = vi.spyOn(database, "$transaction").mockImplementation(((
+      ...args: Parameters<typeof transaction>
+    ) =>
+      (transaction(...args) as Promise<unknown>).catch((error: unknown) => {
+        if (String(error).includes("40P01")) deadlocks += 1;
+        throw error;
+      })) as typeof database.$transaction);
+
+    try {
+      for (let round = 0; round < RACE_ROUNDS && deadlocks === 0; round += 1) {
+        const results = await Promise.all([
+          reserve({ userId: first, slotStartAt }),
+          reserve({ userId: second, slotStartAt }),
+        ]);
+
+        expect(results.filter((result) => result.ok)).toHaveLength(1);
+        const loser = results.find((result) => !result.ok);
+        expect(loser).toMatchObject({ status: 409, code: "SLOT_UNAVAILABLE" });
+
+        await database.booking.deleteMany({ where: { slotStartAt } });
+      }
+    } finally {
+      watch.mockRestore();
     }
   });
 
