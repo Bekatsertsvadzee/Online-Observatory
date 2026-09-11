@@ -137,3 +137,30 @@ An earlier draft of this record set the minimum at ten minutes. It was amended t
 twenty before approval, because ten sat below the only derived figure for even the
 shortest targets and would have needed a measurement before anything could be
 planned against it.
+
+## Correction, 2026-09-11
+
+The consequence section above writes the replacement as `tstzrange(slotStartAt,
+slotStartAt + durationMinutes)`. The constraint DV-066 shipped uses `tsrange`, and
+the record is wrong rather than the code.
+
+`Booking."slotStartAt"` is `TIMESTAMP(3) WITHOUT TIME ZONE`, as DV-050 created it.
+Casting it to `timestamptz` inside an index expression would read the session's
+`TimeZone` setting, which makes the expression non-immutable, and PostgreSQL
+refuses to index a non-immutable expression. Prisma writes every value in that
+column in UTC, so a `tsrange` compares like with like and the two forms mean the
+same thing at this installation.
+
+Two smaller things the implementation settled the same way:
+
+- `make_interval(mins => "durationMinutes")` rather than a text-concatenated
+  interval literal. `interval_in` reads `IntervalStyle` and is therefore only
+  stable; `make_interval` is immutable, which is what an index expression requires.
+- A `CHECK ("durationMinutes" > 0)` landed beside the constraint. `tsrange(t, t)`
+  is the empty range and the empty range overlaps nothing, not even itself, so a
+  zero-duration booking would sit outside the exclusivity rule while still holding
+  a telescope. That is the one failure mode of this constraint that is silent, and
+  it is closed in the database for the same reason the exclusion itself is.
+
+Read `tstzrange` above as "a range over the booked interval". Everything the
+section says about *why* the index had to be replaced is unchanged.

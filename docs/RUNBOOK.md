@@ -43,6 +43,27 @@ npm test
 `contracts/openapi.yaml`. Regenerate with `npm run contracts:generate` and commit the
 result. Never hand-edit a generated file.
 
+### One migration needs a privilege the application role may not have
+
+`db:migrate` runs `CREATE EXTENSION IF NOT EXISTS btree_gist` (DV-066). It is what
+teaches GiST to compare a uuid by equality, and without it the constraint that stops two
+customers holding one telescope at overlapping times cannot be created.
+
+`btree_gist` is **not a trusted extension**, so on PostgreSQL 13 and later this statement
+requires a superuser. CI's postgres service container runs as one and installs it in
+passing; a managed production database whose application role is unprivileged does not.
+**Have an administrator run it once, before the first deploy that carries this
+migration:**
+
+```sql
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+```
+
+The migration is written `IF NOT EXISTS`, so doing this ahead of time costs nothing and
+the migration then passes straight through. If it is not done, `db:migrate` fails on that
+statement and stops — which is the right failure: the alternative is a database that
+migrated and silently double-books.
+
 ### Required environment
 
 Both services refuse to start if any of these is missing. None has a default, and that is

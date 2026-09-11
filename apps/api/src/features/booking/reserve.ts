@@ -161,12 +161,16 @@ async function expireLapsedHolds(
 /**
  * Reserve one slot and open a payment intent for it.
  *
- * The exclusivity guarantee is the partial unique index
- * `Booking_held_slot_unique`, and nothing else. There is no "is this slot taken?"
- * query before the insert on purpose: such a check cannot be correct under
+ * The exclusivity guarantee is the exclusion constraint
+ * `Booking_held_slot_exclusion`, and nothing else. There is no "is this slot
+ * taken?" query before the insert on purpose: such a check cannot be correct under
  * concurrency, and having one would let the reservation appear to work after the
- * index was dropped. Two simultaneous requests both insert; Postgres rejects one;
- * that rejection is the 409.
+ * constraint was dropped. Two simultaneous requests both insert; Postgres rejects
+ * one; that rejection is the 409.
+ *
+ * DV-066 widened what "taken" means from an equal start instant to an overlapping
+ * interval. Nothing here had to change for that -- which is the point of putting
+ * the rule in the database rather than in this function.
  */
 export async function reserveSlot(input: {
   userId: string;
@@ -380,11 +384,11 @@ export async function reserveSlot(input: {
       },
     };
   } catch (error) {
-    if (!isUniqueViolation(error)) throw error;
+    if (!isSlotConflict(error)) throw error;
 
-    // Either index can be the one that fired. Rather than parse a constraint name
-    // out of a driver error, ask the question that separates the two cases: if this
-    // user already holds a booking under this key, the request was a retry that
+    // Either constraint can be the one that fired. Rather than parse a constraint
+    // name out of a driver error, ask the question that separates the two cases: if
+    // this user already holds a booking under this key, the request was a retry that
     // raced its own first attempt, and the answer is that booking. Otherwise the
     // slot went to someone else.
     if (idempotencyKey) {
@@ -480,7 +484,48 @@ function findGeneratedSlot(
   return null;
 }
 
-function isUniqueViolation(error: unknown): boolean {
+/**
+ * The PostgreSQL SQLSTATE behind a Prisma error, if it carries one.
+ *
+ * Prisma maps a unique violation to P2002 and documents it. It has no documented
+ * code for an exclusion violation: it surfaces as P2039, which is the opaque
+ * "unknown database error" bucket and not a promise about this case. The SQLSTATE
+ * underneath it is a PostgreSQL standard that has not moved in twenty years, so
+ * that is what this reads.
+ */
+function sqlState(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) return null;
+
+  const meta = (error as { meta?: unknown }).meta;
+  if (typeof meta !== "object" || meta === null) return null;
+
+  const adapter = (meta as { driverAdapterError?: unknown }).driverAdapterError;
+  if (typeof adapter !== "object" || adapter === null) return null;
+
+  const cause = (adapter as { cause?: unknown }).cause;
+  if (typeof cause !== "object" || cause === null) return null;
+
+  const code = (cause as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+/**
+ * Somebody else got there first, or this request raced itself.
+ *
+ * Two constraints can refuse the insert and both mean "not yours":
+ * `Booking_held_slot_exclusion` on an overlapping interval (SQLSTATE 23P01) and
+ * `Booking_userId_idempotencyKey_key` on a retried key (23505, which Prisma
+ * reports as P2002). The caller separates them by asking which is true, not by
+ * reading the constraint name.
+ *
+ * Anything else is a fault and is rethrown. Swallowing an unexpected database
+ * error here would answer "that slot has just been taken" to a customer whose slot
+ * is free.
+ */
+function isSlotConflict(error: unknown): boolean {
+  const state = sqlState(error);
+  if (state === "23P01" || state === "23505") return true;
+
   return (
     typeof error === "object" &&
     error !== null &&
@@ -492,7 +537,7 @@ function isUniqueViolation(error: unknown): boolean {
 /**
  * A payment that did not succeed gives the slot back.
  *
- * DV-055 acceptance criterion 4. The booking leaves the partial unique index the
+ * DV-055 acceptance criterion 4. The booking leaves the exclusion constraint the
  * moment its status changes, so the slot is on sale again in the same
  * transaction; no sweeper has to notice. No mission is created here, and this
  * refuses to run if one somehow exists -- a mission means the observation was
@@ -532,7 +577,7 @@ export async function releaseSlotForFailedPayment(input: {
       data: { status: "CANCELLED" },
     });
 
-    // A slot leaving the held index is what makes it purchasable again. When two
+    // A slot leaving the held set is what makes it purchasable again. When two
     // customers dispute who was entitled to a half hour, this row is the answer.
     await recordAuditEvent(
       {
