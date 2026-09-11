@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { zBookableObservatoryList } from "@darkview/contracts/zod";
 import { PrismaClient } from "@darkview/db";
 
 vi.mock("server-only", () => ({}));
@@ -27,6 +28,7 @@ vi.mock("@/lib/validation/env", () => ({
 const { PAYMENT_HOLD_MINUTES, releaseSlotForFailedPayment, reserveSlot } =
   await import("@/features/booking/reserve");
 const { listSlotsForDate } = await import("@/features/booking/slots");
+const { listBookableObservatories } = await import("@/features/booking/observatories");
 const { nightWindow } = await import("@/lib/slots/darkness");
 const { generateSlots, PROVISIONAL_SLOT_PRICE_MINOR, SLOT_DURATION_MINUTES } =
   await import("@/lib/slots/generate");
@@ -90,6 +92,7 @@ const NIGHT = "2026-12-15";
 
 let database: PrismaClient;
 let observatoryId: string;
+let nodeId: string;
 let telescopeId: string;
 let targetId: string;
 let userId: string;
@@ -104,6 +107,7 @@ function firstSlotStartAt(): Date {
   if (!window) throw new Error("no astronomical darkness on the fixture night");
 
   const slot = generateSlots({
+    observatoryId,
     window,
     now: NOW,
     observatory: { online: true, weatherHold: false },
@@ -127,6 +131,7 @@ async function createUser(): Promise<string> {
 
 async function reserve(options: {
   userId?: string;
+  observatoryId?: string;
   slotStartAt: Date;
   idempotencyKey?: string | null;
   now?: Date;
@@ -134,6 +139,7 @@ async function reserve(options: {
   return reserveSlot({
     userId: options.userId ?? userId,
     request: {
+      observatoryId: options.observatoryId ?? observatoryId,
       targetId,
       slotStartAt: options.slotStartAt.toISOString(),
       durationMinutes: SLOT_DURATION_MINUTES,
@@ -220,6 +226,23 @@ beforeEach(async () => {
   });
   telescopeId = telescope.id;
 
+  // The fixture observatory is bookable, which since DV-066 means it has an
+  // APPROVED node naming its telescope. The first-party observatory is approved
+  // the same way a partner one is -- the seed does exactly this.
+  userId = await createUser();
+  const node = await database.observatoryNetworkNode.create({
+    data: {
+      ownerId: userId,
+      observatoryId,
+      primaryTelescopeId: telescopeId,
+      kind: "FIRST_PARTY",
+      approvalStatus: "APPROVED",
+      capabilities: [],
+      approvedAt: NOW,
+    },
+  });
+  nodeId = node.id;
+
   const target = await database.target.create({
     data: {
       slug: `m13-${randomUUID()}`,
@@ -238,8 +261,6 @@ beforeEach(async () => {
     },
   });
   targetId = target.id;
-
-  userId = await createUser();
 });
 
 describe("reserving a slot", () => {
@@ -374,21 +395,16 @@ describe("availability windows", () => {
     enabled?: boolean;
   }) {
     const start = localMinutes(options.around);
-    const node = await database.observatoryNetworkNode.create({
-      data: {
-        ownerId: userId,
-        observatoryId,
-        primaryTelescopeId: telescopeId,
-        kind: "FIRST_PARTY",
-        approvalStatus: options.approvalStatus ?? "APPROVED",
-        capabilities: [],
-        approvedAt: NOW,
-      },
-    });
+    if (options.approvalStatus) {
+      await database.observatoryNetworkNode.update({
+        where: { id: nodeId },
+        data: { approvalStatus: options.approvalStatus },
+      });
+    }
 
     await database.networkAvailabilityWindow.create({
       data: {
-        nodeId: node.id,
+        nodeId,
         weekday: localWeekday(options.around),
         startMinute: start,
         endMinute: Math.min(1440, start + options.spanMinutes),
@@ -406,6 +422,7 @@ describe("availability windows", () => {
     if (!window) throw new Error("no astronomical darkness on the fixture night");
 
     const slot = generateSlots({
+      observatoryId,
       window,
       now: NOW,
       observatory: { online: true, weatherHold: false },
@@ -447,24 +464,31 @@ describe("availability windows", () => {
     const outside = laterSlotStartAt(opening);
     await offerHours({ around: opening, spanMinutes: 60 });
 
-    const list = await listSlotsForDate(NIGHT, NOW);
-    const offered = list.items.map((slot) => Date.parse(slot.startAt));
+    const list = await listSlotsForDate(observatoryId, NIGHT, NOW);
+    const offered = (list?.items ?? []).map((slot) => Date.parse(slot.startAt));
 
     expect(offered).toContain(opening.getTime());
     expect(offered).not.toContain(outside.getTime());
   });
 
-  it("ignores the windows of a node that is not approved", async () => {
-    // A SUSPENDED node is not offered to anybody, so its recorded hours are not
-    // a statement about availability. Reading them would let a suspended
-    // telescope keep shaping the booking page.
+  it("sells nothing at all on a node that is not approved, windows or not", async () => {
+    // Before DV-066 this test asserted the opposite: a SUSPENDED node's windows
+    // were ignored and its telescope went on selling the whole night, because the
+    // booking path found the observatory with findFirst and never asked whether
+    // anybody was allowed to operate it. A suspended telescope is not bookable,
+    // inside its hours or outside them.
     const opening = firstSlotStartAt();
     const outside = laterSlotStartAt(opening);
     await offerHours({ around: opening, spanMinutes: 60, approvalStatus: "SUSPENDED" });
 
-    const result = await reserve({ slotStartAt: outside });
+    for (const slotStartAt of [opening, outside]) {
+      const result = await reserve({ slotStartAt });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.status).toBe(404);
+    }
 
-    expect(result.ok).toBe(true);
+    expect(await listSlotsForDate(observatoryId, NIGHT, NOW)).toBeNull();
   });
 
   it("treats a switched-off window as no window at all", async () => {
@@ -478,8 +502,8 @@ describe("availability windows", () => {
   });
 
   it("sells the whole night when the owner has recorded no hours", async () => {
-    // The behaviour every deployment has today, unchanged. An owner who has not
-    // thought about hours has not withdrawn their telescope.
+    // An APPROVED node with no windows. An owner who has not thought about hours
+    // has not withdrawn their telescope.
     const outside = laterSlotStartAt(firstSlotStartAt());
 
     const result = await reserve({ slotStartAt: outside });
@@ -851,8 +875,8 @@ describe("releasing a slot", () => {
     const afterHold = new Date(NOW.getTime() + (PAYMENT_HOLD_MINUTES + 1) * 60_000);
 
     // GET /slots stops calling it taken without anything having swept the table.
-    const slots = await listSlotsForDate(NIGHT, afterHold);
-    const listed = slots.items.find(
+    const slots = await listSlotsForDate(observatoryId, NIGHT, afterHold);
+    const listed = slots?.items.find(
       (slot) => Date.parse(slot.startAt) === slotStartAt.getTime(),
     );
     expect(listed?.available).toBe(true);
@@ -877,13 +901,347 @@ describe("releasing a slot", () => {
     const slotStartAt = firstSlotStartAt();
     await reserve({ slotStartAt });
 
-    const slots = await listSlotsForDate(NIGHT, NOW);
-    const listed = slots.items.find(
+    const slots = await listSlotsForDate(observatoryId, NIGHT, NOW);
+    const listed = slots?.items.find(
       (slot) => Date.parse(slot.startAt) === slotStartAt.getTime(),
     );
 
     expect(listed?.available).toBe(false);
     expect(listed?.unavailableReason).toBe("ALREADY_BOOKED");
+  });
+});
+
+/**
+ * DV-066 -- the booking surface gains an observatory dimension (ADR-015).
+ *
+ * Before this, both surfaces resolved "the observatory" with findFirst ordered by
+ * createdAt, so a second telescope could be registered, qualified and approved and
+ * still never be sold. These are the tests that say a partner telescope is now a
+ * product rather than plumbing.
+ */
+describe("choosing a telescope", () => {
+  type Approval = "DRAFT" | "UNDER_REVIEW" | "APPROVED" | "SUSPENDED";
+
+  /**
+   * A second observatory at the same site, so the same night and the same slot
+   * grid apply and any difference between the two is the observatory dimension
+   * and nothing else.
+   */
+  async function secondObservatory(
+    options: {
+      approvalStatus?: Approval | null;
+      kind?: "FIRST_PARTY" | "PARTNER";
+      primaryTelescope?: boolean;
+    } = {},
+  ) {
+    const observatory = await database.observatory.create({
+      data: {
+        slug: `test-partner-${randomUUID()}`,
+        nameEn: "Partner Roof",
+        nameKa: "Partner Roof",
+        city: "Tbilisi",
+        countryCode: "GE",
+        latitude: SITE.latitude,
+        longitude: SITE.longitude,
+        timezone: SITE.timezone,
+        status: "ONLINE",
+      },
+    });
+
+    const telescope = await database.telescope.create({
+      data: {
+        observatoryId: observatory.id,
+        name: "Partner 8SE",
+        manufacturer: "Celestron",
+        model: "NexStar 8SE",
+        apertureMm: 203,
+        focalLengthMm: 2032,
+        status: "ONLINE",
+      },
+    });
+
+    if (options.approvalStatus !== null) {
+      await database.observatoryNetworkNode.create({
+        data: {
+          ownerId: await createUser(),
+          observatoryId: observatory.id,
+          primaryTelescopeId: options.primaryTelescope === false ? null : telescope.id,
+          kind: options.kind ?? "PARTNER",
+          approvalStatus: options.approvalStatus ?? "APPROVED",
+          capabilities: [],
+        },
+      });
+    }
+
+    return { observatoryId: observatory.id, telescopeId: telescope.id };
+  }
+
+  async function heldAt(atObservatory: string, slotStartAt: Date) {
+    return database.booking.count({
+      where: {
+        observatoryId: atObservatory,
+        slotStartAt,
+        status: { in: ["PENDING_PAYMENT", "CONFIRMED"] },
+      },
+    });
+  }
+
+  /**
+   * The product test. Two telescopes are two inventories: the same instant held on
+   * one says nothing about the other. Before DV-066 the second reservation could
+   * not name its telescope at all, and would have landed on the first.
+   */
+  it("sells the same instant on two telescopes to two customers", async () => {
+    const partner = await secondObservatory();
+    const slotStartAt = firstSlotStartAt();
+
+    const onFirst = await reserve({ slotStartAt });
+    const onPartner = await reserve({
+      userId: await createUser(),
+      observatoryId: partner.observatoryId,
+      slotStartAt,
+    });
+
+    expect(onFirst.ok).toBe(true);
+    expect(onPartner.ok).toBe(true);
+    if (!onFirst.ok || !onPartner.ok) return;
+
+    expect(onFirst.body.booking.observatoryId).toBe(observatoryId);
+    expect(onPartner.body.booking.observatoryId).toBe(partner.observatoryId);
+    expect(await heldAt(observatoryId, slotStartAt)).toBe(1);
+    expect(await heldAt(partner.observatoryId, slotStartAt)).toBe(1);
+  });
+
+  it("shows each telescope's own holds on its own slot list, and no other's", async () => {
+    const partner = await secondObservatory();
+    const slotStartAt = firstSlotStartAt();
+    await reserve({ slotStartAt });
+
+    const first = await listSlotsForDate(observatoryId, NIGHT, NOW);
+    const other = await listSlotsForDate(partner.observatoryId, NIGHT, NOW);
+    const at = (list: typeof first) =>
+      list?.items.find((slot) => Date.parse(slot.startAt) === slotStartAt.getTime());
+
+    expect(at(first)?.unavailableReason).toBe("ALREADY_BOOKED");
+    expect(at(other)?.available).toBe(true);
+
+    // And every slot says which telescope it is time on.
+    expect(first?.observatoryId).toBe(observatoryId);
+    expect(other?.observatoryId).toBe(partner.observatoryId);
+    for (const slot of other?.items ?? []) {
+      expect(slot.observatoryId).toBe(partner.observatoryId);
+    }
+  });
+
+  /**
+   * Unknown and not bookable are one answer, on both surfaces. A caller probing
+   * ids must not be able to tell a suspended partner node from a random uuid.
+   */
+  it.each<[string, Parameters<typeof secondObservatory>[0]]>([
+    ["DRAFT", { approvalStatus: "DRAFT" }],
+    ["UNDER_REVIEW", { approvalStatus: "UNDER_REVIEW" }],
+    ["SUSPENDED", { approvalStatus: "SUSPENDED" }],
+    ["no node at all", { approvalStatus: null }],
+    ["an APPROVED node that has lost its telescope", { primaryTelescope: false }],
+  ])("refuses a telescope with %s, on both surfaces", async (_label, options) => {
+    const partner = await secondObservatory(options);
+
+    const result = await reserve({
+      observatoryId: partner.observatoryId,
+      slotStartAt: firstSlotStartAt(),
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(404);
+    expect(result.code).toBe("NOT_FOUND");
+    expect(result.message).toBe("No such observatory.");
+
+    expect(await listSlotsForDate(partner.observatoryId, NIGHT, NOW)).toBeNull();
+    expect(await database.booking.count()).toBe(0);
+  });
+
+  it("gives an unknown id exactly the answer a suspended one gets", async () => {
+    const result = await reserve({
+      observatoryId: randomUUID(),
+      slotStartAt: firstSlotStartAt(),
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(404);
+    expect(result.message).toBe("No such observatory.");
+    expect(await listSlotsForDate(randomUUID(), NIGHT, NOW)).toBeNull();
+  });
+
+  /**
+   * The instrument the customer was shown, not the observatory's earliest
+   * telescope row. Before DV-066 the booking took `telescope.findFirst` by
+   * createdAt, so a site with a second instrument booked whichever came first.
+   */
+  it("books the node's primary telescope, not the site's earliest one", async () => {
+    const newer = await database.telescope.create({
+      data: {
+        observatoryId,
+        name: "Second instrument",
+        manufacturer: "Sky-Watcher",
+        model: "Evostar 100ED",
+        apertureMm: 100,
+        focalLengthMm: 900,
+        status: "ONLINE",
+      },
+    });
+    await database.observatoryNetworkNode.update({
+      where: { id: nodeId },
+      data: { primaryTelescopeId: newer.id },
+    });
+
+    const result = await reserve({ slotStartAt: firstSlotStartAt() });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const row = await database.booking.findUniqueOrThrow({
+      where: { id: result.body.booking.id },
+    });
+    expect(row.telescopeId).toBe(newer.id);
+    expect(row.telescopeId).not.toBe(telescopeId);
+  });
+});
+
+describe("listing bookable telescopes", () => {
+  it("lists exactly the observatories whose node is APPROVED with a telescope", async () => {
+    const partner = await database.observatory.create({
+      data: {
+        slug: `test-approved-partner-${randomUUID()}`,
+        nameEn: "Roof in Santiago",
+        nameKa: "Roof in Santiago",
+        city: "Santiago",
+        countryCode: "CL",
+        latitude: -33.45,
+        longitude: -70.66,
+        timezone: "America/Santiago",
+        status: "OFFLINE",
+      },
+    });
+    const partnerTelescope = await database.telescope.create({
+      data: {
+        observatoryId: partner.id,
+        name: "Santiago 8SE",
+        manufacturer: "Celestron",
+        model: "NexStar 8SE",
+        apertureMm: 203,
+        focalLengthMm: 2032,
+      },
+    });
+    await database.observatoryNetworkNode.create({
+      data: {
+        ownerId: await createUser(),
+        observatoryId: partner.id,
+        primaryTelescopeId: partnerTelescope.id,
+        kind: "PARTNER",
+        approvalStatus: "APPROVED",
+        capabilities: [],
+      },
+    });
+
+    // Every way of not being bookable, each present and each absent from the list.
+    for (const approvalStatus of ["DRAFT", "UNDER_REVIEW", "SUSPENDED"] as const) {
+      const hidden = await database.observatory.create({
+        data: {
+          slug: `test-${approvalStatus.toLowerCase()}-${randomUUID()}`,
+          nameEn: approvalStatus,
+          nameKa: approvalStatus,
+          city: "Tbilisi",
+          countryCode: "GE",
+          latitude: SITE.latitude,
+          longitude: SITE.longitude,
+          timezone: SITE.timezone,
+        },
+      });
+      const scope = await database.telescope.create({
+        data: {
+          observatoryId: hidden.id,
+          name: "Hidden",
+          manufacturer: "Celestron",
+          model: "NexStar 6SE",
+          apertureMm: 150,
+          focalLengthMm: 1500,
+        },
+      });
+      await database.observatoryNetworkNode.create({
+        data: {
+          ownerId: await createUser(),
+          observatoryId: hidden.id,
+          primaryTelescopeId: scope.id,
+          kind: "PARTNER",
+          approvalStatus,
+          capabilities: [],
+        },
+      });
+    }
+    await database.observatory.create({
+      data: {
+        slug: `test-nodeless-${randomUUID()}`,
+        nameEn: "No node",
+        nameKa: "No node",
+        city: "Tbilisi",
+        countryCode: "GE",
+        latitude: SITE.latitude,
+        longitude: SITE.longitude,
+        timezone: SITE.timezone,
+      },
+    });
+
+    const list = await listBookableObservatories();
+
+    expect(list.items.map((item) => item.id)).toEqual([observatoryId, partner.id]);
+    expect(() => zBookableObservatoryList.parse(list)).not.toThrow();
+
+    const santiago = list.items[1];
+    expect(santiago.kind).toBe("PARTNER");
+    expect(santiago.timezone).toBe("America/Santiago");
+    expect(santiago.telescope).toEqual({
+      manufacturer: "Celestron",
+      model: "NexStar 8SE",
+      apertureMm: 203,
+      focalLengthMm: 2032,
+    });
+  });
+
+  /**
+   * Listed says bookable, not free: an OFFLINE telescope is still a choice, and
+   * each of its slots says why it cannot be sold tonight.
+   */
+  it("keeps an offline telescope on the list", async () => {
+    await database.observatory.update({
+      where: { id: observatoryId },
+      data: { status: "OFFLINE" },
+    });
+
+    const list = await listBookableObservatories();
+
+    expect(list.items.map((item) => item.id)).toEqual([observatoryId]);
+  });
+
+  /**
+   * The precise position of a telescope on somebody else's roof is not a public
+   * field. The generator reads it; the list must never carry it, under any name.
+   */
+  it("carries no coordinates, no owner and no device identity", async () => {
+    const [item] = (await listBookableObservatories()).items;
+    const serialised = JSON.stringify(item);
+
+    for (const forbidden of [
+      "latitude",
+      "longitude",
+      "ownerId",
+      "deviceTokenHash",
+      "nodeId",
+    ]) {
+      expect(serialised).not.toContain(forbidden);
+    }
+    expect(serialised).not.toContain(String(SITE.latitude));
+    expect(serialised).not.toContain(String(SITE.longitude));
   });
 });
 

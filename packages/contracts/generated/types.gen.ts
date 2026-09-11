@@ -532,7 +532,58 @@ export type SetWeatherHoldRequest = {
     note?: string | null;
 };
 
+/**
+ * One telescope a customer may book, and what a customer needs to choose it.
+ *
+ * ADR-015 leaves how a customer chooses between instruments undecided -- a
+ * list, a map, a recommendation -- so this carries what any of those needs
+ * and no more. There are no coordinates: a map is not decided, and precise
+ * coordinates of somebody else's telescope are not a public field.
+ *
+ * `nameKa` may equal `nameEn`. A partner registers one `siteName`, and
+ * manufacturing a Georgian name for somebody else's property would be
+ * inventing data about it.
+ *
+ */
+export type BookableObservatory = {
+    id: string;
+    slug: string;
+    kind: NetworkNodeKind;
+    nameEn: string;
+    nameKa: string;
+    city: string;
+    countryCode: string;
+    /**
+     * IANA zone. `GET /slots` takes a date in this zone, so a client in another
+     * one needs it to ask for the night it means.
+     *
+     */
+    timezone: string;
+    telescope: BookableTelescope;
+};
+
+/**
+ * The instrument, as a customer would compare two of them. ADR-015: a partner
+ * is selling *that* telescope, with its aperture, and a customer choosing
+ * between two needs to see the difference.
+ *
+ */
+export type BookableTelescope = {
+    manufacturer: string;
+    model: string;
+    apertureMm: number;
+    focalLengthMm: number;
+};
+
+export type BookableObservatoryList = {
+    items: Array<BookableObservatory>;
+};
+
 export type Slot = {
+    /**
+     * The telescope this slot is time on (ADR-015).
+     */
+    observatoryId: string;
     startAt: string;
     endAt: string;
     durationMinutes: number;
@@ -557,6 +608,7 @@ export const SlotUnavailableReason = {
 export type SlotUnavailableReason = typeof SlotUnavailableReason[keyof typeof SlotUnavailableReason];
 
 export type SlotList = {
+    observatoryId: string;
     date: string;
     items: Array<Slot>;
 };
@@ -574,6 +626,10 @@ export type BookingStatus = typeof BookingStatus[keyof typeof BookingStatus];
 export type Booking = {
     id: string;
     userId: string;
+    /**
+     * The telescope the booking is time on (ADR-015).
+     */
+    observatoryId: string;
     targetId: string;
     slotStartAt: string;
     durationMinutes: number;
@@ -586,6 +642,10 @@ export type Booking = {
 };
 
 export type CreateBookingRequest = {
+    /**
+     * An `id` from `GET /observatories`.
+     */
+    observatoryId: string;
     targetId: string;
     slotStartAt: string;
     durationMinutes: number;
@@ -2026,6 +2086,22 @@ export type GetObservatoryStatusResponses = {
 
 export type GetObservatoryStatusResponse = GetObservatoryStatusResponses[keyof GetObservatoryStatusResponses];
 
+export type ListBookableObservatoriesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/observatories';
+};
+
+export type ListBookableObservatoriesResponses = {
+    /**
+     * Every bookable observatory.
+     */
+    200: BookableObservatoryList;
+};
+
+export type ListBookableObservatoriesResponse = ListBookableObservatoriesResponses[keyof ListBookableObservatoriesResponses];
+
 export type ListTargetsData = {
     body?: never;
     path?: never;
@@ -2101,12 +2177,31 @@ export type ListSlotsData = {
     path?: never;
     query: {
         /**
-         * Local observatory date, ISO 8601 (YYYY-MM-DD).
+         * An `id` from `GET /observatories`.
+         */
+        observatoryId: string;
+        /**
+         * The observatory's local date, ISO 8601 (YYYY-MM-DD) -- in the
+         * `timezone` `GET /observatories` reports for it, not the caller's.
+         *
          */
         date: string;
     };
     url: '/slots';
 };
+
+export type ListSlotsErrors = {
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type ListSlotsError = ListSlotsErrors[keyof ListSlotsErrors];
 
 export type ListSlotsResponses = {
     /**
@@ -2171,6 +2266,10 @@ export type CreateBookingErrors = {
      * Not authenticated.
      */
     401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
     /**
      * Conflicts with current state, for example a slot already taken or a session already held.
      */

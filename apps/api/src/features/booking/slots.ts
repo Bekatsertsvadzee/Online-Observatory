@@ -2,27 +2,33 @@ import "server-only";
 
 import type { SlotList } from "@darkview/contracts";
 
+import { findBookableObservatory } from "@/features/booking/observatories";
 import { getDatabase } from "@/lib/db/client";
 import { openIntervals } from "@/lib/slots/availability";
 import { nightWindow } from "@/lib/slots/darkness";
 import { generateSlots, SLOT_DURATION_MINUTES } from "@/lib/slots/generate";
 
 /**
- * Bookable slots for one local observatory date.
+ * Bookable slots on one observatory, for one of its local dates.
  *
  * The date names the night that *begins* that evening: asking for 3 September
  * returns the window from dusk on the 3rd to dawn on the 4th, which is what
  * someone means when they say they want to observe on Thursday.
+ *
+ * Null when the observatory is not bookable -- unknown, or its node is not
+ * APPROVED -- and the route answers that with 404. An empty night and a telescope
+ * nobody may book are different facts: the first is an honest list with nothing on
+ * it, the second is not a list at all.
  */
-export async function listSlotsForDate(isoDate: string, now: Date): Promise<SlotList> {
-  const database = getDatabase();
+export async function listSlotsForDate(
+  observatoryId: string,
+  isoDate: string,
+  now: Date,
+): Promise<SlotList | null> {
+  const observatory = await findBookableObservatory(observatoryId);
+  if (!observatory) return null;
 
-  const observatory = await database.observatory.findFirst({
-    include: { weatherState: true },
-    orderBy: { createdAt: "asc" },
-  });
-
-  if (!observatory) return { date: isoDate, items: [] };
+  const empty = { observatoryId: observatory.id, date: isoDate, items: [] };
 
   const window = nightWindow(isoDate, observatory.timezone, {
     latitudeDegrees: observatory.latitude,
@@ -30,37 +36,18 @@ export async function listSlotsForDate(isoDate: string, now: Date): Promise<Slot
   });
 
   // No astronomical darkness at all: an honest empty night, not an error.
-  if (!window) return { date: isoDate, items: [] };
+  if (!window) return empty;
 
   // The hours the owner offered, narrowed to the hours the sky allows (DV-121).
-  //
-  // Read from the APPROVED node only. A node in DRAFT, UNDER_REVIEW or SUSPENDED
-  // is not offered to anybody, so its windows are not an opinion about
-  // availability -- and treating them as one would let a suspended telescope
-  // keep appearing on the booking page.
-  //
-  // Disabled rows are excluded here rather than filtered later: `enabled` is how
-  // an owner switches a window off without deleting it, and a disabled window
-  // must not be distinguishable from one that was never recorded.
-  const node = await database.observatoryNetworkNode.findFirst({
-    where: { observatoryId: observatory.id, approvalStatus: "APPROVED" },
-    select: {
-      availabilityWindows: {
-        where: { enabled: true },
-        select: { weekday: true, startMinute: true, endMinute: true },
-      },
-    },
-  });
-
-  const open = openIntervals(window, node?.availabilityWindows ?? [], observatory.timezone);
-  if (open.length === 0) return { date: isoDate, items: [] };
+  const open = openIntervals(window, observatory.windows, observatory.timezone);
+  if (open.length === 0) return empty;
 
   // A booking holds its slot from the moment it is reserved, not from the moment
-  // it is paid for -- the same rule the partial unique index enforces in the
-  // database (DV-055). An unpaid hold stops holding once it lapses, so the slot
+  // it is paid for -- the same rule the exclusion constraint enforces in the
+  // database (DV-055, DV-066). An unpaid hold stops holding once it lapses, so the slot
   // reappears here without anything having to sweep the table first. Cancelled,
   // expired and refunded bookings never held it.
-  const held = await database.booking.findMany({
+  const held = await getDatabase().booking.findMany({
     where: {
       observatoryId: observatory.id,
       slotStartAt: { gte: window.duskAt, lte: window.dawnAt },
@@ -79,13 +66,19 @@ export async function listSlotsForDate(isoDate: string, now: Date): Promise<Slot
   const bookedStartAt = new Set(held.map((row) => row.slotStartAt.getTime()));
   const state = {
     online: observatory.status === "ONLINE",
-    weatherHold: observatory.weatherState?.holdActive ?? false,
+    weatherHold: observatory.weatherHold,
   };
 
   return {
-    date: isoDate,
+    ...empty,
     items: open.flatMap((interval) =>
-      generateSlots({ window: interval, now, observatory: state, bookedStartAt }),
+      generateSlots({
+        observatoryId: observatory.id,
+        window: interval,
+        now,
+        observatory: state,
+        bookedStartAt,
+      }),
     ),
   };
 }

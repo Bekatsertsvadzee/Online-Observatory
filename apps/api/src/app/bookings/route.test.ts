@@ -25,6 +25,7 @@ import { zBookingWithPaymentIntent } from "@darkview/contracts/zod";
 import { POST } from "./route";
 
 const USER_ID = "6f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e0f";
+const OBSERVATORY_ID = "00000000-0000-4000-8000-000000000010";
 const TARGET_ID = "00000000-0000-4000-8000-000000000101";
 const SLOT_START_AT = "2026-12-15T18:00:00.000Z";
 
@@ -46,6 +47,7 @@ const reserved = {
   booking: {
     id: "3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e01",
     userId: USER_ID,
+    observatoryId: OBSERVATORY_ID,
     targetId: TARGET_ID,
     slotStartAt: SLOT_START_AT,
     durationMinutes: 30,
@@ -85,6 +87,7 @@ function request(options: {
 }
 
 const validBody = {
+  observatoryId: OBSERVATORY_ID,
   targetId: TARGET_ID,
   slotStartAt: SLOT_START_AT,
   durationMinutes: 30,
@@ -156,6 +159,25 @@ describe("POST /bookings", () => {
 
     expect(response.status).toBe(422);
     await expect(response.json()).resolves.toMatchObject({ code: "VALIDATION_FAILED" });
+    expect(reserveSlot).not.toHaveBeenCalled();
+  });
+
+  // ADR-015: a booking is time on a telescope the customer chose. A request that
+  // does not name one is malformed, not a request for "whichever is first".
+  it("rejects a body that names no observatory", async () => {
+    getCurrentSession.mockResolvedValueOnce(session);
+
+    const response = await POST(
+      request({
+        body: {
+          targetId: validBody.targetId,
+          slotStartAt: validBody.slotStartAt,
+          durationMinutes: validBody.durationMinutes,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(422);
     expect(reserveSlot).not.toHaveBeenCalled();
   });
 

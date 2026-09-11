@@ -440,6 +440,22 @@ class SetWeatherHoldRequest(BaseModel):
     note: str | None = None
 
 
+class BookableTelescope(BaseModel):
+    """
+    The instrument, as a customer would compare two of them. ADR-015: a partner
+    is selling *that* telescope, with its aperture, and a customer choosing
+    between two needs to see the difference.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    manufacturer: str
+    model: str
+    aperture_mm: float = Field(..., alias='apertureMm', gt=0.0)
+    focal_length_mm: float = Field(..., alias='focalLengthMm', gt=0.0)
+
+
 class SlotUnavailableReason(StrEnum):
     already_booked = 'ALREADY_BOOKED'
     outside_astronomical_darkness = 'OUTSIDE_ASTRONOMICAL_DARKNESS'
@@ -463,6 +479,7 @@ class Booking(BaseModel):
     )
     id: UUID
     user_id: UUID = Field(..., alias='userId')
+    observatory_id: UUID = Field(..., alias='observatoryId', description='The telescope the booking is time on (ADR-015).')
     target_id: UUID = Field(..., alias='targetId')
     slot_start_at: AwareDatetime = Field(..., alias='slotStartAt')
     duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
@@ -478,6 +495,7 @@ class CreateBookingRequest(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
+    observatory_id: UUID = Field(..., alias='observatoryId', description='An `id` from `GET /observatories`.')
     target_id: UUID = Field(..., alias='targetId')
     slot_start_at: AwareDatetime = Field(..., alias='slotStartAt')
     duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
@@ -1676,10 +1694,46 @@ class OperatorObservatoryState(BaseModel):
     updated_at: AwareDatetime = Field(..., alias='updatedAt')
 
 
+class BookableObservatory(BaseModel):
+    """
+    One telescope a customer may book, and what a customer needs to choose it.
+
+    ADR-015 leaves how a customer chooses between instruments undecided -- a
+    list, a map, a recommendation -- so this carries what any of those needs
+    and no more. There are no coordinates: a map is not decided, and precise
+    coordinates of somebody else's telescope are not a public field.
+
+    `nameKa` may equal `nameEn`. A partner registers one `siteName`, and
+    manufacturing a Georgian name for somebody else's property would be
+    inventing data about it.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: UUID
+    slug: str
+    kind: NetworkNodeKind
+    name_en: str = Field(..., alias='nameEn')
+    name_ka: str = Field(..., alias='nameKa')
+    city: str
+    country_code: str = Field(..., alias='countryCode', max_length=2, min_length=2)
+    timezone: str = Field(..., description='IANA zone. `GET /slots` takes a date in this zone, so a client in another\none needs it to ask for the night it means.\n')
+    telescope: BookableTelescope
+
+
+class BookableObservatoryList(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    items: list[BookableObservatory]
+
+
 class Slot(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
+    observatory_id: UUID = Field(..., alias='observatoryId', description='The telescope this slot is time on (ADR-015).')
     start_at: AwareDatetime = Field(..., alias='startAt')
     end_at: AwareDatetime = Field(..., alias='endAt')
     duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
@@ -1693,6 +1747,7 @@ class SlotList(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
+    observatory_id: UUID = Field(..., alias='observatoryId')
     date: date_aliased
     items: list[Slot]
 

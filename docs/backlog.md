@@ -91,18 +91,17 @@ amount of agent work. ADR-012 listed it as a consequence of the capture path
 landing; it is not.
 
 **DV-066 is the one that matters.** DV-120 registers a partner node, DV-121 reads
-the hours its owner offered, and neither makes a partner telescope bookable,
-because `Slot` cannot say which telescope it belongs to and `CreateBookingRequest`
-cannot name one. Both booking surfaces still resolve the observatory with
-`findFirst`. Until it lands, the entire partner track is plumbing with no product
-at the end of it.
+the hours its owner offered, and neither made a partner telescope bookable,
+because `Slot` could not say which telescope it belonged to and
+`CreateBookingRequest` could not name one. Both booking surfaces resolved the
+observatory with `findFirst`. **It has landed** in two parts — see *What the slot
+exclusion constraint closed* and *What the per-observatory booking built* below.
 
 It also carried a defect that was not yet live and would have become live the moment
 ADR-015's two slot lengths shipped: `Booking_held_slot_unique` keyed on the start
 instant, which is airtight for one fixed duration and silently wrong for mixed ones.
 A sixty-minute booking at 21:00 and a twenty-minute one at 21:20 both inserted.
-**That half is done** — see *What the slot exclusion constraint closed* below. The
-observatory dimension itself is not.
+**That half is done** — see *What the slot exclusion constraint closed* below.
 
 ## Observer Pack — server side (ADR-007)
 
@@ -1095,8 +1094,70 @@ render — a dump that brought back the GiST index without them would restore a 
 whose constraint list looks right and double-books. The drill now reads
 `pg_get_constraintdef` and holds the equality, the overlap and the WHERE clause.
 
-**Still open in DV-066:** the observatory dimension itself — `observatoryId` on
-`Slot`, `SlotList`, `Booking` and `CreateBookingRequest`, the `observatoryId` query
-parameter on `GET /slots`, a public endpoint listing bookable observatories, and the
-two `findFirst` calls in `slots.ts` and `reserve.ts`. Nothing sells a second slot
-length yet, and nothing may until that lands.
+**The rest of DV-066** is the observatory dimension itself, recorded in the next
+section. Nothing sells a second slot length yet.
+
+## What the per-observatory booking built
+
+The second part of DV-066, and the one that makes a partner telescope a product. A
+customer chooses a telescope, then a time on it (ADR-015).
+
+**A breaking contract change, and a deliberate one.** darkview-clients must re-copy
+the spec and regenerate before it can list or book anything.
+
+| Surface | Change |
+| --- | --- |
+| `GET /observatories` | **New.** Public. Every bookable telescope, with what a customer needs to choose one: names, city, country, timezone, kind, and the instrument's manufacturer, model, aperture and focal length. |
+| `GET /slots` | `observatoryId` is a **required** query parameter. 404 for an id that is unknown or not bookable; 422 for a malformed one. |
+| `POST /bookings` | `CreateBookingRequest.observatoryId` is **required**. 404 for an unknown or unbookable id. |
+| `Slot`, `SlotList`, `Booking` | Each carries `observatoryId`. |
+
+**What "bookable" means, written once.** An `APPROVED` network node naming a primary
+telescope, **whatever its kind**. The maintainer chose one rule over two in session
+on 2026-09-11: a first-party observatory is approved the same way a partner one is,
+rather than being bookable by the absence of a node. `features/booking/observatories.ts`
+holds the filter and every surface reads it, where before the slot list and the
+reservation each ran their own `findFirst` and each read the node separately — two
+chances to disagree about one telescope.
+
+The operational consequence is in the runbook: a real first-party site is sellable
+once its node is approved, and the approve route requires a measured `MAX_ALT_SAFE`,
+so **after DV-034, not before**. No API creates a `FIRST_PARTY` node.
+
+**A defect this closed.** Before DV-066 a test asserted that a `SUSPENDED` node's
+windows were ignored and its telescope went on selling the whole night: the booking
+path found the observatory with `findFirst` and never asked whether anybody was
+allowed to operate it. That test now asserts the opposite.
+
+**Unknown and not bookable are one answer**, on every surface and in the same words.
+A caller probing ids must not learn that a suspended partner node exists.
+
+**The telescope booked is the node's primary telescope**, not the site's earliest
+telescope row, which is what `reserve.ts` read before and which a site with two
+instruments would have made a coin toss.
+
+**No coordinates leave the list.** The slot generator reads latitude and longitude;
+`GET /observatories` never carries them, under any name. The precise position of a
+telescope on somebody else's roof is not a public field, on the rule
+`PublicObservatoryStatus` already documents.
+
+**Verified by removing each protection and confirming a named test fails:** the
+APPROVED requirement (five tests), the primary-telescope requirement, the node's
+telescope over the site's earliest, the per-id lookup over the old `findFirst` (eight
+tests), and a coordinate leaking into the public list.
+
+**What DV-066 did not touch, and what now needs it:**
+
+- **`GET /targets/tonight` still resolves the observatory with `findFirst`.** It
+  computes visibility for the first observatory's site, so a customer about to book a
+  partner in Santiago is shown Tbilisi's sky. It needs its own `observatoryId`, which
+  is a contract change of its own and outside the booking surface this issue named.
+- **The slot list's held set is still keyed on start instants.** Correct for one
+  slot length. When the second length ships, it must become an interval overlap, or
+  the list will show as free a slot the constraint then refuses — safe, since the
+  constraint holds, but a 409 the customer should never have been offered.
+- **ADR-015 §2, duration filtering the target list,** is not built. Nothing sells a
+  second length, so nothing needs it yet.
+- **The admin routes remain single-observatory** through `currentObservatoryId()`.
+  That was already recorded as waiting on a contract change, and DV-066 does not
+  change it.
