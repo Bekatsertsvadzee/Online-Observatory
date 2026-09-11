@@ -1011,6 +1011,55 @@ export const zNetworkNode = z.strictObject({
     createdAt: z.iso.datetime()
 });
 
+export const zNetworkNodePage = z.strictObject({
+    items: z.array(zNetworkNode),
+    page: zPageMeta
+});
+
+export const zNetworkNodeOwner = z.strictObject({
+    id: z.uuid(),
+    name: z.string(),
+    email: z.email()
+});
+
+export const zNetworkNodeSite = z.strictObject({
+    latitude: z.number().gte(-90).lte(90),
+    longitude: z.number().gte(-180).lte(180),
+    timezone: z.string()
+});
+
+export const zNetworkNodeEnvelopeEvidence = z.strictObject({
+    maxAltitudeDegrees: z.number().nullable(),
+    measuredAt: z.iso.datetime().nullable(),
+    measuredBy: z.string().nullable(),
+    measurementNote: z.string().nullable()
+});
+
+/**
+ * What the database can say about ADR-013's conditions. It reports; it does not
+ * judge. Park proven and the owner's acceptance of terms have no record here
+ * and remain the operator's attestation on approval.
+ *
+ */
+export const zNetworkNodeEvidence = z.strictObject({
+    safetyEnvelope: zNetworkNodeEnvelopeEvidence.nullable(),
+    horizonMaskEntries: z.int().gte(0),
+    forbiddenAzimuthSectors: z.int().gte(0),
+    completedRealMissions: z.int().gte(0)
+});
+
+export const zNetworkNodeHistoryEntry = z.strictObject({
+    action: z.enum([
+        'REGISTERED',
+        'SUBMITTED',
+        'APPROVED',
+        'SUSPENDED'
+    ]),
+    occurredAt: z.iso.datetime(),
+    actorUserId: z.uuid().nullable(),
+    reason: z.string().nullable()
+});
+
 export const zNetworkNodeList = z.strictObject({
     items: z.array(zNetworkNode)
 });
@@ -1021,6 +1070,24 @@ export const zRegisterNetworkTelescope = z.strictObject({
     model: z.string().min(1),
     apertureMm: z.number().gt(0),
     focalLengthMm: z.number().gt(0)
+});
+
+/**
+ * One node, and the evidence for and against qualifying it (DV-122).
+ *
+ * Operator-only, and it carries what the public surfaces deliberately do not:
+ * the owner's identity and the site's exact coordinates. The coordinates are
+ * here because ADR-013 requires them verified against the sky, and the
+ * operator cannot compare a plate solve with a number they are not shown.
+ *
+ */
+export const zNetworkNodeReview = z.strictObject({
+    node: zNetworkNode,
+    owner: zNetworkNodeOwner,
+    site: zNetworkNodeSite,
+    telescope: zRegisterNetworkTelescope.nullable(),
+    evidence: zNetworkNodeEvidence,
+    history: z.array(zNetworkNodeHistoryEntry)
 });
 
 /**
@@ -1888,6 +1955,26 @@ export const zSubmitNetworkNodeForReviewPath = z.object({
  * The node, now under review.
  */
 export const zSubmitNetworkNodeForReviewResponse = zNetworkNode;
+
+export const zAdminListNetworkNodesQuery = z.object({
+    approvalStatus: zNetworkNodeApprovalStatus.optional(),
+    cursor: z.string().optional(),
+    limit: z.int().gte(1).lte(100).optional().default(20)
+});
+
+/**
+ * Node page.
+ */
+export const zAdminListNetworkNodesResponse = zNetworkNodePage;
+
+export const zAdminGetNetworkNodeReviewPath = z.object({
+    nodeId: z.uuid()
+});
+
+/**
+ * The node, under review.
+ */
+export const zAdminGetNetworkNodeReviewResponse = zNetworkNodeReview;
 
 export const zAdminApproveNetworkNodeBody = zApproveNetworkNodeRequest;
 

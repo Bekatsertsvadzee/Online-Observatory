@@ -15,10 +15,15 @@ vi.mock("@/lib/db/client", () => ({ getDatabase: () => testDatabase.current }));
 
 const { registerNetworkNode, listMyNetworkNodes, submitNetworkNodeForReview } =
   await import("@/features/network/nodes");
-const { approveNetworkNode, suspendNetworkNode } = await import(
-  "@/features/admin/network"
+const {
+  approveNetworkNode,
+  getNetworkNodeReview,
+  listNetworkNodes,
+  suspendNetworkNode,
+} = await import("@/features/admin/network");
+const { zNetworkNode, zNetworkNodePage, zNetworkNodeReview } = await import(
+  "@darkview/contracts/zod"
 );
-const { zNetworkNode } = await import("@darkview/contracts/zod");
 
 /**
  * DV-120 against a real PostgreSQL instance.
@@ -508,5 +513,211 @@ describe("taking a qualification away", () => {
       reason: "owner reports a slipping clutch",
       previousStatus: "APPROVED",
     });
+  });
+});
+
+/**
+ * DV-122 -- the operator's side of a qualification: finding the nodes waiting, and
+ * reading the evidence before deciding one.
+ */
+describe("the qualification queue", () => {
+  /** Pin a node's creation time, so "oldest first" is a fact the test chose. */
+  async function registeredAt(nodeId: string, minutesAgo: number) {
+    await database.observatoryNetworkNode.update({
+      where: { id: nodeId },
+      data: { createdAt: new Date(NOW.getTime() - minutesAgo * 60_000) },
+    });
+  }
+
+  it("lists only the nodes awaiting review, the longest-waiting first", async () => {
+    const newer = await nodeIn("UNDER_REVIEW");
+    const older = await nodeIn("UNDER_REVIEW");
+    const draft = await nodeIn("DRAFT");
+    await registeredAt(newer.nodeId, 10);
+    await registeredAt(older.nodeId, 60);
+    await registeredAt(draft.nodeId, 120);
+
+    const page = await listNetworkNodes({ approvalStatus: "UNDER_REVIEW", limit: 20 });
+
+    expect(page.items.map((node) => node.nodeId)).toEqual([older.nodeId, newer.nodeId]);
+    expect(zNetworkNodePage.safeParse(page).success).toBe(true);
+  });
+
+  it("lists every node, in every state, when no status is asked for", async () => {
+    const draft = await nodeIn("DRAFT");
+    const reviewing = await nodeIn("UNDER_REVIEW", strangerId);
+
+    const page = await listNetworkNodes({ limit: 20 });
+
+    // Unscoped by owner: two owners' nodes on one page is what an admin read is.
+    expect(new Set(page.items.map((node) => node.nodeId))).toEqual(
+      new Set([draft.nodeId, reviewing.nodeId]),
+    );
+  });
+
+  it("pages without repeating or skipping a node", async () => {
+    const nodes = [];
+    for (const minutesAgo of [30, 20, 10]) {
+      const node = await nodeIn("UNDER_REVIEW");
+      await registeredAt(node.nodeId, minutesAgo);
+      nodes.push(node.nodeId);
+    }
+
+    const first = await listNetworkNodes({ approvalStatus: "UNDER_REVIEW", limit: 2 });
+    const second = await listNetworkNodes({
+      approvalStatus: "UNDER_REVIEW",
+      limit: 2,
+      cursor: first.page.nextCursor ?? undefined,
+    });
+
+    expect(first.page.hasMore).toBe(true);
+    expect(second.page.hasMore).toBe(false);
+    expect([...first.items, ...second.items].map((node) => node.nodeId)).toEqual(nodes);
+  });
+});
+
+describe("reviewing a qualification", () => {
+  it("shows the operator who owns it and exactly where it is", async () => {
+    // What the public surfaces withhold, and the reviewer needs: ADR-013 requires
+    // the coordinates verified against the sky, and nobody can compare a plate
+    // solve with a number they are not shown.
+    const node = await nodeIn("UNDER_REVIEW");
+
+    const review = await getNetworkNodeReview(node.nodeId);
+
+    expect(review?.owner.id).toBe(ownerId);
+    expect(review?.site).toEqual({
+      latitude: 41.7151,
+      longitude: 44.8271,
+      timezone: "Asia/Tbilisi",
+    });
+    expect(review?.telescope).toEqual(registration().telescope);
+    expect(zNetworkNodeReview.safeParse(review).success).toBe(true);
+  });
+
+  it("reports the envelope measurement and the surveyed horizon", async () => {
+    const node = await nodeIn("UNDER_REVIEW");
+    await measureEnvelope(node.observatoryId, FAKE_MEASURED_MAX_ALTITUDE_DEGREES);
+    const envelope = await database.safetyEnvelope.findUniqueOrThrow({
+      where: { observatoryId: node.observatoryId },
+    });
+    await database.horizonMaskEntry.createMany({
+      data: [0, 90, 180].map((azimuthDegrees) => ({
+        safetyEnvelopeId: envelope.id,
+        azimuthDegrees,
+        minAltitudeDegrees: 15,
+      })),
+    });
+    await database.azimuthSector.create({
+      data: { safetyEnvelopeId: envelope.id, fromDegrees: 200, toDegrees: 220 },
+    });
+
+    const review = await getNetworkNodeReview(node.nodeId);
+
+    expect(review?.evidence.safetyEnvelope).toEqual({
+      maxAltitudeDegrees: FAKE_MEASURED_MAX_ALTITUDE_DEGREES,
+      measuredAt: NOW.toISOString(),
+      measuredBy: "integration-test fake",
+      measurementNote: null,
+    });
+    expect(review?.evidence.horizonMaskEntries).toBe(3);
+    expect(review?.evidence.forbiddenAzimuthSectors).toBe(1);
+  });
+
+  it("reports an instrument nobody has surveyed as exactly that", async () => {
+    // The state every registered node starts in. Zero is the answer, not a gap.
+    const node = await nodeIn("UNDER_REVIEW");
+
+    const review = await getNetworkNodeReview(node.nodeId);
+
+    expect(review?.evidence).toEqual({
+      safetyEnvelope: null,
+      horizonMaskEntries: 0,
+      forbiddenAzimuthSectors: 0,
+      completedRealMissions: 0,
+    });
+  });
+
+  /**
+   * First light is the hardware doing it with somebody watching. A simulated
+   * mission says nothing about a telescope on somebody else's roof, and a real one
+   * that failed is not a first light.
+   */
+  it("counts only completed missions on real hardware toward first light", async () => {
+    const node = await nodeIn("UNDER_REVIEW");
+    const telescope = await database.telescope.findFirstOrThrow({
+      where: { observatoryId: node.observatoryId },
+    });
+    const target = await database.target.create({
+      data: {
+        slug: `m13-${randomUUID()}`,
+        nameEn: "M13",
+        nameKa: "M13",
+        type: "GLOBULAR_CLUSTER",
+        positionSource: "FIXED",
+        rightAscensionHours: 16.6949,
+        declinationDegrees: 36.4613,
+        angularSizeArcmin: 20,
+        magnitude: 5.8,
+        opticalConfig: "F10_NATIVE",
+        imagingProfile: "GLOBULAR_CLUSTER",
+        minAltitudeDegrees: 25,
+        expectedMissionMinutes: 30,
+      },
+    });
+    const mission = (state: "COMPLETE" | "FAILED", mode: "REAL" | "SIMULATED") => ({
+      userId: ownerId,
+      targetId: target.id,
+      observatoryId: node.observatoryId,
+      telescopeId: telescope.id,
+      state,
+      mode,
+    });
+    await database.mission.createMany({
+      data: [
+        mission("COMPLETE", "REAL"),
+        mission("COMPLETE", "SIMULATED"),
+        mission("FAILED", "REAL"),
+      ],
+    });
+
+    const review = await getNetworkNodeReview(node.nodeId);
+
+    expect(review?.evidence.completedRealMissions).toBe(1);
+  });
+
+  it("gives the history oldest first, with each operator's reason verbatim", async () => {
+    // Another owner's node in the table, with a history of its own. The review is
+    // of one telescope, and must not borrow a stranger's approval.
+    await nodeIn("UNDER_REVIEW", strangerId);
+    const node = await nodeIn("UNDER_REVIEW");
+    await measureEnvelope(node.observatoryId, FAKE_MEASURED_MAX_ALTITUDE_DEGREES);
+    await approveNetworkNode({
+      nodeId: node.nodeId,
+      request: attestation(),
+      operatorId,
+      now: NOW,
+    });
+    await suspendNetworkNode({
+      nodeId: node.nodeId,
+      request: { reason: "owner reported a slipping clutch" },
+      operatorId,
+      now: NOW,
+    });
+
+    const review = await getNetworkNodeReview(node.nodeId);
+
+    expect(review?.history.map((entry) => [entry.action, entry.reason])).toEqual([
+      ["REGISTERED", null],
+      ["SUBMITTED", null],
+      ["APPROVED", "qualified on site, park proven twice"],
+      ["SUSPENDED", "owner reported a slipping clutch"],
+    ]);
+    expect(review?.history.at(-1)?.actorUserId).toBe(operatorId);
+    expect(review?.node.approvalStatus).toBe("SUSPENDED");
+  });
+
+  it("answers nothing for a node that does not exist", async () => {
+    expect(await getNetworkNodeReview(randomUUID())).toBeNull();
   });
 });

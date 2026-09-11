@@ -1400,6 +1400,92 @@ export type NetworkNode = {
     createdAt: string;
 };
 
+export type NetworkNodePage = {
+    items: Array<NetworkNode>;
+    page: PageMeta;
+};
+
+/**
+ * One node, and the evidence for and against qualifying it (DV-122).
+ *
+ * Operator-only, and it carries what the public surfaces deliberately do not:
+ * the owner's identity and the site's exact coordinates. The coordinates are
+ * here because ADR-013 requires them verified against the sky, and the
+ * operator cannot compare a plate solve with a number they are not shown.
+ *
+ */
+export type NetworkNodeReview = {
+    node: NetworkNode;
+    owner: NetworkNodeOwner;
+    site: NetworkNodeSite;
+    /**
+     * The node's primary instrument as registered. Null if it has been removed, which also makes the node unbookable.
+     */
+    telescope: RegisterNetworkTelescope | null;
+    evidence: NetworkNodeEvidence;
+    /**
+     * Every state change the node has been through, oldest first.
+     */
+    history: Array<NetworkNodeHistoryEntry>;
+};
+
+export type NetworkNodeOwner = {
+    id: string;
+    name: string;
+    email: string;
+};
+
+export type NetworkNodeSite = {
+    latitude: number;
+    longitude: number;
+    timezone: string;
+};
+
+/**
+ * What the database can say about ADR-013's conditions. It reports; it does not
+ * judge. Park proven and the owner's acceptance of terms have no record here
+ * and remain the operator's attestation on approval.
+ *
+ */
+export type NetworkNodeEvidence = {
+    /**
+     * The measurement approval checks for itself. Null when no envelope row exists.
+     */
+    safetyEnvelope: NetworkNodeEnvelopeEvidence | null;
+    /**
+     * Bearings recorded in the horizon mask. Zero means nothing has been surveyed.
+     */
+    horizonMaskEntries: number;
+    forbiddenAzimuthSectors: number;
+    /**
+     * Missions that reached COMPLETE on this observatory in REAL mode. A
+     * supervised first light is at least one; simulated missions prove nothing
+     * about the hardware and are not counted.
+     *
+     */
+    completedRealMissions: number;
+};
+
+export type NetworkNodeEnvelopeEvidence = {
+    /**
+     * Null is UNMEASURED, and approval refuses it.
+     */
+    maxAltitudeDegrees: number | null;
+    measuredAt: string | null;
+    measuredBy: string | null;
+    measurementNote: string | null;
+};
+
+export type NetworkNodeHistoryEntry = {
+    action: 'REGISTERED' | 'SUBMITTED' | 'APPROVED' | 'SUSPENDED';
+    occurredAt: string;
+    actorUserId: string | null;
+    /**
+     * Verbatim, for an approval or a suspension. The operator's own words.
+     */
+    reason: string | null;
+};
+
 export type NetworkNodeList = {
     items: Array<NetworkNode>;
 };
@@ -3224,6 +3310,73 @@ export type SubmitNetworkNodeForReviewResponses = {
 };
 
 export type SubmitNetworkNodeForReviewResponse = SubmitNetworkNodeForReviewResponses[keyof SubmitNetworkNodeForReviewResponses];
+
+export type AdminListNetworkNodesData = {
+    body?: never;
+    path?: never;
+    query?: {
+        approvalStatus?: NetworkNodeApprovalStatus;
+        /**
+         * Opaque forward pagination cursor from the previous page.
+         */
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/admin/network/nodes';
+};
+
+export type AdminListNetworkNodesErrors = {
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type AdminListNetworkNodesError = AdminListNetworkNodesErrors[keyof AdminListNetworkNodesErrors];
+
+export type AdminListNetworkNodesResponses = {
+    /**
+     * Node page.
+     */
+    200: NetworkNodePage;
+};
+
+export type AdminListNetworkNodesResponse = AdminListNetworkNodesResponses[keyof AdminListNetworkNodesResponses];
+
+export type AdminGetNetworkNodeReviewData = {
+    body?: never;
+    path: {
+        nodeId: string;
+    };
+    query?: never;
+    url: '/admin/network/nodes/{nodeId}';
+};
+
+export type AdminGetNetworkNodeReviewErrors = {
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+};
+
+export type AdminGetNetworkNodeReviewError = AdminGetNetworkNodeReviewErrors[keyof AdminGetNetworkNodeReviewErrors];
+
+export type AdminGetNetworkNodeReviewResponses = {
+    /**
+     * The node, under review.
+     */
+    200: NetworkNodeReview;
+};
+
+export type AdminGetNetworkNodeReviewResponse = AdminGetNetworkNodeReviewResponses[keyof AdminGetNetworkNodeReviewResponses];
 
 export type AdminApproveNetworkNodeData = {
     body: ApproveNetworkNodeRequest;

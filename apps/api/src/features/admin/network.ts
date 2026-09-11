@@ -4,6 +4,10 @@ import type {
   ApproveNetworkNodeRequest,
   ErrorCode,
   NetworkNode,
+  NetworkNodeApprovalStatus,
+  NetworkNodeHistoryEntry,
+  NetworkNodePage,
+  NetworkNodeReview,
   SuspendNetworkNodeRequest,
 } from "@darkview/contracts";
 import { recordAuditEvent } from "@darkview/db/audit";
@@ -269,4 +273,157 @@ export async function suspendNetworkNode(input: {
   }
 
   return { ok: true, node: toContractNode(suspended) };
+}
+
+/**
+ * The qualification queue, and every node by status (DV-122).
+ *
+ * Unscoped by owner, which is what makes it an operator read; the route guard is
+ * `requireOperator` and `admin-routes-guarded.test.ts` keeps it that way.
+ *
+ * Oldest first, unlike the mission list. That list answers "what is happening
+ * now"; this one is a queue, and the node that has waited longest is the one an
+ * operator should reach first. Keyset-paged with the id as tiebreak, because
+ * nodes are registered and change state while an operator reads.
+ */
+export async function listNetworkNodes(input: {
+  approvalStatus?: NetworkNodeApprovalStatus;
+  cursor?: string;
+  limit: number;
+}): Promise<NetworkNodePage> {
+  const { approvalStatus, cursor, limit } = input;
+
+  const rows = await getDatabase().observatoryNetworkNode.findMany({
+    where: approvalStatus ? { approvalStatus } : {},
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    select: NODE_COLUMNS,
+  });
+
+  const items = rows.slice(0, limit);
+  const hasMore = rows.length > limit;
+
+  return {
+    items: items.map(toContractNode),
+    page: { hasMore, nextCursor: hasMore ? (items.at(-1)?.id ?? null) : null },
+  };
+}
+
+/** The audit actions that are a node changing state, and what the contract calls them. */
+const HISTORY_ACTIONS = {
+  NETWORK_NODE_REGISTERED: "REGISTERED",
+  NETWORK_NODE_SUBMITTED: "SUBMITTED",
+  NETWORK_NODE_APPROVED: "APPROVED",
+  NETWORK_NODE_SUSPENDED: "SUSPENDED",
+} as const satisfies Record<string, NetworkNodeHistoryEntry["action"]>;
+
+/**
+ * Everything an operator reads before deciding a qualification (DV-122).
+ *
+ * It reports what the database knows about each of ADR-013's conditions and
+ * judges none of them. Approval still checks the measured envelope for itself and
+ * still takes the other five as attestations; this exists so those attestations
+ * are made against evidence rather than from memory.
+ *
+ * The history is read from the audit log rather than kept on the node. Every
+ * transition already writes an audit row with the operator's verbatim reason, and
+ * a second record of the same events is a second chance for the two to disagree
+ * about who suspended a telescope and why.
+ */
+export async function getNetworkNodeReview(
+  nodeId: string,
+): Promise<NetworkNodeReview | null> {
+  const database = getDatabase();
+
+  const node = await database.observatoryNetworkNode.findUnique({
+    where: { id: nodeId },
+    select: {
+      ...NODE_COLUMNS,
+      owner: { select: { id: true, name: true, email: true } },
+      primaryTelescope: {
+        select: {
+          name: true,
+          manufacturer: true,
+          model: true,
+          apertureMm: true,
+          focalLengthMm: true,
+        },
+      },
+      observatory: {
+        select: {
+          ...NODE_COLUMNS.observatory.select,
+          latitude: true,
+          longitude: true,
+          safetyEnvelope: {
+            select: {
+              maxAltitudeDegrees: true,
+              maxAltitudeMeasuredAt: true,
+              maxAltitudeMeasuredBy: true,
+              maxAltitudeMeasurementNote: true,
+              _count: { select: { horizonMask: true, forbiddenAzimuthSectors: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!node) return null;
+
+  const [completedRealMissions, audit] = await Promise.all([
+    // REAL only. A first light is the hardware doing it with somebody watching,
+    // and a simulated mission says nothing about a telescope on somebody's roof.
+    database.mission.count({
+      where: { observatoryId: node.observatoryId, state: "COMPLETE", mode: "REAL" },
+    }),
+    database.auditLog.findMany({
+      where: {
+        entityType: "ObservatoryNetworkNode",
+        entityId: node.id,
+        action: { in: Object.keys(HISTORY_ACTIONS) },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { action: true, actorUserId: true, metadata: true, createdAt: true },
+    }),
+  ]);
+
+  const envelope = node.observatory.safetyEnvelope;
+
+  return {
+    node: toContractNode(node),
+    owner: node.owner,
+    site: {
+      latitude: node.observatory.latitude,
+      longitude: node.observatory.longitude,
+      timezone: node.observatory.timezone,
+    },
+    telescope: node.primaryTelescope,
+    evidence: {
+      safetyEnvelope: envelope
+        ? {
+            maxAltitudeDegrees: envelope.maxAltitudeDegrees,
+            measuredAt: envelope.maxAltitudeMeasuredAt?.toISOString() ?? null,
+            measuredBy: envelope.maxAltitudeMeasuredBy,
+            measurementNote: envelope.maxAltitudeMeasurementNote,
+          }
+        : null,
+      horizonMaskEntries: envelope?._count.horizonMask ?? 0,
+      forbiddenAzimuthSectors: envelope?._count.forbiddenAzimuthSectors ?? 0,
+      completedRealMissions,
+    },
+    history: audit.map((row) => ({
+      action: HISTORY_ACTIONS[row.action as keyof typeof HISTORY_ACTIONS],
+      occurredAt: row.createdAt.toISOString(),
+      actorUserId: row.actorUserId,
+      reason: reasonOf(row.metadata),
+    })),
+  };
+}
+
+/** The operator's verbatim reason, when the audit row recorded one. */
+function reasonOf(metadata: unknown): string | null {
+  if (typeof metadata !== "object" || metadata === null) return null;
+  const reason = (metadata as { reason?: unknown }).reason;
+  return typeof reason === "string" ? reason : null;
 }

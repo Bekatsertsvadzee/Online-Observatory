@@ -1128,6 +1128,59 @@ class NetworkNode(BaseModel):
     created_at: AwareDatetime = Field(..., alias='createdAt')
 
 
+class NetworkNodePage(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    items: list[NetworkNode]
+    page: PageMeta
+
+
+class NetworkNodeOwner(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: UUID
+    name: str
+    email: EmailStr
+
+
+class NetworkNodeSite(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    latitude: float = Field(..., ge=-90.0, le=90.0)
+    longitude: float = Field(..., ge=-180.0, le=180.0)
+    timezone: str
+
+
+class NetworkNodeEnvelopeEvidence(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    max_altitude_degrees: float | None = Field(..., alias='maxAltitudeDegrees', description='Null is UNMEASURED, and approval refuses it.')
+    measured_at: AwareDatetime | None = Field(..., alias='measuredAt')
+    measured_by: str | None = Field(..., alias='measuredBy')
+    measurement_note: str | None = Field(..., alias='measurementNote')
+
+
+class Action(StrEnum):
+    registered = 'REGISTERED'
+    submitted = 'SUBMITTED'
+    approved = 'APPROVED'
+    suspended = 'SUSPENDED'
+
+
+class NetworkNodeHistoryEntry(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    action: Action
+    occurred_at: AwareDatetime = Field(..., alias='occurredAt')
+    actor_user_id: UUID | None = Field(..., alias='actorUserId')
+    reason: str | None = Field(..., description="Verbatim, for an approval or a suspension. The operator's own words.")
+
+
 class NetworkNodeList(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -1781,6 +1834,22 @@ class MissionSession(BaseModel):
     allowed_commands: list[ClientCommandType] | None = Field(None, alias='allowedCommands')
 
 
+class NetworkNodeEvidence(BaseModel):
+    """
+    What the database can say about ADR-013's conditions. It reports; it does not
+    judge. Park proven and the owner's acceptance of terms have no record here
+    and remain the operator's attestation on approval.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    safety_envelope: NetworkNodeEnvelopeEvidence | None = Field(..., alias='safetyEnvelope', description='The measurement approval checks for itself. Null when no envelope row exists.')
+    horizon_mask_entries: int = Field(..., alias='horizonMaskEntries', description='Bearings recorded in the horizon mask. Zero means nothing has been surveyed.', ge=0)
+    forbidden_azimuth_sectors: int = Field(..., alias='forbiddenAzimuthSectors', ge=0)
+    completed_real_missions: int = Field(..., alias='completedRealMissions', description='Missions that reached COMPLETE on this observatory in REAL mode. A\nsupervised first light is at least one; simulated missions prove nothing\nabout the hardware and are not counted.\n', ge=0)
+
+
 class RegisterNetworkNodeRequest(BaseModel):
     """
     The site and the instrument, together. A partner has neither until they
@@ -1801,3 +1870,24 @@ class RegisterNetworkNodeRequest(BaseModel):
     longitude: float = Field(..., ge=-180.0, le=180.0)
     timezone: str = Field(..., min_length=1)
     telescope: RegisterNetworkTelescope
+
+
+class NetworkNodeReview(BaseModel):
+    """
+    One node, and the evidence for and against qualifying it (DV-122).
+
+    Operator-only, and it carries what the public surfaces deliberately do not:
+    the owner's identity and the site's exact coordinates. The coordinates are
+    here because ADR-013 requires them verified against the sky, and the
+    operator cannot compare a plate solve with a number they are not shown.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    node: NetworkNode
+    owner: NetworkNodeOwner
+    site: NetworkNodeSite
+    telescope: RegisterNetworkTelescope | None = Field(..., description="The node's primary instrument as registered. Null if it has been removed, which also makes the node unbookable.")
+    evidence: NetworkNodeEvidence
+    history: list[NetworkNodeHistoryEntry] = Field(..., description='Every state change the node has been through, oldest first.')
