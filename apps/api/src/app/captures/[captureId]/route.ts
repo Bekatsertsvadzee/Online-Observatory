@@ -23,6 +23,7 @@ export async function GET(
   const capture = await getCapture({
     userId: guard.session.user.id,
     captureId,
+    now: new Date(),
   });
 
   if (!capture) return apiError(404, "NOT_FOUND", "No such capture.");

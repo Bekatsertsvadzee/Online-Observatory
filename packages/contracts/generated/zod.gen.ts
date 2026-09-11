@@ -878,7 +878,9 @@ export const zOperatorOverrideRequest = z.strictObject({
 
 /**
  * IMAGE is the delivered, stretched, watermarked image. FITS is the real frame
- * data. UNMARKED is the stored copy without the overlay.
+ * data. UNMARKED is the stored copy without the overlay. THUMBNAIL is a small
+ * preview of the same picture, for a Collection card; it is what
+ * `Capture.thumbnailUrl` signs.
  *
  */
 export const zCaptureAssetKind = z.enum([
@@ -1201,6 +1203,12 @@ export const zLiveFrameHeader = z.strictObject({
 
 /**
  * A finished capture has been uploaded by the agent and is ready for the cloud to record.
+ *
+ * Every storage key must be the one the cloud granted for that kind. The cloud
+ * re-derives each and refuses the whole capture if any differs: a key the
+ * agent could choose would let it attach another customer's object to a
+ * capture it reported (DV-065).
+ *
  */
 export const zAgentCaptureReady = z.strictObject({
     type: z.enum(['AGENT_CAPTURE_READY']),
@@ -1218,6 +1226,7 @@ export const zAgentCaptureReady = z.strictObject({
     imageStorageKey: z.string(),
     unmarkedStorageKey: z.string().nullish(),
     fitsStorageKey: z.string().nullish(),
+    thumbnailStorageKey: z.string().nullish(),
     solvedFocalLengthMm: z.number().nullish(),
     widthPx: z.int().nullish(),
     heightPx: z.int().nullish(),

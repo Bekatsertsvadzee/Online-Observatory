@@ -2,14 +2,61 @@ import "server-only";
 
 import type { Capture, CapturePage } from "@darkview/contracts";
 import { CAPTURE_CONTRACT_COLUMNS, toContractCapture } from "@darkview/db/capture";
+import { presignDownload } from "@darkview/storage/presign";
 
 import { getDatabase } from "@/lib/db/client";
+import { getStorage } from "@/lib/storage/configuration";
 
 // The contract's Limit parameter -- minimum 1, maximum 100, default 20 -- has one
 // definition, and this is where the mission events route already reaches for it.
 // A third copy of the same three lines is how two endpoints come to disagree about
 // what `limit=0` means.
 export { pageLimitOf } from "@/features/audit/logs";
+
+/**
+ * The columns a contract Capture needs, plus the one asset its thumbnail is.
+ *
+ * `take: 1` because `CaptureAsset_captureId_kind_key` allows one THUMBNAIL per
+ * capture; the limit says so rather than trusting the index to be there.
+ */
+const CAPTURE_WITH_THUMBNAIL = {
+  ...CAPTURE_CONTRACT_COLUMNS,
+  assets: {
+    where: { kind: "THUMBNAIL" as const },
+    select: { storageKey: true },
+    take: 1,
+  },
+};
+
+type CaptureWithThumbnail = Parameters<typeof toContractCapture>[0] & {
+  assets: { storageKey: string }[];
+};
+
+/**
+ * A contract Capture, with its thumbnail signed for this caller (DV-065).
+ *
+ * The same presigned GET `GET /captures/{id}/download` mints, for the same reason:
+ * the bucket is private and a signed URL is the only way a customer reaches their
+ * own object. Minted per request against the caller, never stored -- a stored URL
+ * is a credential in a table with an expiry nobody watches.
+ *
+ * Null when no THUMBNAIL was written, which is the contract's own word for "no
+ * thumbnail". A capture from an agent that predates DV-065 has none, and a
+ * fabricated path would be a broken image in every card.
+ *
+ * Signing is arithmetic, not a request: nothing leaves this process, so a page of
+ * a hundred captures costs a hundred HMACs and no round trips.
+ */
+async function withSignedThumbnail(
+  row: CaptureWithThumbnail,
+  now: Date,
+): Promise<Capture> {
+  const thumbnail = row.assets.at(0);
+  if (!thumbnail) return toContractCapture(row);
+
+  const { url } = await presignDownload(getStorage(), thumbnail.storageKey, now);
+  return toContractCapture(row, url);
+}
 
 /**
  * The Collection: what a customer keeps.
@@ -47,8 +94,9 @@ export async function listCaptures(input: {
   userId: string;
   cursor?: string;
   limit: number;
+  now: Date;
 }): Promise<CapturePage> {
-  const { userId, cursor, limit } = input;
+  const { userId, cursor, limit, now } = input;
 
   const rows = await getDatabase().capture.findMany({
     where: { userId },
@@ -60,18 +108,14 @@ export async function listCaptures(input: {
     // query that could disagree with the page beside it.
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    select: CAPTURE_CONTRACT_COLUMNS,
+    select: CAPTURE_WITH_THUMBNAIL,
   });
 
   const items = rows.slice(0, limit);
   const hasMore = rows.length > limit;
 
   return {
-    // thumbnailUrl is null throughout. It is a signed, short-expiry URL and there
-    // is nothing to sign against yet -- see the download route. Null is the
-    // contract's own word for "no thumbnail", and a fabricated path would be a
-    // broken image in every card.
-    items: items.map((row) => toContractCapture(row)),
+    items: await Promise.all(items.map((row) => withSignedThumbnail(row, now))),
     page: { hasMore, nextCursor: hasMore ? (items.at(-1)?.id ?? null) : null },
   };
 }
@@ -92,11 +136,12 @@ export async function listCaptures(input: {
 export async function getCapture(input: {
   userId: string;
   captureId: string;
+  now: Date;
 }): Promise<Capture | null> {
   const row = await getDatabase().capture.findFirst({
     where: { id: input.captureId, userId: input.userId },
-    select: CAPTURE_CONTRACT_COLUMNS,
+    select: CAPTURE_WITH_THUMBNAIL,
   });
 
-  return row ? toContractCapture(row) : null;
+  return row ? withSignedThumbnail(row, input.now) : null;
 }

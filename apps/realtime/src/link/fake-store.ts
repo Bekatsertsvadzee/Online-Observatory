@@ -264,7 +264,10 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   }
 
   /** Recorded captures, keyed by the command that produced them. */
-  readonly captures = new Map<string, { capture: Capture; ownerId: string }>();
+  readonly captures = new Map<
+    string,
+    { capture: Capture; ownerId: string; assets: CaptureRecord["assets"] }
+  >();
 
   async recordCapture(record: CaptureRecord): Promise<CaptureOutcome> {
     const mission = this.missions.get(record.missionId);
@@ -307,7 +310,11 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
       thumbnailUrl: null,
     };
 
-    this.captures.set(record.commandId, { capture, ownerId: mission.userId });
+    this.captures.set(record.commandId, {
+      capture,
+      ownerId: mission.userId,
+      assets: record.assets,
+    });
     return { outcome: "RECORDED", capture };
   }
 

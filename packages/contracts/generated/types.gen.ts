@@ -1234,7 +1234,9 @@ export type OperatorOverrideRequest = {
 
 /**
  * IMAGE is the delivered, stretched, watermarked image. FITS is the real frame
- * data. UNMARKED is the stored copy without the overlay.
+ * data. UNMARKED is the stored copy without the overlay. THUMBNAIL is a small
+ * preview of the same picture, for a Collection card; it is what
+ * `Capture.thumbnailUrl` signs.
  *
  */
 export const CaptureAssetKind = {
@@ -1246,7 +1248,9 @@ export const CaptureAssetKind = {
 
 /**
  * IMAGE is the delivered, stretched, watermarked image. FITS is the real frame
- * data. UNMARKED is the stored copy without the overlay.
+ * data. UNMARKED is the stored copy without the overlay. THUMBNAIL is a small
+ * preview of the same picture, for a Collection card; it is what
+ * `Capture.thumbnailUrl` signs.
  *
  */
 export type CaptureAssetKind = typeof CaptureAssetKind[keyof typeof CaptureAssetKind];
@@ -1638,6 +1642,12 @@ export type LiveFrameHeader = {
 
 /**
  * A finished capture has been uploaded by the agent and is ready for the cloud to record.
+ *
+ * Every storage key must be the one the cloud granted for that kind. The cloud
+ * re-derives each and refuses the whole capture if any differs: a key the
+ * agent could choose would let it attach another customer's object to a
+ * capture it reported (DV-065).
+ *
  */
 export type AgentCaptureReady = {
     type: 'AGENT_CAPTURE_READY';
@@ -1658,6 +1668,12 @@ export type AgentCaptureReady = {
     imageStorageKey: string;
     unmarkedStorageKey?: string | null;
     fitsStorageKey?: string | null;
+    /**
+     * The THUMBNAIL the agent wrote, if it wrote one (DV-065). Optional, so an
+     * agent that predates it still sends a valid message.
+     *
+     */
+    thumbnailStorageKey?: string | null;
     solvedFocalLengthMm?: number | null;
     widthPx?: number | null;
     heightPx?: number | null;

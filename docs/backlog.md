@@ -85,10 +85,11 @@ Both were raised by work that stopped rather than inventing a field, which is wh
 `CLAUDE.md` requires: "If a task needs a field that does not exist in the contract,
 stop."
 
-**DV-065** is small. `CaptureAssetKind` has a THUMBNAIL and `AGENT_CAPTURE_READY`
-has no field to announce one, so `thumbnailUrl` cannot become non-null by any
+**DV-065** was small. `CaptureAssetKind` had a THUMBNAIL and `AGENT_CAPTURE_READY`
+had no field to announce one, so `thumbnailUrl` could not become non-null by any
 amount of agent work. ADR-012 listed it as a consequence of the capture path
-landing; it is not.
+landing; it was not. **It has landed** — see *What DV-065 built* below, including
+the storage-key check it turned up.
 
 **DV-066 is the one that matters.** DV-120 registers a partner node, DV-121 reads
 the hours its owner offered, and neither made a partner telescope bookable,
@@ -1161,3 +1162,51 @@ tests), and a coordinate leaking into the public list.
 - **The admin routes remain single-observatory** through `currentObservatoryId()`.
   That was already recorded as waiting on a contract change, and DV-066 does not
   change it.
+
+## What DV-065 built, and the check it turned up
+
+A capture now has a thumbnail, end to end: the agent renders and uploads one, the
+cloud records it, and `GET /captures` and `GET /captures/{id}` hand the owner a
+signed URL for it.
+
+| Piece | What changed |
+| --- | --- |
+| Contract | `AGENT_CAPTURE_READY.thumbnailStorageKey`, optional and nullable, so an agent that predates it still sends a valid message. `CaptureAssetKind` now says what THUMBNAIL is. |
+| Agent | `render()` produces a third asset: the **unmarked** picture, downscaled to a PROVISIONAL 480 px long edge. It is requested second, after IMAGE, and reported only if written. |
+| Realtime | Records a THUMBNAIL asset when the key is present. The push (`MISSION_CAPTURE_READY`) still carries `thumbnailUrl: null`: a signed URL is minted against a caller, and a push has none. |
+| API | The Collection reads sign the THUMBNAIL with the same `presignDownload` a download uses: five minutes, one object, per request, never stored. Null when none was written. |
+
+**The thumbnail is uncaptioned, on purpose.** At a few hundred pixels the caption
+is a smudge, and the card showing the thumbnail carries the capture's `mode` beside
+it — which is where SIMULATED is said legibly. Every thumbnail is one tap from the
+captioned IMAGE.
+
+**The check it turned up.** The grant has always derived each object key
+cloud-side, "so a compromised agent cannot name another customer's object". But
+`AGENT_CAPTURE_READY` reported the keys back and the cloud recorded them as given —
+so the derivation was a promise nothing kept. Under ADR-013 the agent may be a
+stranger's: a partner owner could report a capture on their own mission whose
+IMAGE was another customer's object key, book their own telescope as a customer,
+and be handed a signed download of somebody else's image.
+
+The realtime service now re-derives the key for every reported kind — IMAGE,
+UNMARKED, FITS and THUMBNAIL — from the observatory, mission and command it already
+holds, and refuses the whole capture with `FORBIDDEN` if any differs. The whole
+capture, not the one asset: a message carrying one key this agent was never
+granted says nothing trustworthy about the others. The maintainer chose to fix it
+here rather than as its own issue, because DV-065 adds a key on the same path that
+the API then signs automatically on every Collection page.
+
+**Verified by removing each protection and confirming a named test fails:** the
+key check (five refusal cases: another observatory's object, another mission's,
+another capture's thumbnail, one kind's key reported as another, and a key that is
+not derived at all), the THUMBNAIL grant request, and deriving the thumbnail from
+the captioned image instead of the unmarked one. The existing refusal tests now
+derive their keys from the message's own mission and command, so they are still
+refused by the ownership checks they exist for rather than incidentally by this one.
+
+**Development seed data.** The seed's demo captures carry THUMBNAIL rows whose
+keys are public demo paths (`/captures/saturn-dv-0001.svg`) used by the shared
+observations page. `GET /captures` now signs those as bucket keys, so a seeded
+Collection shows signed URLs to objects that do not exist in the bucket. Nothing
+real is affected; the seed would need real objects or no THUMBNAIL rows to render.

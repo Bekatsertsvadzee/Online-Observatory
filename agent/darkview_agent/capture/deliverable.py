@@ -5,18 +5,19 @@ and this is the second job. `stream/mjpeg.py` optimises a frame for a socket it
 has to fit on once a second; this optimises the same frame for something somebody
 downloads once and keeps -- bigger, better quality, and captioned.
 
-Two assets, both derived from one stack:
+Three assets, all derived from one stack:
 
 | Kind | What it is |
 | --- | --- |
 | IMAGE | The delivered picture. Captioned, so it carries its own provenance. |
 | UNMARKED | The same picture without the caption, as `CaptureAssetKind` defines it. |
+| THUMBNAIL | The unmarked picture, small, for a Collection card (DV-065). |
 
-**No THUMBNAIL, and not by choice.** `AGENT_CAPTURE_READY` carries
-`imageStorageKey`, `unmarkedStorageKey` and `fitsStorageKey` and has no field for
-a thumbnail, so there is no way to tell the cloud that one was written. Rendering
-and uploading an object nothing can name would leave an orphan in the bucket and
-`thumbnailUrl` null anyway. It needs a contract change, not a line here.
+**The thumbnail is uncaptioned, on purpose.** At a few hundred pixels the caption
+is a smudge along one edge rather than something anybody can read, and the card
+that shows it carries the capture's `mode` beside it -- which is where a customer
+is told SIMULATED, rather than in text too small to see. Every thumbnail is one
+tap from the captioned IMAGE it previews.
 
 FITS is not produced either. It is the real linear frame data, the contract makes
 it nullable, and writing one means a FITS library and a header convention that
@@ -51,6 +52,15 @@ DEFAULT_IMAGE_MAX_EDGE_PX = 2048
 #: the artefact the customer keeps, and it is encoded once.
 DEFAULT_IMAGE_QUALITY = 90
 
+#: The long edge of the thumbnail. PROVISIONAL -- a card in a grid on a phone is
+#: a few hundred CSS pixels wide, and twice that covers a high-density screen. No
+#: controlling document sets it; darkview-clients' layout is what should.
+DEFAULT_THUMBNAIL_MAX_EDGE_PX = 480
+
+#: JPEG quality for the thumbnail. Lower than the image's 90: it is looked at
+#: small and often, and a Collection page loads one per capture.
+DEFAULT_THUMBNAIL_QUALITY = 80
+
 CONTENT_TYPE = "image/jpeg"
 
 
@@ -70,6 +80,7 @@ class Deliverable:
 
     image: RenderedAsset
     unmarked: RenderedAsset
+    thumbnail: RenderedAsset
 
 
 def _fit(image: Image.Image, max_edge_px: int) -> Image.Image:
@@ -99,6 +110,8 @@ def render(
     settings: StreamSettings | None = None,
     image_max_edge_px: int = DEFAULT_IMAGE_MAX_EDGE_PX,
     image_quality: int = DEFAULT_IMAGE_QUALITY,
+    thumbnail_max_edge_px: int = DEFAULT_THUMBNAIL_MAX_EDGE_PX,
+    thumbnail_quality: int = DEFAULT_THUMBNAIL_QUALITY,
 ) -> Deliverable:
     """Turn one stacked frame into the assets that get uploaded.
 
@@ -111,13 +124,20 @@ def render(
     caption. That is what `CaptureAssetKind` says UNMARKED is -- "the stored copy
     without the overlay" -- so a smaller or differently-stretched second file
     would be a different picture rather than the same one uncaptioned.
+
+    The thumbnail is downscaled from that same unmarked picture, never
+    re-stretched: it previews the image the customer will open, not a different
+    rendering of the stack.
     """
     stretched = Image.fromarray(stretch_to_8bit(frame.pixels, settings or StreamSettings()))
     full = _fit(stretched, image_max_edge_px)
 
+    unmarked = full.convert("RGB")
+
     return Deliverable(
         image=_encode(apply_caption(full, caption), image_quality),
-        unmarked=_encode(full.convert("RGB"), image_quality),
+        unmarked=_encode(unmarked, image_quality),
+        thumbnail=_encode(_fit(unmarked, thumbnail_max_edge_px), thumbnail_quality),
     )
 
 
@@ -125,6 +145,8 @@ __all__ = [
     "CONTENT_TYPE",
     "DEFAULT_IMAGE_MAX_EDGE_PX",
     "DEFAULT_IMAGE_QUALITY",
+    "DEFAULT_THUMBNAIL_MAX_EDGE_PX",
+    "DEFAULT_THUMBNAIL_QUALITY",
     "Deliverable",
     "RenderedAsset",
     "render",

@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { CloudToAgentMessage, CommandEnvelope } from "@darkview/contracts";
+import type { CaptureAssetKind, CloudToAgentMessage, CommandEnvelope } from "@darkview/contracts";
+import { captureObjectKey } from "@darkview/storage/keys";
 
 import { AgentLink } from "@/link/agent-link";
 import { FakeLinkStore } from "@/link/fake-store";
@@ -45,7 +46,32 @@ function captureCommand(
   } as CommandEnvelope;
 }
 
+/** The key a grant for this capture would have derived. */
+function grantedKey(
+  kind: CaptureAssetKind,
+  ids: { missionId?: string; commandId?: string; observatoryId?: string } = {},
+) {
+  return captureObjectKey({
+    observatoryId: ids.observatoryId ?? observatory.id,
+    missionId: ids.missionId ?? MISSION,
+    commandId: ids.commandId ?? commandId,
+    kind,
+  });
+}
+
+/**
+ * A capture report whose keys are the ones its own grants would have derived.
+ *
+ * Derived from the message's final mission and command, not from the defaults, so
+ * a test that points a capture at another mission is refused by the check it is
+ * about -- the mission's owner, the command's scope -- and not incidentally by
+ * the key check (DV-065) firing first.
+ */
 function captureReady(overrides: Record<string, unknown> = {}) {
+  const ids = {
+    missionId: (overrides.missionId as string | undefined) ?? MISSION,
+    commandId: (overrides.commandId as string | undefined) ?? commandId,
+  };
   return JSON.stringify({
     type: "AGENT_CAPTURE_READY",
     messageId: randomUUID(),
@@ -59,7 +85,7 @@ function captureReady(overrides: Record<string, unknown> = {}) {
     gain: 250,
     framesStacked: 40,
     integrationSeconds: 160,
-    imageStorageKey: "captures/2026/09/08/image.jpg",
+    imageStorageKey: grantedKey("IMAGE", ids),
     unmarkedStorageKey: null,
     fitsStorageKey: null,
     solvedFocalLengthMm: 1500,
@@ -184,19 +210,46 @@ describe("a capture entering the Collection", () => {
     const second = randomUUID();
     commandId = second;
     store.addCommand({ observatoryId: observatory.id, envelope: captureCommand() });
-    await link.receive(captureReady({ fitsStorageKey: "captures/2026/09/08/frame.fits" }));
+    await link.receive(captureReady({ fitsStorageKey: grantedKey("FITS") }));
 
     expect(broadcast.captures[1].fitsAvailable).toBe(true);
   });
 
-  it("carries no thumbnail URL", async () => {
+  it("carries no thumbnail URL, even when a thumbnail was written", async () => {
     // A signed, short-expiry URL is minted against a caller. This is a push, so
-    // there is no caller, and a stored path would be a public bucket URL.
+    // there is no caller, and a stored path would be a public bucket URL. The
+    // client reads the Collection for it.
     const link = await online();
 
-    await link.receive(captureReady());
+    await link.receive(captureReady({ thumbnailStorageKey: grantedKey("THUMBNAIL") }));
 
     expect(broadcast.captures[0].thumbnailUrl).toBeNull();
+  });
+
+  // DV-065: the agent can now say it wrote one, so the cloud can sign it later.
+  it("records a THUMBNAIL asset when the agent reports one", async () => {
+    const link = await online();
+
+    await link.receive(captureReady({ thumbnailStorageKey: grantedKey("THUMBNAIL") }));
+
+    expect(store.captures.get(commandId)?.assets).toEqual([
+      { kind: "IMAGE", storageKey: grantedKey("IMAGE") },
+      { kind: "THUMBNAIL", storageKey: grantedKey("THUMBNAIL") },
+    ]);
+  });
+
+  it("records no THUMBNAIL when an older agent sends none", async () => {
+    // The field is optional, so an agent that predates DV-065 is still valid and
+    // its capture still lands -- with no thumbnail rather than a broken one.
+    const link = await online();
+    const message = JSON.parse(captureReady()) as Record<string, unknown>;
+    delete message.thumbnailStorageKey;
+
+    await link.receive(JSON.stringify(message));
+
+    expect(store.captures.get(commandId)?.assets.map((asset) => asset.kind)).toEqual([
+      "IMAGE",
+    ]);
   });
 });
 
@@ -275,6 +328,45 @@ describe("what is refused", () => {
 
     expect(store.captures.size).toBe(0);
     expect(broadcast.captures).toEqual([]);
+  });
+
+  /**
+   * DV-065. The grant derives every key cloud-side so an agent cannot choose one;
+   * until this check, the report of what was written took the agent's word for it.
+   * Under ADR-013 the agent may be a stranger's, and a key it could choose is a key
+   * to another customer's object: the API signs downloads of whatever is recorded.
+   */
+  // Thunks, not values: the table is built when the file loads, before
+  // beforeEach has chosen this test's command.
+  it.each<[string, () => Record<string, unknown>]>([
+    [
+      "an IMAGE that is another observatory's object",
+      () => ({ imageStorageKey: grantedKey("IMAGE", { observatoryId: OTHER_OBSERVATORY }) }),
+    ],
+    [
+      "an IMAGE that is another mission's object",
+      () => ({ imageStorageKey: grantedKey("IMAGE", { missionId: OTHER_MISSION }) }),
+    ],
+    [
+      "a THUMBNAIL that is another capture's object",
+      () => ({ thumbnailStorageKey: grantedKey("THUMBNAIL", { commandId: randomUUID() }) }),
+    ],
+    [
+      "one kind's key reported as another kind",
+      () => ({ unmarkedStorageKey: grantedKey("IMAGE") }),
+    ],
+    [
+      "a key that is not a derived key at all",
+      () => ({ imageStorageKey: "captures/anything.jpg" }),
+    ],
+  ])("refuses a capture reporting %s", async (_label, overrides) => {
+    const link = await online();
+
+    await link.receive(captureReady(overrides()));
+
+    expect(store.captures.size).toBe(0);
+    expect(broadcast.captures).toEqual([]);
+    expect(sent.at(-1)).toMatchObject({ type: "CLOUD_ERROR", code: "FORBIDDEN" });
   });
 
   it("ignores a capture that arrives before the hello", async () => {
