@@ -221,12 +221,27 @@ paths:
     get:
       operationId: listTonightTargets
       tags: [targets]
-      summary: Catalogue filtered by live ephemeris.
+      summary: Catalogue filtered by live ephemeris, at one observatory.
       description: |
         Computed at request time from altitude, Sun angle, Moon separation and angular
         size fit. Never served from a static list.
+
+        Evaluated at one observatory (DV-067). Visibility is a fact about a site, not
+        about the catalogue: the same instant is midnight at one telescope and
+        afternoon at another, and each has its own horizon and its own measured
+        altitude limit. There is no list of what is up "tonight" without a place.
+
+        404 when no bookable observatory has that id, on the same rule `GET /slots`
+        applies: unknown and not bookable are one answer.
       security: []
       parameters:
+        - name: observatoryId
+          in: query
+          required: true
+          description: An `id` from `GET /observatories`.
+          schema:
+            type: string
+            format: uuid
         - name: at
           in: query
           required: false
@@ -241,6 +256,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TonightTargetList"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
 
   /targets/{slug}:
     get:
@@ -1614,8 +1633,12 @@ components:
     TonightTargetList:
       type: object
       additionalProperties: false
-      required: [items, evaluatedAt]
+      required: [observatoryId, items, evaluatedAt]
       properties:
+        observatoryId:
+          type: string
+          format: uuid
+          description: The observatory every assessment in `items` was made at.
         items:
           type: array
           items:

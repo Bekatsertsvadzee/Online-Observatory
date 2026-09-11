@@ -78,6 +78,7 @@ wired, and what it deferred** below before touching command intake.
 | DV-064 | Notifications | M |
 | DV-065 | Contract: `AGENT_CAPTURE_READY` cannot announce a thumbnail | S |
 | DV-066 | Contract: the booking surface has no observatory dimension (ADR-015) | L |
+| DV-067 | Contract: `GET /targets/tonight` has no observatory dimension | S |
 
 ### The two contract issues, and why they exist
 
@@ -1149,10 +1150,10 @@ tests), and a coordinate leaking into the public list.
 
 **What DV-066 did not touch, and what now needs it:**
 
-- **`GET /targets/tonight` still resolves the observatory with `findFirst`.** It
-  computes visibility for the first observatory's site, so a customer about to book a
-  partner in Santiago is shown Tbilisi's sky. It needs its own `observatoryId`, which
-  is a contract change of its own and outside the booking surface this issue named.
+- **`GET /targets/tonight` still resolved the observatory with `findFirst`.** It
+  computed visibility for the first observatory's site, so a customer about to book a
+  partner in Santiago was shown Tbilisi's sky. It needed its own `observatoryId`, a
+  contract change of its own: **DV-067, since landed.**
 - **The slot list's held set is still keyed on start instants.** Correct for one
   slot length. When the second length ships, it must become an interval overlap, or
   the list will show as free a slot the constraint then refuses — safe, since the
@@ -1210,3 +1211,38 @@ keys are public demo paths (`/captures/saturn-dv-0001.svg`) used by the shared
 observations page. `GET /captures` now signs those as bucket keys, so a seeded
 Collection shows signed URLs to objects that do not exist in the bucket. Nothing
 real is affected; the seed would need real objects or no THUMBNAIL rows to render.
+
+## What DV-067 built
+
+The follow-up DV-066 named and did not take: what is up tonight, evaluated at the
+telescope the customer chose.
+
+**A breaking contract change, on DV-066's precedent.** `GET /targets/tonight` now
+**requires** `observatoryId`, answers 404 for an id that is unknown or not bookable
+and 422 for a malformed one, and `TonightTargetList` carries the `observatoryId` its
+assessments were made at. darkview-clients must re-copy the spec.
+
+**Required rather than defaulted, for the reason `GET /slots` gave.** Visibility is
+a fact about a site, not about the catalogue: the same instant is midnight at one
+telescope and afternoon at another, and each has its own horizon and its own
+measured altitude limit. A default would be the `findFirst` this replaced.
+
+**The same resolver as the booking surface.** Bookability is read from
+`features/booking/observatories.ts`, so a telescope that cannot be booked has no
+"tonight" either, and a suspended node answers exactly as a random id does. The
+safety envelope is read separately, scoped by the same id — the resolver has no use
+for it, and every booking surface would otherwise carry it.
+
+**The endpoint had no tests at all.** It now has seven, against a real database:
+two sites at one instant (midnight in Tbilisi, a Santiago summer afternoon) must
+disagree about the Sun's altitude, a measured site and an unmeasured one must
+disagree about `SAFETY_ENVELOPE_UNMEASURED`, and every unbookable state answers
+nothing. **Verified by removing each protection and confirming a named test fails:**
+evaluating at the earliest observatory whatever was asked (two tests), and reading
+the first envelope in the table instead of this observatory's.
+
+**Still unread: `TargetObservatory`.** The schema has a per-observatory target
+compatibility table (`Observatory.compatibleTargets`) that nothing reads. Every
+bookable telescope is offered the whole catalogue, assessed at its own sky. Whether
+a partner's instrument should be offered a narrower list is a product decision
+nobody has taken, not a gap in this change.
