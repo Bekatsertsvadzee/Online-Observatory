@@ -367,6 +367,19 @@ export const zSetWeatherHoldRequest = z.strictObject({
     note: z.string().nullish()
 });
 
+/**
+ * The instrument, as a customer would compare two of them. ADR-015: a partner
+ * is selling *that* telescope, with its aperture, and a customer choosing
+ * between two needs to see the difference.
+ *
+ */
+export const zBookableTelescope = z.strictObject({
+    manufacturer: z.string(),
+    model: z.string(),
+    apertureMm: z.number().gt(0),
+    focalLengthMm: z.number().gt(0)
+});
+
 export const zSlotUnavailableReason = z.enum([
     'ALREADY_BOOKED',
     'OUTSIDE_ASTRONOMICAL_DARKNESS',
@@ -377,6 +390,7 @@ export const zSlotUnavailableReason = z.enum([
 ]);
 
 export const zSlot = z.strictObject({
+    observatoryId: z.uuid(),
     startAt: z.iso.datetime(),
     endAt: z.iso.datetime(),
     durationMinutes: z.int().gt(0),
@@ -387,6 +401,7 @@ export const zSlot = z.strictObject({
 });
 
 export const zSlotList = z.strictObject({
+    observatoryId: z.uuid(),
     date: z.iso.date(),
     items: z.array(zSlot)
 });
@@ -402,6 +417,7 @@ export const zBookingStatus = z.enum([
 export const zBooking = z.strictObject({
     id: z.uuid(),
     userId: z.uuid(),
+    observatoryId: z.uuid(),
     targetId: z.uuid(),
     slotStartAt: z.iso.datetime(),
     durationMinutes: z.int().gt(0),
@@ -414,6 +430,7 @@ export const zBooking = z.strictObject({
 });
 
 export const zCreateBookingRequest = z.strictObject({
+    observatoryId: z.uuid(),
     targetId: z.uuid(),
     slotStartAt: z.iso.datetime(),
     durationMinutes: z.int().gt(0),
@@ -915,6 +932,35 @@ export const zCaptureDownload = z.strictObject({
  *
  */
 export const zNetworkNodeKind = z.enum(['FIRST_PARTY', 'PARTNER']);
+
+/**
+ * One telescope a customer may book, and what a customer needs to choose it.
+ *
+ * ADR-015 leaves how a customer chooses between instruments undecided -- a
+ * list, a map, a recommendation -- so this carries what any of those needs
+ * and no more. There are no coordinates: a map is not decided, and precise
+ * coordinates of somebody else's telescope are not a public field.
+ *
+ * `nameKa` may equal `nameEn`. A partner registers one `siteName`, and
+ * manufacturing a Georgian name for somebody else's property would be
+ * inventing data about it.
+ *
+ */
+export const zBookableObservatory = z.strictObject({
+    id: z.uuid(),
+    slug: z.string(),
+    kind: zNetworkNodeKind,
+    nameEn: z.string(),
+    nameKa: z.string(),
+    city: z.string(),
+    countryCode: z.string().length(2),
+    timezone: z.string(),
+    telescope: zBookableTelescope
+});
+
+export const zBookableObservatoryList = z.strictObject({
+    items: z.array(zBookableObservatory)
+});
 
 /**
  * DRAFT is the resting state and it refuses everything. UNDER_REVIEW is the
@@ -1514,6 +1560,11 @@ export const zGetCurrentUserResponse = zUser;
  */
 export const zGetObservatoryStatusResponse = zPublicObservatoryStatus;
 
+/**
+ * Every bookable observatory.
+ */
+export const zListBookableObservatoriesResponse = zBookableObservatoryList;
+
 export const zListTargetsQuery = z.object({
     cursor: z.string().optional(),
     limit: z.int().gte(1).lte(100).optional().default(20)
@@ -1543,6 +1594,7 @@ export const zGetTargetPath = z.object({
 export const zGetTargetResponse = zTarget;
 
 export const zListSlotsQuery = z.object({
+    observatoryId: z.uuid(),
     date: z.iso.date()
 });
 

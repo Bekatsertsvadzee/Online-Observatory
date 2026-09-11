@@ -168,6 +168,38 @@ paths:
               schema:
                 $ref: "#/components/schemas/PublicObservatoryStatus"
 
+  /observatories:
+    get:
+      operationId: listBookableObservatories
+      tags: [booking]
+      summary: The telescopes a customer may book.
+      description: |
+        ADR-015: a customer books an instrument, and then a time on that instrument.
+        This is the set they choose from, and the source of the `observatoryId` that
+        `GET /slots` and `POST /bookings` require.
+
+        An observatory is listed exactly when its network node is APPROVED, whatever
+        its kind. A first-party observatory is approved the same way a partner one
+        is, so there is one rule rather than two. DRAFT, UNDER_REVIEW and SUSPENDED
+        nodes are absent -- not listed as unavailable, absent -- because a telescope
+        nobody may book is not a choice, and an observatory with no node at all is
+        absent for the same reason.
+
+        Being listed says the instrument may be booked, not that it is free tonight
+        or online now. Each slot carries its own `unavailableReason` for that.
+
+        Public-safe fields only, on the rule `PublicObservatoryStatus` already
+        documents: no coordinates precise enough to be actionable, no device
+        identity, no owner.
+      security: []
+      responses:
+        "200":
+          description: Every bookable observatory.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookableObservatoryList"
+
   /targets:
     get:
       operationId: listTargets
@@ -232,14 +264,31 @@ paths:
     get:
       operationId: listSlots
       tags: [booking]
-      summary: Bookable observation slots for a date.
-      description: Slots are generated from astronomical darkness, not from fixed office hours.
+      summary: Bookable observation slots on one observatory, for a date.
+      description: |
+        Slots are generated from astronomical darkness, not from fixed office hours,
+        and belong to one observatory (ADR-015). There is no list of "the slots"
+        without an instrument: two telescopes have two skies, two horizons and two
+        sets of hours their owners offered.
+
+        404 when no bookable observatory has that id. Unknown and not-bookable are
+        the same answer: whether a suspended partner node exists is not something a
+        caller may probe for.
       security: []
       parameters:
+        - name: observatoryId
+          in: query
+          required: true
+          description: An `id` from `GET /observatories`.
+          schema:
+            type: string
+            format: uuid
         - name: date
           in: query
           required: true
-          description: Local observatory date, ISO 8601 (YYYY-MM-DD).
+          description: |
+            The observatory's local date, ISO 8601 (YYYY-MM-DD) -- in the
+            `timezone` `GET /observatories` reports for it, not the caller's.
           schema:
             type: string
             format: date
@@ -250,6 +299,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SlotList"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
 
   /bookings:
     get:
@@ -273,9 +326,13 @@ paths:
       tags: [booking]
       summary: Reserve a slot transactionally and open a payment intent.
       description: |
-        The slot reservation runs inside a database transaction with row locking and a
-        partial unique index. Exactly one of two simultaneous requests for the same slot
-        succeeds; the other receives 409.
+        The slot reservation runs inside a database transaction, and exclusivity is an
+        exclusion constraint over the booked interval at that observatory. Exactly one
+        of two simultaneous requests for overlapping time on one telescope succeeds;
+        the other receives 409.
+
+        `observatoryId` names the telescope (ADR-015). An id that is unknown, or whose
+        node is not APPROVED, is 404 -- the same answer `GET /slots` gives it.
 
         A reserved slot is held while payment is outstanding. The hold expires, and the
         slot returns to the available list, if payment does not complete in time; the
@@ -301,6 +358,8 @@ paths:
                 $ref: "#/components/schemas/BookingWithPaymentIntent"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
         "422":
@@ -1893,11 +1952,86 @@ components:
     # Slots, bookings, payment
     # ---------------------------------------------------------------------------
 
+    BookableObservatory:
+      type: object
+      description: |
+        One telescope a customer may book, and what a customer needs to choose it.
+
+        ADR-015 leaves how a customer chooses between instruments undecided -- a
+        list, a map, a recommendation -- so this carries what any of those needs
+        and no more. There are no coordinates: a map is not decided, and precise
+        coordinates of somebody else's telescope are not a public field.
+
+        `nameKa` may equal `nameEn`. A partner registers one `siteName`, and
+        manufacturing a Georgian name for somebody else's property would be
+        inventing data about it.
+      additionalProperties: false
+      required: [id, slug, kind, nameEn, nameKa, city, countryCode, timezone, telescope]
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        kind:
+          $ref: "#/components/schemas/NetworkNodeKind"
+        nameEn:
+          type: string
+        nameKa:
+          type: string
+        city:
+          type: string
+        countryCode:
+          type: string
+          minLength: 2
+          maxLength: 2
+        timezone:
+          type: string
+          description: |
+            IANA zone. `GET /slots` takes a date in this zone, so a client in another
+            one needs it to ask for the night it means.
+        telescope:
+          $ref: "#/components/schemas/BookableTelescope"
+
+    BookableTelescope:
+      type: object
+      description: |
+        The instrument, as a customer would compare two of them. ADR-015: a partner
+        is selling *that* telescope, with its aperture, and a customer choosing
+        between two needs to see the difference.
+      additionalProperties: false
+      required: [manufacturer, model, apertureMm, focalLengthMm]
+      properties:
+        manufacturer:
+          type: string
+        model:
+          type: string
+        apertureMm:
+          type: number
+          exclusiveMinimum: 0
+        focalLengthMm:
+          type: number
+          exclusiveMinimum: 0
+
+    BookableObservatoryList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookableObservatory"
+
     Slot:
       type: object
       additionalProperties: false
-      required: [startAt, endAt, durationMinutes, available, priceMinor, currency]
+      required: [observatoryId, startAt, endAt, durationMinutes, available, priceMinor, currency]
       properties:
+        observatoryId:
+          type: string
+          format: uuid
+          description: The telescope this slot is time on (ADR-015).
         startAt:
           type: string
           format: date-time
@@ -1933,8 +2067,11 @@ components:
     SlotList:
       type: object
       additionalProperties: false
-      required: [date, items]
+      required: [observatoryId, date, items]
       properties:
+        observatoryId:
+          type: string
+          format: uuid
         date:
           type: string
           format: date
@@ -1959,6 +2096,7 @@ components:
         [
           id,
           userId,
+          observatoryId,
           targetId,
           slotStartAt,
           durationMinutes,
@@ -1974,6 +2112,10 @@ components:
         userId:
           type: string
           format: uuid
+        observatoryId:
+          type: string
+          format: uuid
+          description: The telescope the booking is time on (ADR-015).
         targetId:
           type: string
           format: uuid
@@ -2003,8 +2145,12 @@ components:
     CreateBookingRequest:
       type: object
       additionalProperties: false
-      required: [targetId, slotStartAt, durationMinutes]
+      required: [observatoryId, targetId, slotStartAt, durationMinutes]
       properties:
+        observatoryId:
+          type: string
+          format: uuid
+          description: An `id` from `GET /observatories`.
         targetId:
           type: string
           format: uuid

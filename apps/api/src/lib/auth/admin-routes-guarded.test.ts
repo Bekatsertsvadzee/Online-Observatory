@@ -61,7 +61,12 @@ describe("every admin route is behind the operator guard", () => {
     //   slots    public by contract (security: []) -- someone deciding whether
     //            to book should not have to sign up to see what is available.
     //            Reserving one is POST /bookings, which is not public.
-    const publicRoutes = new Set(["health", "targets", "slots"]);
+    //   observatories
+    //            public by contract (security: []) -- choosing a telescope is the
+    //            step before choosing a slot (ADR-015), and GET /slots cannot be
+    //            called without an id from here. It carries no coordinates, no
+    //            owner and no device identity; a test holds it to that.
+    const publicRoutes = new Set(["health", "targets", "slots", "observatories"]);
 
     const unguarded = routeFilesUnder(appDirectory)
       .filter((file) => {

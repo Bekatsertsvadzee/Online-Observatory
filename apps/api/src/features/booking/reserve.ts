@@ -9,8 +9,12 @@ import type {
 } from "@darkview/contracts";
 import { recordAuditEvent } from "@darkview/db/audit";
 
+import {
+  findBookableObservatory,
+  type BookableObservatory,
+} from "@/features/booking/observatories";
 import { getDatabase } from "@/lib/db/client";
-import { openIntervals, type LocalWindow } from "@/lib/slots/availability";
+import { openIntervals } from "@/lib/slots/availability";
 import { nightWindow } from "@/lib/slots/darkness";
 import { generateSlots, SLOT_DURATION_MINUTES } from "@/lib/slots/generate";
 import { getServerEnvironment } from "@/lib/validation/env";
@@ -84,6 +88,7 @@ export type ReserveSlotResult = ReserveSlotSuccess | ReserveSlotFailure;
 type BookingRow = {
   id: string;
   userId: string;
+  observatoryId: string;
   targetId: string;
   slotStartAt: Date;
   durationMinutes: number;
@@ -107,6 +112,7 @@ function toContractBooking(row: BookingRow): ContractBooking {
   return {
     id: row.id,
     userId: row.userId,
+    observatoryId: row.observatoryId,
     targetId: row.targetId,
     slotStartAt: row.slotStartAt.toISOString(),
     durationMinutes: row.durationMinutes,
@@ -219,35 +225,25 @@ export async function reserveSlot(input: {
     if (existing) return existing;
   }
 
-  // Phase 1 is one observatory. When there is more than one this takes an id.
-  const observatory = await database.observatory.findFirst({
-    include: { weatherState: true },
-    orderBy: { createdAt: "asc" },
-  });
+  // The telescope the customer chose (ADR-015), resolved by the same rule
+  // GET /slots and GET /observatories read. Unknown and not-bookable are one
+  // answer, worded the same way the slot list words it: a customer may not learn
+  // by probing ids that a suspended partner node exists.
+  //
+  // It also carries the owner's hours (DV-121). Without them the booking path
+  // would accept an instant the slot list refuses to show: a customer who knows
+  // the grid could reserve an hour the owner never offered, and the first anyone
+  // would know of it is a telescope somebody else owns waking up at 03:00.
+  const observatory = await findBookableObservatory(request.observatoryId);
 
   if (!observatory) {
     return {
       ok: false,
-      status: 409,
-      code: "OBSERVATORY_OFFLINE",
-      message: "No observatory is configured.",
+      status: 404,
+      code: "NOT_FOUND",
+      message: "No such observatory.",
     };
   }
-
-  // The same narrowing GET /slots applies (DV-121). Without it the booking path
-  // would accept an instant the slot list refuses to show: a customer who knows
-  // the grid could reserve an hour the owner never offered, and the first anyone
-  // would know of it is a telescope somebody else owns waking up at 03:00.
-  const node = await database.observatoryNetworkNode.findFirst({
-    where: { observatoryId: observatory.id, approvalStatus: "APPROVED" },
-    select: {
-      availabilityWindows: {
-        where: { enabled: true },
-        select: { weekday: true, startMinute: true, endMinute: true },
-      },
-    },
-  });
-  const windows: LocalWindow[] = node?.availabilityWindows ?? [];
 
   const target = await database.target.findUnique({ where: { id: request.targetId } });
   if (!target || !target.enabled) {
@@ -269,7 +265,7 @@ export async function reserveSlot(input: {
     };
   }
 
-  const slot = findGeneratedSlot(slotStartAt, observatory, now, windows);
+  const slot = findGeneratedSlot(slotStartAt, observatory, now);
 
   if (!slot) {
     return {
@@ -321,20 +317,6 @@ export async function reserveSlot(input: {
       break;
   }
 
-  const telescope = await database.telescope.findFirst({
-    where: { observatoryId: observatory.id },
-    orderBy: { createdAt: "asc" },
-  });
-
-  if (!telescope) {
-    return {
-      ok: false,
-      status: 409,
-      code: "OBSERVATORY_OFFLINE",
-      message: "The observatory has no telescope configured.",
-    };
-  }
-
   const holdExpiresAt = new Date(now.getTime() + PAYMENT_HOLD_MINUTES * 60_000);
 
   try {
@@ -362,7 +344,11 @@ export async function reserveSlot(input: {
             userId,
             targetId: target.id,
             observatoryId: observatory.id,
-            telescopeId: telescope.id,
+            // The node's primary telescope: the instrument the customer was shown
+            // on GET /observatories. Not the observatory's earliest telescope row,
+            // which is what this read before DV-066 and which a site with two
+            // instruments would have made a coin toss.
+            telescopeId: observatory.telescopeId,
             paymentId: payment.id,
             slotStartAt,
             durationMinutes: slot.durationMinutes,
@@ -466,15 +452,8 @@ async function replayByIdempotencyKey(
  */
 function findGeneratedSlot(
   slotStartAt: Date,
-  observatory: {
-    timezone: string;
-    latitude: number;
-    longitude: number;
-    status: string;
-    weatherState: { holdActive: boolean } | null;
-  },
+  observatory: BookableObservatory,
   now: Date,
-  windows: readonly LocalWindow[],
 ) {
   const site = {
     latitudeDegrees: observatory.latitude,
@@ -483,7 +462,7 @@ function findGeneratedSlot(
 
   const observatoryState = {
     online: observatory.status === "ONLINE",
-    weatherHold: observatory.weatherState?.holdActive ?? false,
+    weatherHold: observatory.weatherHold,
   };
 
   const on = localDate(slotStartAt, observatory.timezone);
@@ -495,8 +474,13 @@ function findGeneratedSlot(
     // Generated per open interval, exactly as GET /slots does. Tiling the whole
     // night and then filtering would accept a slot whose start only exists
     // because the stride ran across a gap the owner left.
-    for (const interval of openIntervals(window, windows, observatory.timezone)) {
+    for (const interval of openIntervals(
+      window,
+      observatory.windows,
+      observatory.timezone,
+    )) {
       const match = generateSlots({
+        observatoryId: observatory.id,
         window: interval,
         now,
         observatory: observatoryState,

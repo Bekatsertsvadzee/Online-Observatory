@@ -17,8 +17,11 @@ const window = nightWindow("2026-12-21", "Asia/Tbilisi", site)!;
 /** Well before the window, so nothing is in the past unless a test says so. */
 const beforeTheNight = new Date("2026-12-21T00:00:00Z");
 
+const observatoryId = "00000000-0000-4000-8000-000000000010";
+
 function slots(overrides: Partial<SlotAvailabilityInput> = {}) {
   return generateSlots({
+    observatoryId,
     window,
     now: beforeTheNight,
     observatory: { online: true, weatherHold: false },
@@ -65,6 +68,7 @@ describe("slots tile the dark window", () => {
 
   it("gives midwinter more slots than midsummer", () => {
     const summer = generateSlots({
+      observatoryId,
       window: nightWindow("2026-06-21", "Asia/Tbilisi", site)!,
       now: new Date("2026-06-21T00:00:00Z"),
       observatory: { online: true, weatherHold: false },
@@ -77,8 +81,15 @@ describe("slots tile the dark window", () => {
   it("produces slots the contract's own schema accepts", () => {
     for (const slot of slots()) expect(() => zSlot.parse(slot)).not.toThrow();
     expect(() =>
-      zSlotList.parse({ date: "2026-12-21", items: slots() }),
+      zSlotList.parse({ observatoryId, date: "2026-12-21", items: slots() }),
     ).not.toThrow();
+  });
+
+  // ADR-015: a slot is time on one telescope, and says which.
+  it("stamps every slot with the observatory it belongs to", () => {
+    const generated = slots();
+    expect(generated.length).toBeGreaterThan(0);
+    for (const slot of generated) expect(slot.observatoryId).toBe(observatoryId);
   });
 });
 

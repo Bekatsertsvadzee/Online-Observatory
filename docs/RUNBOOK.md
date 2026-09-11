@@ -97,6 +97,29 @@ demo observatory and a demo device token, and the guard exists so an unset varia
 put fake telescope data into a real database. The token is printed when the seed runs and
 is development-only.
 
+### Nothing is bookable until its node is APPROVED
+
+Since DV-066 a customer books a telescope, and a telescope is bookable exactly when its
+`ObservatoryNetworkNode` is `APPROVED` and names a primary telescope — **whatever its
+kind, first-party included**. An observatory with no node, or with a node in `DRAFT`,
+`UNDER_REVIEW` or `SUSPENDED`, is absent from `GET /observatories`, and `GET /slots` and
+`POST /bookings` answer 404 for it.
+
+The development seed writes an `APPROVED` `FIRST_PARTY` node, so a seeded database sells
+slots. A real one does not until an operator approves the first-party node, and
+`POST /admin/network/nodes/{nodeId}/approve` refuses without a measured `MAX_ALT_SAFE`.
+**The first-party telescope therefore becomes sellable after DV-034, not before** — which
+is the point at which it can deliver a real observation rather than a refused slew.
+
+**No API creates a `FIRST_PARTY` node.** `POST /network/nodes` always writes `PARTNER`, on
+purpose — a stranger must not be able to register themselves as Darkview. On a real
+database the first-party node is written once by an operator, in `DRAFT`, and then goes
+through submit and approve like any other. **[UNEXERCISED]** — no real database has needed
+it yet.
+
+If `GET /observatories` comes back empty on a deployment that should be selling, this is
+the first thing to check.
+
 ## 3. Bringing the observatory up
 
 ### Simulated — the default, and the only mode used in normal work

@@ -26,6 +26,7 @@ import {
 describe("generated validators enforce what the contract declares", () => {
   it("rejects an undeclared field on an HTTP request schema", () => {
     const declared = {
+      observatoryId: "00000000-0000-4000-8000-000000000010",
       targetId: "00000000-0000-4000-8000-000000000101",
       slotStartAt: "2026-12-15T18:00:00.000Z",
       durationMinutes: 30,

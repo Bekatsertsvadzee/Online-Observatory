@@ -59,6 +59,8 @@ function alignForward(at: Date, minutes: number): Date {
 }
 
 export type SlotAvailabilityInput = {
+  /** The telescope these slots are time on. Every slot carries it (ADR-015). */
+  observatoryId: string;
   window: NightWindow;
   now: Date;
   observatory: { online: boolean; weatherHold: boolean };
@@ -117,6 +119,7 @@ export function generateSlots(input: SlotAvailabilityInput): Slot[] {
     const reason = unavailableReason(startAt, input);
 
     slots.push({
+      observatoryId: input.observatoryId,
       startAt: startAt.toISOString(),
       endAt: new Date(startMs + durationMs).toISOString(),
       durationMinutes: SLOT_DURATION_MINUTES,
