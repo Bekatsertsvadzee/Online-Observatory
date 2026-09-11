@@ -287,6 +287,10 @@ export type TonightTarget = {
 };
 
 export type TonightTargetList = {
+    /**
+     * The observatory every assessment in `items` was made at.
+     */
+    observatoryId: string;
     items: Array<TonightTarget>;
     evaluatedAt: string;
 };
@@ -2143,7 +2147,11 @@ export type ListTargetsResponse = ListTargetsResponses[keyof ListTargetsResponse
 export type ListTonightTargetsData = {
     body?: never;
     path?: never;
-    query?: {
+    query: {
+        /**
+         * An `id` from `GET /observatories`.
+         */
+        observatoryId: string;
         /**
          * Instant to evaluate visibility at. Defaults to now.
          */
@@ -2151,6 +2159,19 @@ export type ListTonightTargetsData = {
     };
     url: '/targets/tonight';
 };
+
+export type ListTonightTargetsErrors = {
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type ListTonightTargetsError = ListTonightTargetsErrors[keyof ListTonightTargetsErrors];
 
 export type ListTonightTargetsResponses = {
     /**

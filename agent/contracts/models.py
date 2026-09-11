@@ -258,6 +258,7 @@ class TonightTargetList(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
+    observatory_id: UUID = Field(..., alias='observatoryId', description='The observatory every assessment in `items` was made at.')
     items: list[TonightTarget]
     evaluated_at: AwareDatetime = Field(..., alias='evaluatedAt')
 

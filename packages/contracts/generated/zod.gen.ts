@@ -207,6 +207,7 @@ export const zTonightTarget = z.strictObject({
 });
 
 export const zTonightTargetList = z.strictObject({
+    observatoryId: z.uuid(),
     items: z.array(zTonightTarget),
     evaluatedAt: z.iso.datetime()
 });
@@ -1585,6 +1586,7 @@ export const zListTargetsQuery = z.object({
 export const zListTargetsResponse = zTargetPage;
 
 export const zListTonightTargetsQuery = z.object({
+    observatoryId: z.uuid(),
     at: z.iso.datetime().optional()
 });
 
