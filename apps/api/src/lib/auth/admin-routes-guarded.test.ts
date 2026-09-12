@@ -32,6 +32,19 @@ function routeFilesUnder(directory: string): string[] {
  * Today the admin tree is empty, so this asserts nothing about behaviour -- it
  * exists so that the first admin route added cannot land unguarded.
  */
+/**
+ * Routes called by another server, not a browser, and authenticated by a
+ * signature over the exact request body rather than by a session cookie.
+ *
+ * No cookie is attached, so there is no session to require and no cross-site
+ * request for an Origin check to catch: the browser is not the caller. What
+ * stands in for both is the signature, and the test below holds each of these
+ * to verifying one. A route added here without that is a route anyone can call.
+ *
+ *   payments/webhook   the payment provider's callback (DV-056)
+ */
+const SIGNED_SERVER_TO_SERVER = new Set(["payments/webhook/route.ts"]);
+
 describe("every admin route is behind the operator guard", () => {
   const adminRoutes = routeFilesUnder(adminDirectory);
 
@@ -70,8 +83,13 @@ describe("every admin route is behind the operator guard", () => {
 
     const unguarded = routeFilesUnder(appDirectory)
       .filter((file) => {
-        const segment = path.relative(appDirectory, file).split(path.sep)[0];
-        return segment !== "admin" && !publicRoutes.has(segment);
+        const relative = path.relative(appDirectory, file);
+        const segment = relative.split(path.sep)[0];
+        return (
+          segment !== "admin" &&
+          !publicRoutes.has(segment) &&
+          !SIGNED_SERVER_TO_SERVER.has(relative)
+        );
       })
       .filter((file) => {
         const source = readFileSync(file, "utf8");
@@ -84,6 +102,17 @@ describe("every admin route is behind the operator guard", () => {
       .map((file) => path.relative(appDirectory, file));
 
     expect(unguarded).toEqual([]);
+  });
+
+  it("verifies a signature on every route that a provider calls", () => {
+    // The exemption above is only as safe as this: a route with no session must
+    // authenticate its caller some other way, and for a server-to-server callback
+    // that way is a signature over the exact body.
+    for (const relative of SIGNED_SERVER_TO_SERVER) {
+      const source = readFileSync(path.join(appDirectory, relative), "utf8");
+      expect(source, relative).toMatch(/verifySignature\(rawBody, signature\)/);
+      expect(source, relative).toMatch(/await request\.text\(\)/);
+    }
   });
 
   it("puts every mutating route behind the same-origin guard", () => {
@@ -106,7 +135,8 @@ describe("every admin route is behind the operator guard", () => {
           !source.includes("requireOperatorMutation")
         );
       })
-      .map((file) => path.relative(appDirectory, file));
+      .map((file) => path.relative(appDirectory, file))
+      .filter((relative) => !SIGNED_SERVER_TO_SERVER.has(relative));
 
     expect(withoutOriginCheck).toEqual([]);
   });

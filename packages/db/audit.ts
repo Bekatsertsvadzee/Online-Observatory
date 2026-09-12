@@ -24,9 +24,7 @@ import type { AuditCategory } from "./generated/prisma/enums.ts";
  * by action string is only useful if the strings are stable, and a typo in a
  * literal is invisible until the night somebody needs the row.
  *
- * A new action is added here first. Categories with no member yet are the ones
- * whose code does not exist: PAYMENT is DV-056, OBSERVATORY_MODE and
- * OPERATOR_OVERRIDE are DV-063.
+ * A new action is added here first. Every category now has a writer.
  */
 export type AuditAction =
   // Any category. A rate limiter refused something, and the category says which
@@ -44,7 +42,15 @@ export type AuditAction =
   // BOOKING
   | "BOOKING_RESERVED"
   | "BOOKING_SLOT_RELEASED"
+  // PAYMENT -- written by the webhook path (DV-056). A refusal is recorded
+  // because a callback that failed its signature and left nothing behind is
+  // indistinguishable from one that never arrived.
+  | "PAYMENT_CAPTURED"
+  | "PAYMENT_CAPTURED_WITHOUT_SLOT"
+  | "PAYMENT_FAILED"
+  | "PAYMENT_WEBHOOK_REFUSED"
   // MISSION
+  | "MISSION_SCHEDULED"
   | "MISSION_SESSION_OPENED"
   | "MISSION_SESSION_REVOKED"
   | "MISSION_RESOLVED_AFTER_AGENT_RESTART"

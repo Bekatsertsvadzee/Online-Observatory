@@ -7,6 +7,7 @@ import type {
   ErrorCode,
   PaymentIntent,
 } from "@darkview/contracts";
+import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
 
 import {
@@ -34,9 +35,10 @@ import { getServerEnvironment } from "@/lib/validation/env";
 export const PAYMENT_HOLD_MINUTES = 15;
 
 /**
- * Phase 1 has one payment provider in code and it is the sandbox. The real
- * provider arrives in DV-056 with its own documentation; nothing here invents an
- * API for it.
+ * Phase 1 has one payment provider in code and it is the sandbox. DV-056 built
+ * the path that settles it -- `features/payments` -- and the real provider joins
+ * as a second adapter there once merchant onboarding delivers its documentation;
+ * nothing here invents an API for it.
  *
  * The contract is explicit that SANDBOX "is never selectable in a production
  * environment and a production payment success is never simulated", so a
@@ -569,7 +571,52 @@ function isSlotConflict(error: unknown): boolean {
  * transaction; no sweeper has to notice. No mission is created here, and this
  * refuses to run if one somehow exists -- a mission means the observation was
  * already scheduled, and unwinding that is an operator decision, not a callback's.
+ *
+ * The caller holds the transaction and has already locked the booking row; the
+ * webhook settlement (DV-056) does exactly that, which is why the body lives
+ * here rather than inside `releaseSlotForFailedPayment`.
  */
+export async function releaseHeldSlot(
+  tx: Pick<Prisma.TransactionClient, "booking" | "payment" | "auditLog">,
+  booking: { id: string; status: string; missionId: string | null; paymentId: string | null },
+  reason: string,
+): Promise<{ released: boolean }> {
+  if (booking.status !== "PENDING_PAYMENT") return { released: false };
+
+  if (booking.missionId) {
+    throw new Error(
+      `Booking ${booking.id} already has a mission; a failed payment may not unwind it.`,
+    );
+  }
+
+  if (booking.paymentId) {
+    await tx.payment.update({
+      where: { id: booking.paymentId },
+      data: { status: "FAILED", failureReason: reason },
+    });
+  }
+
+  await tx.booking.update({
+    where: { id: booking.id },
+    data: { status: "CANCELLED" },
+  });
+
+  // A slot leaving the held set is what makes it purchasable again. When two
+  // customers dispute who was entitled to a half hour, this row is the answer.
+  await recordAuditEvent(
+    {
+      category: "BOOKING",
+      action: "BOOKING_SLOT_RELEASED",
+      entityType: "Booking",
+      entityId: booking.id,
+      detail: { reason, paymentId: booking.paymentId },
+    },
+    tx,
+  );
+
+  return { released: true };
+}
+
 export async function releaseSlotForFailedPayment(input: {
   bookingId: string;
   reason: string;
@@ -584,40 +631,7 @@ export async function releaseSlotForFailedPayment(input: {
     });
 
     if (!booking) return { released: false };
-    if (booking.status !== "PENDING_PAYMENT") return { released: false };
-
-    if (booking.missionId) {
-      throw new Error(
-        `Booking ${booking.id} already has a mission; a failed payment may not unwind it.`,
-      );
-    }
-
-    if (booking.paymentId) {
-      await tx.payment.update({
-        where: { id: booking.paymentId },
-        data: { status: "FAILED", failureReason: input.reason },
-      });
-    }
-
-    await tx.booking.update({
-      where: { id: booking.id },
-      data: { status: "CANCELLED" },
-    });
-
-    // A slot leaving the held set is what makes it purchasable again. When two
-    // customers dispute who was entitled to a half hour, this row is the answer.
-    await recordAuditEvent(
-      {
-        category: "BOOKING",
-        action: "BOOKING_SLOT_RELEASED",
-        entityType: "Booking",
-        entityId: booking.id,
-        detail: { reason: input.reason, paymentId: booking.paymentId },
-      },
-      tx,
-    );
-
-    return { released: true };
+    return releaseHeldSlot(tx, booking, input.reason);
   });
 }
 

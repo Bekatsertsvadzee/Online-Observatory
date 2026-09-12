@@ -11,6 +11,7 @@ This document covers account authentication, session management, authorization, 
 3. PostgreSQL is the source of truth for users, roles, email verification, sessions, rate limits, and authentication audit events.
 4. The observatory adapter is a separate server-side boundary. A future adapter may receive an already-authorized command from a trusted server process only.
 5. Email verification delivery is a server-to-server webhook. Requests are signed with `EMAIL_VERIFICATION_WEBHOOK_SECRET`; the verification bearer token is never returned by the registration UI.
+6. Payment settlement is a server-to-server webhook in the other direction. `POST /payments/webhook` has no session; what authenticates the caller is the provider's signature over the exact bytes of the body, checked in constant time before the body's contents are trusted. The sandbox provider signs with `PAYMENT_SANDBOX_WEBHOOK_SECRET` and is refused outright in production. A callback is then checked against the records — the payment it names, the provider it was opened with, the amount the intent was for — and only a callback that fits confirms a booking and creates a mission. A refused callback leaves an audit row.
 
 ## Authentication
 
