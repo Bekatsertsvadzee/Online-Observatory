@@ -197,7 +197,9 @@ permission): DV-034 → DV-028 → DV-035 → DV-029 → DV-030 → DV-031.
 
 **Stage 3.5 — Observer Pack:** DV-100, DV-101, DV-103 immediately after S1, because
 DV-103 changes how the mission channel fans out and retrofitting it later is a rewrite.
-DV-102 lands with DV-056.
+DV-102 was to land with DV-056 and did not: DV-056 built the settlement path for a
+booking, and an observer seat is a different sale with its own contract surface. It
+is buildable now, on the same adapter.
 
 **Stage 4 — the live experience:** DV-032, DV-033, DV-039, DV-061, DV-063.
 
@@ -863,8 +865,8 @@ row written on another connection commits whether or not the fact it describes d
 | `SAFETY` | The cloud refuses a command, and whenever the safety envelope is recorded. |
 | `AGENT_LINK` | The link comes up, and every time it drops. |
 
-`PAYMENT` still has no writer (DV-056). `OBSERVATORY_MODE` and `OPERATOR_OVERRIDE` now
-have one: DV-063 writes both.
+`PAYMENT` now has a writer: DV-056's webhook path records every capture, failure and
+refusal. `OBSERVATORY_MODE` and `OPERATOR_OVERRIDE` have one too: DV-063 writes both.
 
 **Two schema gaps, both of them the contract's own fields going nowhere.**
 
@@ -1292,3 +1294,86 @@ oldest-first order (two tests), the status filter, counting simulated missions
 toward first light, and scoping the history to the one node — the last only after
 the history test gained a second node, since with one node a leak had nothing to
 leak.
+
+## What DV-056 built, and what waits on the provider
+
+The path from a paid booking to a mission. Before it, `POST /bookings` opened a
+sandbox payment intent and nothing ever settled it: no route received a callback,
+no code moved a booking to CONFIRMED, and nothing in production created a
+`Mission` row at all — every mission in the database had been inserted by a test.
+
+**A provider is an adapter, and the sandbox is the default one.** The same shape as
+`MountDriver` and `CameraDriver`: `PaymentProviderAdapter` verifies a signature
+over the raw body and reads the provider's payload into Darkview's own
+`PaymentOutcome` — payment id, provider reference, captured or failed, amount and
+currency. The settlement path knows nothing else about any provider. The sandbox
+signs with hex HMAC-SHA256 under `PAYMENT_SANDBOX_WEBHOOK_SECRET`; its payload
+fields are its own, not a claim about anybody else's.
+
+**BOG iPay has no adapter, on purpose.** The contract says its header and algorithm
+"must be confirmed against the provider's own documentation before implementation"
+and merchant onboarding has not delivered that documentation. A callback claiming
+to be from it is a 401, and `reserveSlot` still refuses to reserve at all in
+production. This is the blocker the table under *Blocked on things outside the
+repository* already names; nothing here shortened it.
+
+**The callback is checked against the records before it changes them.** Signature
+first, over the exact bytes — a body re-serialised from parsed JSON is not the body
+that was signed, and the route test proves whitespace alone breaks it. Then, under
+a row lock on the payment: the payment exists, it was opened with the provider
+that is calling, and the amount and currency equal the intent's. A provider that
+reports a smaller capture than the quoted price has not paid for the slot,
+whatever its status field says. Every refusal is a `PAYMENT_WEBHOOK_REFUSED` audit
+row, written on the base client because there is nothing else for it to be atomic
+with.
+
+**Idempotent by (provider, providerRef), and contradictions are refused.** A
+provider retries until it sees 2xx, so the same capture arrives more than once.
+The second arrival finds the payment already settled with that reference and that
+result, and answers 202 having changed nothing. Twenty identical callbacks at
+once schedule one mission. A later callback naming the same payment with a
+*different* outcome is refused, because letting a replayed FAILED unwind a
+scheduled mission is worse than telling the provider it has contradicted itself.
+
+**A capture confirms the booking and schedules the mission in one transaction.**
+Payment CAPTURED, booking CONFIRMED with its `missionId`, a `Mission` in SCHEDULED
+with `scheduledFor` at the slot start and `mode` copied from the observatory, a
+`SCHEDULED` mission event from the CLOUD, and `PAYMENT_CAPTURED` plus
+`MISSION_SCHEDULED` audit rows. ADR-004 has a mission born REQUESTED and moving to
+SCHEDULED; a booked mission has its instant from the moment it exists, so it is
+written in SCHEDULED and the event row is the transition.
+
+**A failure releases the slot.** `releaseHeldSlot` — the body of DV-055's
+`releaseSlotForFailedPayment`, now callable inside the settlement's own
+transaction — marks the payment FAILED and the booking CANCELLED, and the slot is
+on sale again the moment the transaction commits.
+
+**Late money is handled two ways, and the difference is who holds the slot.** A
+hold that lapsed but was never swept is still PENDING_PAYMENT and still inside
+the exclusion constraint; nobody else has the slot, so the capture confirms it
+like any other. A hold that a later reservation swept to EXPIRED has no slot to
+confirm: the payment is recorded CAPTURED, because the money moved and the record
+says what happened, with a `PAYMENT_CAPTURED_WITHOUT_SLOT` row and no mission.
+That row is what the refund engine (DV-111) works from. Nothing here refunds,
+because nothing here can yet. The booking is re-read under its lock so the status
+that decides between these is the one the transaction holds, not one a sweep
+could have changed since.
+
+**Lock order.** Payment first, then booking. Two callbacks for one payment
+serialise on the payment; a reservation sweeping lapsed holds locks booking rows
+only, so the two never wait on each other in opposite orders.
+
+**The route is metered by address, loosely.** Six hundred a minute exists to bound
+the work a flood of forged bodies can cause, not to pace a provider, and a refused
+callback is retried by the provider: the payment is late, not lost.
+
+**Not built: DV-102.** An observer seat is a different sale with its own contract
+surface and belongs to its own issue. **Not built: a dev script** that signs and
+posts a sandbox callback; the integration suite is the evidence, and
+`signSandboxBody` is exported for whatever tool wants it.
+
+**Verified by removing each protection and confirming a named test fails:** the
+payment row lock (the twenty-at-once test schedules more than one mission), the
+amount check, the provider check, the already-settled check, and the signature's
+exact-bytes property.
+

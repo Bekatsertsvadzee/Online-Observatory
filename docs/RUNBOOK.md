@@ -78,6 +78,13 @@ deliberate — a permissive fallback silently disables the check it stands for.
 | `EMAIL_VERIFICATION_WEBHOOK_URL` / `_SECRET` | api | Registration is refused without them. |
 | `S3_ENDPOINT` / `_REGION` / `_BUCKET` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | both | Object storage (ADR-012). Both services refuse to start without them: a Collection whose every download is broken is worse than a server that says why it will not come up. |
 
+`PAYMENT_SANDBOX_WEBHOOK_SECRET` is optional, and what it guards is the sandbox payment
+provider's callbacks to `POST /payments/webhook` (DV-056). Unset, a sandbox callback is
+refused rather than accepted unsigned. It is never read in production, where the
+sandbox provider is refused before the secret is looked for; the real provider's
+signing configuration arrives with merchant onboarding and is documented here when it
+does.
+
 `STREAM_SIGNING_SECRET` is separate from `AUTH_SECRET` on purpose: one signs sessions, the
 other signs view-only URLs, and a key used for two jobs cannot be rotated for one of them.
 

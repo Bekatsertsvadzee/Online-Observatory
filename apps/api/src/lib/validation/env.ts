@@ -16,6 +16,13 @@ const serverEnvironmentSchema = z.object({
    * written by the caller.
    */
   TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(8).default(0),
+  /**
+   * Signs the sandbox payment provider's callbacks (DV-056). Optional because a
+   * deployment with no sandbox has no use for it; the webhook route refuses a
+   * SANDBOX callback outright when it is unset rather than accepting one
+   * unsigned. Never read in production, where SANDBOX is refused before this.
+   */
+  PAYMENT_SANDBOX_WEBHOOK_SECRET: z.string().min(32).optional(),
 });
 
 export type ServerEnvironment = z.infer<typeof serverEnvironmentSchema>;

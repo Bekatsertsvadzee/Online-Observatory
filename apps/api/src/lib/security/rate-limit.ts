@@ -102,6 +102,21 @@ export const REGISTRATION_ORIGIN_POLICY: RateLimitPolicy = {
 };
 
 /**
+ * Payment provider callbacks, per calling address.
+ *
+ * Deliberately loose: a provider replaying a backlog after an outage must not be
+ * turned away, and every callback is signature-checked before it can change
+ * anything. This exists to bound the work an unauthenticated flood of forged
+ * bodies can cause, not to pace a real provider. A refused callback is retried
+ * by the provider; the payment is not lost, it is late.
+ */
+export const PAYMENT_WEBHOOK_POLICY: RateLimitPolicy = {
+  limit: 600,
+  windowMs: 60 * 1000,
+  blockMs: 60 * 1000,
+};
+
+/**
  * Opening a mission session and changing who may watch it, per account.
  *
  * Neither is expensive on its own; both are session-state churn on a live
