@@ -28,8 +28,14 @@ export type SettlementResult = SettlementSuccess | SettlementFailure;
 type Locked = Pick<Prisma.TransactionClient, "$queryRaw">;
 
 /**
- * Apply a verified provider outcome to Darkview's own Payment record, and to the
- * booking that payment holds.
+ * Apply a verified provider outcome to Darkview's own Payment record, and to
+ * whatever that payment bought.
+ *
+ * Two things are for sale: a slot, which becomes a booking and a mission, and an
+ * Observer Pack seat on somebody else's session (ADR-007). `Payment.purpose` says
+ * which, and it is read rather than inferred from whichever relation is null --
+ * a payment with neither attached would otherwise be settled as a booking whose
+ * row had vanished.
  *
  * Signature verification has already happened; this trusts `outcome` to be what
  * the provider said and checks only whether what it said fits the records. The
@@ -67,7 +73,10 @@ export async function settlePayment(input: {
 
     const payment = await tx.payment.findUnique({
       where: { id: outcome.paymentId },
-      include: { booking: { select: { id: true, missionId: true } } },
+      include: {
+        booking: { select: { id: true, missionId: true } },
+        observerPack: { select: { id: true, missionId: true } },
+      },
     });
 
     if (!payment) {
@@ -93,7 +102,11 @@ export async function settlePayment(input: {
 
     if (payment.status === "CAPTURED" || payment.status === "FAILED") {
       if (payment.providerRef === outcome.providerRef && payment.status === outcome.result) {
-        return { ok: true, applied: false, missionId: payment.booking?.missionId ?? null };
+        return {
+          ok: true,
+          applied: false,
+          missionId: payment.observerPack?.missionId ?? payment.booking?.missionId ?? null,
+        };
       }
 
       return refused("The payment has already been settled with a different outcome.", {
@@ -119,6 +132,14 @@ export async function settlePayment(input: {
       return refused("That provider reference already belongs to another payment.", {
         reason: "PROVIDER_REF_REUSED",
       });
+    }
+
+    // An Observer Pack is a different sale with a different subject, so it takes a
+    // different path from here. The checks above are the ones every payment gets
+    // -- it exists, it is this provider's, it is for this sum, it has not already
+    // been answered -- and they do not care what was bought.
+    if (payment.purpose === "OBSERVER_PACK") {
+      return settleObserverPackPayment(tx, payment, outcome, now);
     }
 
     // Locked after the read that found it, so read again: a reservation sweeping
@@ -282,6 +303,189 @@ export async function settlePayment(input: {
 
     return { ok: true, applied: true, missionId: mission.id };
   });
+}
+
+/**
+ * Apply a verified outcome to an Observer Pack (ADR-007, DV-102).
+ *
+ * The seat is not attached here. Settlement makes the pack PAID and stops;
+ * `POST /missions/{missionId}/observers` is what attaches, and it is the customer
+ * who decides when. Marking somebody JOINED because their bank answered would put
+ * a person in a session they may not have open, and DV-103 fans telemetry out to
+ * exactly that collection.
+ *
+ * Lock order is payment, then mission, then pack -- the same mission-before-pack
+ * order `purchaseObserverPack` takes, so the two never wait on each other in
+ * opposite directions. The mission is locked because a late capture has to ask
+ * whether a seat is still free, and that count is only stable under the lock the
+ * purchase path holds while it counts.
+ */
+async function settleObserverPackPayment(
+  tx: Prisma.TransactionClient,
+  payment: {
+    id: string;
+    userId: string;
+    isDemo: boolean;
+    provider: PaymentProvider;
+    observerPack: { id: string; missionId: string } | null;
+  },
+  outcome: PaymentOutcome,
+  now: Date,
+): Promise<SettlementResult> {
+  const { provider } = payment;
+
+  if (outcome.result === "FAILED") {
+    await tx.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: "FAILED",
+        providerRef: outcome.providerRef,
+        failureReason: outcome.failureReason,
+      },
+    });
+
+    // The seat goes back on sale in the same transaction, the way a failed
+    // booking payment releases its slot. There is no exclusion constraint to
+    // leave here -- capacity is a count -- so the status change is the release.
+    if (payment.observerPack) {
+      await tx.observerPack.updateMany({
+        where: { id: payment.observerPack.id, status: "PENDING_PAYMENT" },
+        data: { status: "CANCELLED", holdExpiresAt: null },
+      });
+    }
+
+    await recordAuditEvent(
+      {
+        category: "PAYMENT",
+        action: "OBSERVER_PACK_PAYMENT_FAILED",
+        actorUserId: payment.userId,
+        missionId: payment.observerPack?.missionId ?? null,
+        entityType: "ObserverPack",
+        entityId: payment.observerPack?.id ?? null,
+        detail: {
+          provider,
+          providerRef: outcome.providerRef,
+          paymentId: payment.id,
+          failureReason: outcome.failureReason,
+        },
+        isDemo: payment.isDemo,
+      },
+      tx,
+    );
+
+    return { ok: true, applied: true, missionId: null };
+  }
+
+  await tx.payment.update({
+    where: { id: payment.id },
+    data: { status: "CAPTURED", providerRef: outcome.providerRef, capturedAt: now },
+  });
+
+  const seated = payment.observerPack
+    ? await seatCapturedPack(tx, payment.observerPack.id, payment.observerPack.missionId, now)
+    : null;
+
+  if (!seated) {
+    // The money moved and there is no seat to give for it: the pack was bought
+    // again on a new payment, or the hold lapsed and the session filled up while
+    // the bank was thinking. The payment is still recorded CAPTURED -- the record
+    // says what happened -- and this row is what the refund engine (DV-111) works
+    // from. Nothing here refunds, because nothing here can yet.
+    await recordAuditEvent(
+      {
+        category: "PAYMENT",
+        action: "OBSERVER_PACK_CAPTURED_WITHOUT_SEAT",
+        actorUserId: payment.userId,
+        missionId: payment.observerPack?.missionId ?? null,
+        entityType: "ObserverPack",
+        entityId: payment.observerPack?.id ?? null,
+        detail: {
+          provider,
+          providerRef: outcome.providerRef,
+          paymentId: payment.id,
+          amountMinor: outcome.amountMinor,
+          currency: outcome.currency,
+        },
+        isDemo: payment.isDemo,
+      },
+      tx,
+    );
+
+    return { ok: true, applied: true, missionId: payment.observerPack?.missionId ?? null };
+  }
+
+  await recordAuditEvent(
+    {
+      category: "PAYMENT",
+      action: "OBSERVER_PACK_CAPTURED",
+      actorUserId: payment.userId,
+      missionId: seated.missionId,
+      entityType: "ObserverPack",
+      entityId: seated.id,
+      detail: {
+        provider,
+        providerRef: outcome.providerRef,
+        paymentId: payment.id,
+        amountMinor: outcome.amountMinor,
+        currency: outcome.currency,
+      },
+      isDemo: payment.isDemo,
+    },
+    tx,
+  );
+
+  return { ok: true, applied: true, missionId: seated.missionId };
+}
+
+/**
+ * Give a captured pack its seat, if there is still one to give.
+ *
+ * A pack that is still PENDING_PAYMENT has never stopped holding its seat, so it
+ * is simply paid for. A pack whose hold lapsed is the interesting case, and it is
+ * the same judgement DV-056 made about a late booking payment: being late costs
+ * the customer the seat only if somebody else has taken it. If the session still
+ * has room, the capture is honoured; if it is full, it is not, and the caller
+ * records the row DV-111 refunds from.
+ *
+ * Returns null when there is no seat, which includes a pack that has since been
+ * bought again on a different payment -- that row belongs to the newer sale.
+ */
+async function seatCapturedPack(
+  tx: Prisma.TransactionClient,
+  packId: string,
+  missionId: string,
+  now: Date,
+): Promise<{ id: string; missionId: string } | null> {
+  const missions = await tx.$queryRaw<{ observerCapacity: number }[]>`
+    SELECT "observerCapacity" FROM "Mission" WHERE "id" = ${missionId}::uuid FOR UPDATE
+  `;
+  const mission = missions[0];
+  if (!mission) return null;
+
+  await tx.$queryRaw`SELECT "id" FROM "ObserverPack" WHERE "id" = ${packId}::uuid FOR UPDATE`;
+
+  const pack = await tx.observerPack.findUnique({
+    where: { id: packId },
+    select: { id: true, missionId: true, status: true, paymentId: true },
+  });
+  if (!pack) return null;
+
+  if (pack.status === "PAID") return { id: pack.id, missionId: pack.missionId };
+
+  if (pack.status !== "PENDING_PAYMENT") {
+    const held = await tx.observerPack.count({
+      where: { missionId, status: { in: ["PENDING_PAYMENT", "PAID"] } },
+    });
+    if (held >= mission.observerCapacity) return null;
+  }
+
+  const updated = await tx.observerPack.update({
+    where: { id: pack.id },
+    data: { status: "PAID", paidAt: now, holdExpiresAt: null },
+    select: { id: true, missionId: true },
+  });
+
+  return updated;
 }
 
 async function lockPayment(tx: Locked, paymentId: string): Promise<void> {

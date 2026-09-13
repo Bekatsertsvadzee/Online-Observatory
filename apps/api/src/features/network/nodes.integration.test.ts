@@ -137,6 +137,7 @@ beforeEach(async () => {
   await database.networkAvailabilityWindow.deleteMany();
   await database.observatoryNetworkNode.deleteMany();
   await database.safetyEnvelope.deleteMany();
+  await database.observerPack.deleteMany();
   await database.booking.deleteMany();
   await database.mission.deleteMany();
   // Payment holds a Restrict foreign key to User. This suite creates none, but

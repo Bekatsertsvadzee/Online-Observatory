@@ -3,6 +3,7 @@ import { zMissionId } from "@darkview/contracts/zod";
 import {
   listMissionObservers,
   releaseObserverSeat,
+  takeObserverSeat,
 } from "@/features/missions/observers";
 import { requireApiMutation, requireApiSession } from "@/lib/auth/api-guard";
 import { apiError } from "@/lib/http/api-error";
@@ -11,33 +12,15 @@ import { meterRequest, OBSERVER_SEAT_POLICY } from "@/lib/security/rate-limit";
 /**
  * Observer seats on a live mission (ADR-007).
  *
- * POST is the customer-facing join, and it does not work yet -- see
- * `refuseUntilObserverPaymentExists`. The seat model behind it is complete and
- * tested; what is missing is the only thing that makes a seat legitimate.
+ * POST attaches to a seat that has already been bought. Buying one is
+ * `POST /missions/{missionId}/observer-pack` (DV-102); this is what the customer
+ * calls once their payment has settled, and again if their connection drops.
+ *
+ * The payment check is not here. It lives inside `takeObserverSeat`, in the same
+ * locked transaction that counts the seats, so no route can be the one that
+ * forgets it.
  */
 export const dynamic = "force-dynamic";
-
-/**
- * A seat requires a settled Observer Pack payment, and nothing can settle one.
- *
- * DV-102 owns Observer Pack payment and lands with DV-056. Until it does there is
- * no such thing as a settled payment, so this route refuses rather than handing
- * out free seats -- the same choice DV-040 made for CAPTURE, FOCUS and
- * SET_PROFILE: a command nothing performs must not be answered ACCEPTED, and a
- * paid seat nobody paid for must not be answered 201.
- *
- * `takeObserverSeat` is deliberately not imported here. It is complete and tested,
- * and reachable by operators, tests and DV-103's channel work; what must not exist
- * is a path where a customer gets a seat for nothing. DV-102 imports it.
- */
-function refuseUntilObserverPaymentExists() {
-  return apiError(
-    402,
-    "PAYMENT_REQUIRED",
-    "An Observer Pack seat requires a settled payment, and Observer Pack payment " +
-      "is not built yet (DV-102).",
-  );
-}
 
 export async function GET(
   _request: Request,
@@ -72,7 +55,26 @@ export async function POST(
     return apiError(404, "NOT_FOUND", "No such mission.");
   }
 
-  return refuseUntilObserverPaymentExists();
+  // Metered for the reason the DELETE below is: ADR-007 caps a mission at five
+  // seats, and attaching and detaching in a loop is work against a live session.
+  const limited = await meterRequest({
+    policy: OBSERVER_SEAT_POLICY,
+    scope: "observer-seat",
+    identity: guard.session.user.id,
+    category: "MISSION",
+    actorUserId: guard.session.user.id,
+    missionId,
+  });
+  if (limited) return limited;
+
+  const result = await takeObserverSeat({
+    missionId,
+    userId: guard.session.user.id,
+    now: new Date(),
+  });
+  if (!result.ok) return apiError(result.status, result.code, result.message);
+
+  return Response.json(result.value, { status: 201 });
 }
 
 export async function DELETE(

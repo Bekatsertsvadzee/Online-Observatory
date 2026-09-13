@@ -133,6 +133,7 @@ beforeEach(async () => {
   await database.missionSession.deleteMany();
   await database.missionEvent.deleteMany();
   await database.auditLog.deleteMany();
+  await database.observerPack.deleteMany();
   await database.booking.deleteMany();
   await database.mission.deleteMany();
   await database.payment.deleteMany();

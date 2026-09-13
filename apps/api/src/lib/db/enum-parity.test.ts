@@ -24,6 +24,7 @@ const SHARED_ENUMS = [
   "MissionFailureReason",
   "MissionState",
   "ObservatoryMode",
+  "ObserverPackStatus",
   "OpticalConfig",
   "PaymentProvider",
   "PaymentStatus",
@@ -54,6 +55,9 @@ const DATABASE_ONLY = new Set([
   "NetworkNodeKind",
   "ObservatoryCommandStatus",
   "ObservatoryStatus",
+  // What a payment bought. The settlement path reads it; no client is told,
+  // and PaymentIntent is the same shape either way.
+  "PaymentPurpose",
   "PrivateSessionStatus",
   "ProcessingPreset",
   "SubscriptionPlan",

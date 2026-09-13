@@ -198,8 +198,9 @@ permission): DV-034 → DV-028 → DV-035 → DV-029 → DV-030 → DV-031.
 **Stage 3.5 — Observer Pack:** DV-100, DV-101, DV-103 immediately after S1, because
 DV-103 changes how the mission channel fans out and retrofitting it later is a rewrite.
 DV-102 was to land with DV-056 and did not: DV-056 built the settlement path for a
-booking, and an observer seat is a different sale with its own contract surface. It
-is buildable now, on the same adapter.
+booking, and an observer seat is a different sale with its own contract surface.
+**It has landed** on the same adapter — see *What DV-102 built, and the DV-100
+behaviour it changed* below, including the one DV-100 assertion it reverses.
 
 **Stage 4 — the live experience:** DV-032, DV-033, DV-039, DV-061, DV-063.
 
@@ -1377,3 +1378,72 @@ payment row lock (the twenty-at-once test schedules more than one mission), the
 amount check, the provider check, the already-settled check, and the signature's
 exact-bytes property.
 
+
+## What DV-102 built, and the DV-100 behaviour it changed
+
+The Observer Pack sale. DV-100 built the seat and stopped at the only thing that
+makes one legitimate: `POST /missions/{missionId}/observers` answered 402 for
+everybody, because no payment for a seat could exist. One does now, on the adapter
+DV-056 built.
+
+**The seat is a different sale, so it has its own record.** An observer seat has
+no slot, no target and no `Booking`, and `Payment` was one-to-one with a booking.
+`ObserverPack` is the sale; `MissionParticipant` stays what it was, which is
+presence. `Payment.purpose` says which of the two a payment bought, and the
+settlement path reads it rather than inferring it from whichever relation happens
+to be null — a payment with neither attached would otherwise settle as a booking
+whose row had vanished. It is not a contract field: no client is told, and
+`PaymentIntent` is the same shape either way.
+
+| Surface | What it does |
+| --- | --- |
+| `POST /missions/{missionId}/observer-pack` | Holds a seat and opens a payment intent, exactly as `POST /bookings` holds a slot. No request body: the price is Darkview's to set, not the caller's to propose. |
+| `POST /payments/webhook` | Unchanged. The settlement branches on `Payment.purpose` after the checks every payment gets. |
+| `POST /missions/{missionId}/observers` | Attaches to a seat already bought. The 402 is still there; it is now a fact about this caller rather than about the feature. |
+
+**Capacity moved onto the pack, and that changed a DV-100 behaviour.** DV-100's
+suite asserted that a seat went back on sale the moment its holder detached, which
+was correct when nobody had bought anything. It is wrong now: a customer whose
+phone drops on the metro would come back to find their session sold to somebody
+else. Leaving frees the attachment and never the seat. The test that asserted the
+old behaviour has been rewritten to assert the new one, under the name *keeps a
+bought seat for its buyer when they leave*. ADR-007's cap is unaffected — five is
+still five, counted over `PENDING_PAYMENT` and `PAID` packs.
+
+**The payment check lives in `takeObserverSeat`, not at the route.** In the same
+locked transaction that counts the seats, so no route can be the one that forgets
+it. DV-100's route comment said the opposite, and the reason it did was that the
+function had no payment to read.
+
+**Settlement attaches nobody.** It makes the pack `PAID` and stops. Marking
+somebody `JOINED` because their bank answered would put a person in a session they
+may not have open, and DV-103 fans telemetry out to exactly that collection.
+
+**Late money is handled the way DV-056 handles it, for the same reason.** A hold
+that lapsed but whose seat nobody took is honoured on capture — being late costs
+the customer the seat only if somebody else took it. A capture that arrives to a
+full session is recorded `OBSERVER_PACK_CAPTURED_WITHOUT_SEAT` and no seat is
+given. That row is DV-111's to refund, alongside `PAYMENT_CAPTURED_WITHOUT_SLOT`.
+Nothing here refunds, because nothing here can yet.
+
+**Lock order: payment, then mission, then pack.** `purchaseObserverPack` takes
+mission then pack; the settlement takes payment then mission then pack. Mission
+before pack in both, so the two never wait on each other in opposite directions.
+
+**Provisional, and both must be replaced before anything is sold:**
+`PROVISIONAL_OBSERVER_PACK_PRICE_MINOR` is 1500 tetri, held below
+`PROVISIONAL_SLOT_PRICE_MINOR` by a test because ADR-007 rule 6 fixes the relation
+and not the figure. `OBSERVER_PACK_HOLD_MINUTES` is five rather than DV-055's
+fifteen: a booking holds a slot on a future night, while this holds a seat on a
+session running now, and fifteen minutes of an abandoned checkout is most of
+somebody's observation.
+
+**No new environment variable.** The sale runs on DV-056's sandbox adapter and its
+existing `PAYMENT_SANDBOX_WEBHOOK_SECRET`.
+
+**Verified by removing each protection and confirming a named test fails:** the
+paid-pack gate in `takeObserverSeat`, the `FOR UPDATE` on the mission row while
+seats are counted (twenty simultaneous buyers then sell more than five), counting
+an outstanding hold as an occupied seat, the lapsed-hold sweep, and the capacity
+re-check that decides whether late money gets a seat or a
+`OBSERVER_PACK_CAPTURED_WITHOUT_SEAT` row.

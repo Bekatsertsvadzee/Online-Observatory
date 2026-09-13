@@ -658,6 +658,47 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /missions/{missionId}/observer-pack:
+    post:
+      operationId: purchaseObserverPack
+      tags: [missions, payments]
+      summary: Buy a view-only seat on a live session somebody else controls.
+      description: |
+        Opens a payment intent for one Observer Pack seat on this mission (ADR-007) and
+        holds the seat while the payment is outstanding, exactly as `POST /bookings`
+        holds a slot. The seat becomes usable when the provider callback settles the
+        payment; `POST /missions/{missionId}/observers` is what attaches to it, and
+        answers 402 until then.
+
+        Capacity is counted on packs, not on attached observers. A seat that has been
+        paid for belongs to its buyer for the rest of the session: leaving frees the
+        connection, never the seat, so a reconnecting observer is never shut out by
+        somebody who bought theirs in the meantime.
+
+        One pack per person per mission. Asking again while a hold is outstanding
+        returns the same pack and the same intent rather than opening a second payment.
+
+        Fails with MISSION_NOT_OBSERVABLE if the controller has not opted in, with
+        OBSERVER_CAPACITY_REACHED when every seat is sold or held, and with CONFLICT if
+        the caller is the session's own controller.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      responses:
+        "201":
+          description: Seat held and a payment intent opened.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObserverPackWithPaymentIntent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /missions/{missionId}/events:
     get:
       operationId: listMissionEvents
@@ -2523,6 +2564,63 @@ components:
           type: integer
           minimum: 0
           maximum: 5
+
+    ObserverPackStatus:
+      type: string
+      description: |
+        PENDING_PAYMENT holds a seat while the payment is outstanding and lapses at
+        `holdExpiresAt` if nothing settles. PAID is a seat its buyer keeps for the rest
+        of the session. CANCELLED is a payment that failed; EXPIRED is a hold that ran
+        out. Both put the seat back on sale.
+      enum: [PENDING_PAYMENT, PAID, CANCELLED, EXPIRED]
+
+    ObserverPack:
+      type: object
+      description: |
+        One purchased, view-only seat on a session somebody else controls (ADR-007).
+
+        The pack is the sale; `MissionObserver` is the attachment to it. They are
+        separate because a seat outlives a connection: an observer whose phone drops
+        still owns what they paid for.
+      additionalProperties: false
+      required: [id, missionId, userId, status, priceMinor, currency, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        missionId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/ObserverPackStatus"
+        priceMinor:
+          type: integer
+          minimum: 0
+        currency:
+          $ref: "#/components/schemas/Currency"
+        paymentId:
+          type: [string, "null"]
+          format: uuid
+        holdExpiresAt:
+          type: [string, "null"]
+          format: date-time
+          description: When an unpaid hold lapses. Null once the pack is no longer holding one.
+        createdAt:
+          type: string
+          format: date-time
+
+    ObserverPackWithPaymentIntent:
+      type: object
+      additionalProperties: false
+      required: [observerPack, paymentIntent]
+      properties:
+        observerPack:
+          $ref: "#/components/schemas/ObserverPack"
+        paymentIntent:
+          $ref: "#/components/schemas/PaymentIntent"
 
     MissionObservationSettings:
       type: object

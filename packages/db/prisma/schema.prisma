@@ -277,6 +277,19 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum PaymentPurpose {
+  BOOKING
+  OBSERVER_PACK
+}
+
+/// Contract: ObserverPackStatus.
+enum ObserverPackStatus {
+  PENDING_PAYMENT
+  PAID
+  CANCELLED
+  EXPIRED
+}
+
 /// Contract: ImagingProfile.
 enum ImagingProfile {
   LUNAR
@@ -350,6 +363,7 @@ model User {
   missionSessions     MissionSession[]
   captureAccess       CaptureAccess[]
   networkNodes        ObservatoryNetworkNode[] @relation("NetworkNodeOwner")
+  observerPacks       ObserverPack[]
 }
 
 model Account {
@@ -667,6 +681,7 @@ model Mission {
   commands            ObservatoryCommand[]
   presences           MissionPresence[]
   participants        MissionParticipant[]
+  observerPacks       ObserverPack[]
   captureAccess       CaptureAccess[]
   sessions            MissionSession[]
   auditLogs           AuditLog[]
@@ -748,6 +763,46 @@ model MissionParticipant {
 
   @@unique([missionId, userId])
   @@index([missionId, status])
+}
+
+/// One purchased, view-only seat on somebody else's session (ADR-007, DV-102).
+///
+/// The pack is the sale and MissionParticipant is the attachment to it. They are
+/// two tables because a seat outlives a connection: an observer whose phone drops
+/// still owns what they paid for, and a seat that went back on sale the moment
+/// they disconnected would let a sixth buyer take it while they reconnect.
+///
+/// Capacity is therefore counted here, over PENDING_PAYMENT and PAID rows, and
+/// not over attached participants. There is no unique index behind that count --
+/// "at most five rows" is not something an index can say -- so the mission row is
+/// locked FOR UPDATE first, the same way takeObserverSeat does it.
+model ObserverPack {
+  id            String             @id @default(uuid()) @db.Uuid
+  missionId     String             @db.Uuid
+  userId        String             @db.Uuid
+  paymentId     String?            @unique @db.Uuid
+  status        ObserverPackStatus @default(PENDING_PAYMENT)
+  /// When an unpaid hold lapses and the seat returns to the available count. Set
+  /// for every PENDING_PAYMENT pack -- ObserverPack_pending_payment_has_hold_expiry
+  /// makes that the database's rule, so an abandoned checkout cannot hold a seat
+  /// for the length of a session.
+  holdExpiresAt DateTime?
+  priceMinor    Int
+  currency      Currency           @default(GEL)
+  isDemo        Boolean            @default(false)
+  paidAt        DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  mission       Mission            @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  user          User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  payment       Payment?           @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  /// One pack per person per mission. Buying twice is not two seats, and a second
+  /// attempt while a hold is outstanding returns the first pack rather than opening
+  /// another payment.
+  @@unique([missionId, userId])
+  @@index([missionId, status])
+  @@index([status, holdExpiresAt])
 }
 
 /// Contract: MissionEvent. The mission's own trail -- one row per reported
@@ -835,6 +890,13 @@ model Booking {
 model Payment {
   id            String          @id @default(uuid()) @db.Uuid
   userId        String          @db.Uuid
+  /// What this payment buys. Not a contract field -- no client is told, and
+  /// PaymentIntent is the same shape either way -- but the settlement path must
+  /// know which record to apply an outcome to, and inferring that from whichever
+  /// relation happens to be null would make a payment with neither look like a
+  /// booking. Written once, by whichever path opens the intent, alongside the row
+  /// it belongs to and in the same transaction; nothing updates it afterwards.
+  purpose       PaymentPurpose  @default(BOOKING)
   provider      PaymentProvider
   status        PaymentStatus   @default(PENDING)
   amountMinor   Int
@@ -850,6 +912,7 @@ model Payment {
   refundedAt    DateTime?
   user          User            @relation(fields: [userId], references: [id], onDelete: Restrict)
   booking       Booking?
+  observerPack  ObserverPack?
 
   @@unique([provider, providerRef])
   @@index([userId, createdAt])
