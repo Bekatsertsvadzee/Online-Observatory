@@ -1447,3 +1447,50 @@ seats are counted (twenty simultaneous buyers then sell more than five), countin
 an outstanding hold as an occupied seat, the lapsed-hold sweep, and the capacity
 re-check that decides whether late money gets a seat or a
 `OBSERVER_PACK_CAPTURED_WITHOUT_SEAT` row.
+
+## What the 13 September review found in DV-102, and what closed it
+
+Two defects, both reproduced against PostgreSQL by the review in
+`docs/audits/2026-09-13-review.md`, both in `seatCapturedPack`, both from the same
+mistake: it re-read the pack under the mission and pack locks and then checked the
+wrong things.
+
+**It selected `paymentId` and never compared it.** `Payment.observerPack` is read
+before any lock is held. Between that read and the locked one, a customer whose
+hold lapsed can buy again on the same pack row with a new payment — and the
+callback in flight is then holding a reference to a pack that has moved on. It
+marked that replacement PAID while the payment behind it stayed PENDING. The
+failure path had the same defect in the other direction: a declined old payment
+cancelled the hold behind the customer's second attempt.
+
+**It read `observerCapacity` off the mission without reading the state beside
+it.** A session that had already finished sold a paid seat that `takeObserverSeat`
+will always refuse, and — worse — emitted no
+`OBSERVER_PACK_CAPTURED_WITHOUT_SEAT`, so the money vanished from the refund
+engine's view. The backlog note above promised that row and the code did not write
+it on the path that needed it most.
+
+`lockOwnedPack` now returns the pack only when `paymentId` still matches, and
+hands the mission back with it so deliverability is decided under the same lock.
+Both branches go through it.
+
+**Deliverability means the terminal states only** — `COMPLETE`, `CANCELLED`,
+`FAILED`. The review suggested join policy too, and that would be wrong: a
+controller can reopen a session, and `WEATHER_HOLD` or `NOT_VISIBLE` is a mission
+waiting rather than a mission over. Refunding somebody whose session resumes
+twenty minutes later is the worse error. A pack held on a session that never
+reopens is DV-111's, like every other undelivered seat.
+
+`OBSERVER_PACK_CAPTURED_WITHOUT_SEAT` now carries `reason`:
+`PACK_NOT_OWNED_BY_PAYMENT`, `MISSION_ENDED` or `SEAT_TAKEN_AFTER_HOLD_LAPSED`.
+`OBSERVER_PACK_PAYMENT_FAILED` carries `seatReleased`, false when the callback was
+for a checkout the customer had already replaced.
+
+**Verified by removing each protection and confirming a named test fails:** the
+ownership comparison, on the capture path and on the failure path separately, and
+the terminal-mission check. The review's own two tests pass unmodified against the
+fix.
+
+**Still open from that review, and not this issue's:** no implemented path from a
+`SCHEDULED` booking to a running mission, no HTTP authentication boundary in the
+contract, and eight contract endpoints with no route handler. Each has an issue.

@@ -1,0 +1,47 @@
+describe("audit regressions", () => {
+  it("does not sell a usable seat after the mission completes", async () => {
+    await openToObservers();
+    const buyer = await createUser("audit-buyer");
+    const purchase = await buy(buyer);
+    await database.mission.update({where: {id: missionId}, data: {state: "COMPLETE"}});
+    await settlePayment({provider: "SANDBOX", outcome: captured(purchase.paymentIntent.paymentId), now: AFTER_HOLD});
+    const pack = await database.observerPack.findUniqueOrThrow({where: {id: purchase.observerPack.id}});
+    expect(pack.status).not.toBe("PAID");
+    expect(await auditActions(pack.id)).toContain("OBSERVER_PACK_CAPTURED_WITHOUT_SEAT");
+  });
+
+  it("does not let an old callback settle a replacement checkout", async () => {
+    await openToObservers();
+    const buyer = await createUser("audit-race");
+    const first = await buy(buyer);
+    let release!: () => void;
+    let signal!: () => void;
+    const paused = new Promise<void>(resolve => {signal = resolve;});
+    const resume = new Promise<void>(resolve => {release = resolve;});
+    const original = database.$transaction.bind(database);
+    const spy = vi.spyOn(database, "$transaction").mockImplementationOnce(((fn: any) => original(async (tx) => {
+      const read = tx.payment.findUnique.bind(tx.payment);
+      tx.payment.findUnique = (async (args: any) => {
+        const payment = await read(args);
+        signal();
+        await resume;
+        return payment;
+      }) as typeof tx.payment.findUnique;
+      return fn(tx);
+    })) as typeof database.$transaction);
+    const settlement = settlePayment({provider: "SANDBOX", outcome: captured(first.paymentIntent.paymentId), now: AFTER_HOLD});
+    await paused;
+    try {
+      const second = await buy(buyer, AFTER_HOLD);
+      release();
+      await settlement;
+      const pack = await database.observerPack.findUniqueOrThrow({where: {id: second.observerPack.id}});
+      expect(pack.paymentId).toBe(second.paymentIntent.paymentId);
+      expect(pack.status).toBe("PENDING_PAYMENT");
+    } finally {
+      release();
+      spy.mockRestore();
+      await settlement;
+    }
+  });
+});

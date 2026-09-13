@@ -555,3 +555,210 @@ describe("money that arrives after the hold lapsed", () => {
     if (!seated.ok) expect(seated.status).toBe(402);
   });
 });
+
+/**
+ * The two defects the 13 September review reproduced, and one it suspected.
+ *
+ * Both came from the same mistake: `seatCapturedPack` re-read the pack under the
+ * mission and pack locks and then checked the wrong things. It selected
+ * `paymentId` and never compared it, and it read `observerCapacity` off the
+ * mission without reading the state next to it. So a callback could settle a
+ * checkout it had not paid for, and a finished session could sell a seat nobody
+ * would ever be able to use -- without the one audit row the refund engine
+ * (DV-111) has to work from.
+ */
+describe("a callback that has gone stale", () => {
+  /**
+   * Settle one payment with its transaction held open just after it reads the
+   * payment row -- which is where it also reads the pack relation that can go
+   * stale -- run `interleave`, then let it finish.
+   *
+   * `mockImplementationOnce` intercepts only this settlement's transaction: it is
+   * started first, and the purchase that races it gets the real one.
+   */
+  async function settleWhilePausedAfterPaymentRead(
+    outcome: Parameters<typeof settlePayment>[0]["outcome"],
+    now: Date,
+    interleave: () => Promise<void>,
+  ) {
+    let release!: () => void;
+    let reachedRead!: () => void;
+    const pausedAtRead = new Promise<void>((resolve) => {
+      reachedRead = resolve;
+    });
+    const resumed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    type Transact = typeof database.$transaction;
+    const real = database.$transaction.bind(database) as Transact;
+
+    const spy = vi.spyOn(database, "$transaction").mockImplementationOnce(((
+      run: (tx: Parameters<Parameters<Transact>[0]>[0]) => Promise<unknown>,
+    ) =>
+      real(async (tx) => {
+        const read = tx.payment.findUnique.bind(tx.payment);
+        tx.payment.findUnique = (async (args: never) => {
+          const row = await read(args);
+          reachedRead();
+          await resumed;
+          return row;
+        }) as typeof tx.payment.findUnique;
+        return run(tx);
+      })) as Transact);
+
+    const settlement = settlePayment({ provider: "SANDBOX", outcome, now });
+
+    try {
+      await pausedAtRead;
+      await interleave();
+    } finally {
+      release();
+      await settlement;
+      spy.mockRestore();
+    }
+  }
+
+  /** The customer's hold lapsed and they started again: same pack, new payment. */
+  async function buyAgain(buyer: string) {
+    return buy(buyer, AFTER_HOLD);
+  }
+
+  it("does not settle a replacement checkout the customer is still paying for", async () => {
+    await openToObservers();
+    const buyer = await createUser("buyer");
+    const first = await buy(buyer);
+
+    let second!: Awaited<ReturnType<typeof buy>>;
+    await settleWhilePausedAfterPaymentRead(
+      captured(first.paymentIntent.paymentId),
+      AFTER_HOLD,
+      async () => {
+        second = await buyAgain(buyer);
+      },
+    );
+
+    // The same row, which is what makes the stale reference possible.
+    expect(second.observerPack.id).toBe(first.observerPack.id);
+
+    const pack = await database.observerPack.findUniqueOrThrow({
+      where: { id: second.observerPack.id },
+    });
+    // The replacement checkout is untouched: its payment has not settled, so its
+    // seat is still only held.
+    expect(pack.paymentId).toBe(second.paymentIntent.paymentId);
+    expect(pack.status).toBe("PENDING_PAYMENT");
+
+    // The first payment's money is still accounted for, against the payment
+    // rather than a pack that is no longer its own.
+    expect(
+      await database.payment.findUniqueOrThrow({
+        where: { id: first.paymentIntent.paymentId },
+      }),
+    ).toMatchObject({ status: "CAPTURED" });
+
+    const row = await database.auditLog.findFirstOrThrow({
+      where: { action: "OBSERVER_PACK_CAPTURED_WITHOUT_SEAT" },
+    });
+    expect(row.entityId).toBe(first.paymentIntent.paymentId);
+    expect(row.metadata).toMatchObject({ reason: "PACK_NOT_OWNED_BY_PAYMENT" });
+  });
+
+  it("does not release a seat the customer has bought again", async () => {
+    // The other half of the same staleness, on the failure path: a declined old
+    // payment must not cancel the hold behind the customer's second attempt.
+    await openToObservers();
+    const buyer = await createUser("buyer");
+    const first = await buy(buyer);
+
+    let second!: Awaited<ReturnType<typeof buy>>;
+    await settleWhilePausedAfterPaymentRead(
+      captured(first.paymentIntent.paymentId, {
+        result: "FAILED",
+        failureReason: "CARD_DECLINED",
+      }),
+      AFTER_HOLD,
+      async () => {
+        second = await buyAgain(buyer);
+      },
+    );
+
+    const pack = await database.observerPack.findUniqueOrThrow({
+      where: { id: second.observerPack.id },
+    });
+    expect(pack.paymentId).toBe(second.paymentIntent.paymentId);
+    expect(pack.status).toBe("PENDING_PAYMENT");
+
+    const row = await database.auditLog.findFirstOrThrow({
+      where: { action: "OBSERVER_PACK_PAYMENT_FAILED" },
+    });
+    expect(row.metadata).toMatchObject({ seatReleased: false });
+  });
+});
+
+describe("a seat on a session that has ended", () => {
+  it("is not sold, and the money is recorded for the refund engine", async () => {
+    await openToObservers();
+    const buyer = await createUser("buyer");
+    const { observerPack, paymentIntent } = await buy(buyer);
+
+    // The observation finishes while the bank is still thinking.
+    await database.mission.update({
+      where: { id: missionId },
+      data: { state: "COMPLETE" },
+    });
+
+    const result = await settlePayment({
+      provider: "SANDBOX",
+      outcome: captured(paymentIntent.paymentId),
+      now: AFTER_HOLD,
+    });
+
+    expect(result).toMatchObject({ ok: true, applied: true });
+
+    // A paid seat on a finished session is undeliverable and always will be:
+    // takeObserverSeat refuses a mission that is not live, so awarding one would
+    // be taking money for something nobody can ever use.
+    const pack = await database.observerPack.findUniqueOrThrow({
+      where: { id: observerPack.id },
+    });
+    expect(pack.status).not.toBe("PAID");
+    expect(pack.paidAt).toBeNull();
+
+    // The money moved, so the record says so, and says why no seat was given.
+    expect(
+      await database.payment.findUniqueOrThrow({ where: { id: paymentIntent.paymentId } }),
+    ).toMatchObject({ status: "CAPTURED" });
+    expect(await auditActions(observerPack.id)).toEqual([
+      "OBSERVER_PACK_RESERVED",
+      "OBSERVER_PACK_CAPTURED_WITHOUT_SEAT",
+    ]);
+    expect(
+      (
+        await database.auditLog.findFirstOrThrow({
+          where: { action: "OBSERVER_PACK_CAPTURED_WITHOUT_SEAT" },
+        })
+      ).metadata,
+    ).toMatchObject({ reason: "MISSION_ENDED" });
+  });
+
+  it("still refuses to attach, which is why the seat was not sold", async () => {
+    await openToObservers();
+    const buyer = await createUser("buyer");
+    const { paymentIntent } = await buy(buyer);
+    await database.mission.update({
+      where: { id: missionId },
+      data: { state: "COMPLETE" },
+    });
+    await settlePayment({
+      provider: "SANDBOX",
+      outcome: captured(paymentIntent.paymentId),
+      now: AFTER_HOLD,
+    });
+
+    const seated = await takeObserverSeat({ missionId, userId: buyer, now: AFTER_HOLD });
+
+    expect(seated.ok).toBe(false);
+    if (!seated.ok) expect(seated.code).toBe("MISSION_NOT_ACTIVE");
+  });
+});
