@@ -49,6 +49,13 @@ export type AuditAction =
   | "PAYMENT_CAPTURED_WITHOUT_SLOT"
   | "PAYMENT_FAILED"
   | "PAYMENT_WEBHOOK_REFUSED"
+  // PAYMENT -- the Observer Pack sale (DV-102). A seat is a different sale from a
+  // booking: it has no slot to release, so a capture that arrives after the hold
+  // lapsed has its own row, and it is the one DV-111 refunds from.
+  | "OBSERVER_PACK_RESERVED"
+  | "OBSERVER_PACK_CAPTURED"
+  | "OBSERVER_PACK_PAYMENT_FAILED"
+  | "OBSERVER_PACK_CAPTURED_WITHOUT_SEAT"
   // MISSION
   | "MISSION_SCHEDULED"
   | "MISSION_SESSION_OPENED"

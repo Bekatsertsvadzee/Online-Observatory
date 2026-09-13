@@ -609,6 +609,45 @@ export const zMissionObserverList = z.strictObject({
 });
 
 /**
+ * PENDING_PAYMENT holds a seat while the payment is outstanding and lapses at
+ * `holdExpiresAt` if nothing settles. PAID is a seat its buyer keeps for the rest
+ * of the session. CANCELLED is a payment that failed; EXPIRED is a hold that ran
+ * out. Both put the seat back on sale.
+ *
+ */
+export const zObserverPackStatus = z.enum([
+    'PENDING_PAYMENT',
+    'PAID',
+    'CANCELLED',
+    'EXPIRED'
+]);
+
+/**
+ * One purchased, view-only seat on a session somebody else controls (ADR-007).
+ *
+ * The pack is the sale; `MissionObserver` is the attachment to it. They are
+ * separate because a seat outlives a connection: an observer whose phone drops
+ * still owns what they paid for.
+ *
+ */
+export const zObserverPack = z.strictObject({
+    id: z.uuid(),
+    missionId: z.uuid(),
+    userId: z.uuid(),
+    status: zObserverPackStatus,
+    priceMinor: z.int().gte(0),
+    currency: zCurrency,
+    paymentId: z.uuid().nullish(),
+    holdExpiresAt: z.iso.datetime().nullish(),
+    createdAt: z.iso.datetime()
+});
+
+export const zObserverPackWithPaymentIntent = z.strictObject({
+    observerPack: zObserverPack,
+    paymentIntent: zPaymentIntent
+});
+
+/**
  * The controller's consent to being observed. Set only by the session owner.
  * Sessions are private by default and become observable only by this call.
  *
@@ -1805,6 +1844,15 @@ export const zJoinMissionAsObserverPath = z.object({
  * Observer seat taken.
  */
 export const zJoinMissionAsObserverResponse = zMissionObserver;
+
+export const zPurchaseObserverPackPath = z.object({
+    missionId: z.uuid()
+});
+
+/**
+ * Seat held and a payment intent opened.
+ */
+export const zPurchaseObserverPackResponse = zObserverPackWithPaymentIntent;
 
 export const zListMissionEventsPath = z.object({
     missionId: z.uuid()

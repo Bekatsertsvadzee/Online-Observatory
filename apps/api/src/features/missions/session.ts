@@ -23,6 +23,18 @@ export const LIVE_MISSION_STATES = [
 ] as const;
 
 /**
+ * The states a mission never leaves.
+ *
+ * Nothing resumes from one, which is what separates them from the hold states:
+ * WEATHER_HOLD and NOT_VISIBLE are a mission waiting, and a mission waiting may
+ * still become observable. These are the ones where an undelivered promise is
+ * final -- the realtime service keeps the same list for the same reason
+ * (`TERMINAL_MISSION_STATES` in `apps/realtime/src/link/store.ts`), and the two
+ * are not shared only because neither service imports the other.
+ */
+export const TERMINAL_MISSION_STATES = ["COMPLETE", "CANCELLED", "FAILED"] as const;
+
+/**
  * How long a session owns the telescope when no booking bounds it.
  *
  * A booked mission gets the end of its slot instead, which is the honest answer:

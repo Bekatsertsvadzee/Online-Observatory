@@ -130,6 +130,7 @@ beforeEach(async () => {
   await database.observatoryCommand.deleteMany();
   await database.missionSession.deleteMany();
   await database.missionEvent.deleteMany();
+  await database.observerPack.deleteMany();
   await database.booking.deleteMany();
   await database.mission.deleteMany();
   // ObservatoryNetworkNode holds Restrict foreign keys to Observatory and User

@@ -59,6 +59,38 @@ async function createUser(label: string): Promise<string> {
   return user.id;
 }
 
+/**
+ * Give somebody the paid seat DV-102 now requires before they may attach.
+ *
+ * DV-100 could take a seat with nothing behind it, because Observer Pack payment
+ * did not exist and the route refused rather than hand out free ones. It exists
+ * now, and `takeObserverSeat` reads it: every test below that expects to attach
+ * has to buy first, which is the point.
+ */
+async function grantPaidPack(userId: string) {
+  const payment = await database.payment.create({
+    data: {
+      userId,
+      purpose: "OBSERVER_PACK",
+      provider: "SANDBOX",
+      status: "CAPTURED",
+      amountMinor: 1500,
+      capturedAt: NOW,
+    },
+  });
+
+  await database.observerPack.create({
+    data: {
+      missionId,
+      userId,
+      paymentId: payment.id,
+      status: "PAID",
+      priceMinor: 1500,
+      paidAt: NOW,
+    },
+  });
+}
+
 async function openToObservers(capacity = MAX_OBSERVER_CAPACITY) {
   await database.mission.update({
     where: { id: missionId },
@@ -94,6 +126,7 @@ beforeEach(async () => {
   await database.missionEvent.deleteMany();
   await database.observatoryCommand.deleteMany();
   await database.missionSession.deleteMany();
+  await database.observerPack.deleteMany();
   await database.booking.deleteMany();
   await database.mission.deleteMany();
   await database.payment.deleteMany();
@@ -183,6 +216,8 @@ describe("the cap ADR-007 fixed at five", () => {
       Array.from({ length: 10 }, (_, index) => createUser(`observer-${index}`)),
     );
 
+    await Promise.all(contenders.map(grantPaidPack));
+
     const results = await Promise.all(
       contenders.map((userId) => takeObserverSeat({ missionId, userId, now: NOW })),
     );
@@ -203,30 +238,38 @@ describe("the cap ADR-007 fixed at five", () => {
     expect(seated).toBe(MAX_OBSERVER_CAPACITY);
   });
 
-  it("frees a seat when somebody leaves", async () => {
+  it("lets a buyer who left come back to the session they bought", async () => {
+    // DV-102 changed what "frees a seat" means. Under DV-100 a seat went back on
+    // sale the moment its holder detached, because nobody had bought anything.
+    // A seat is now paid for, so leaving frees the attachment and never the seat
+    // -- somebody whose connection drops has to be able to come back.
+    //
+    // That the seat does not return to *sale* is a claim about the purchase path,
+    // where capacity is counted, and observer-pack.integration.test.ts makes it.
+    // Here the claim is the other half: reattaching works.
     await openToObservers(1);
 
-    const first = await createUser("first");
-    const second = await createUser("second");
+    const buyer = await createUser("buyer");
+    await grantPaidPack(buyer);
 
-    expect((await takeObserverSeat({ missionId, userId: first, now: NOW })).ok).toBe(
+    expect((await takeObserverSeat({ missionId, userId: buyer, now: NOW })).ok).toBe(
       true,
     );
 
-    const refused = await takeObserverSeat({ missionId, userId: second, now: NOW });
-    expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.code).toBe("OBSERVER_CAPACITY_REACHED");
+    await releaseObserverSeat({ missionId, userId: buyer, now: NOW });
 
-    await releaseObserverSeat({ missionId, userId: first, now: NOW });
-
-    expect((await takeObserverSeat({ missionId, userId: second, now: NOW })).ok).toBe(
+    expect((await takeObserverSeat({ missionId, userId: buyer, now: NOW })).ok).toBe(
       true,
     );
+    expect(
+      await database.missionParticipant.count({ where: { missionId, status: "JOINED" } }),
+    ).toBe(1);
   });
 
   it("lets an operator close a mission to observers with a capacity of zero", async () => {
     await openToObservers(0);
     const hopeful = await createUser("hopeful");
+    await grantPaidPack(hopeful);
 
     const result = await takeObserverSeat({ missionId, userId: hopeful, now: NOW });
 
@@ -276,9 +319,45 @@ describe("who may take a seat", () => {
     if (!result.ok) expect(result.code).toBe("MISSION_NOT_ACTIVE");
   });
 
+  it("refuses somebody who has not bought a seat", async () => {
+    // The gate DV-102 added, and the reason it lives in takeObserverSeat rather
+    // than at the route: no caller can be the one that forgets it.
+    await openToObservers();
+    const freeloader = await createUser("freeloader");
+
+    const result = await takeObserverSeat({ missionId, userId: freeloader, now: NOW });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(402);
+      expect(result.code).toBe("PAYMENT_REQUIRED");
+    }
+    expect(await database.missionParticipant.count({ where: { missionId } })).toBe(0);
+  });
+
+  it("refuses somebody whose seat is bought but not yet paid for", async () => {
+    await openToObservers();
+    const holding = await createUser("holding");
+    await database.observerPack.create({
+      data: {
+        missionId,
+        userId: holding,
+        status: "PENDING_PAYMENT",
+        holdExpiresAt: new Date(NOW.getTime() + 60_000),
+        priceMinor: 1500,
+      },
+    });
+
+    const result = await takeObserverSeat({ missionId, userId: holding, now: NOW });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(402);
+  });
+
   it("gives a rejoining observer the same seat rather than a second", async () => {
     await openToObservers();
     const observer = await createUser("observer");
+    await grantPaidPack(observer);
 
     const first = await takeObserverSeat({ missionId, userId: observer, now: NOW });
     const again = await takeObserverSeat({ missionId, userId: observer, now: NOW });
@@ -295,6 +374,7 @@ describe("a seat that has been given back", () => {
   it("can be taken again by the same person", async () => {
     await openToObservers();
     const observer = await createUser("observer");
+    await grantPaidPack(observer);
 
     await takeObserverSeat({ missionId, userId: observer, now: NOW });
     await releaseObserverSeat({ missionId, userId: observer, now: NOW });
@@ -307,6 +387,7 @@ describe("a seat that has been given back", () => {
   it("is not an error to give back twice", async () => {
     await openToObservers();
     const observer = await createUser("observer");
+    await grantPaidPack(observer);
     await takeObserverSeat({ missionId, userId: observer, now: NOW });
 
     expect((await releaseObserverSeat({ missionId, userId: observer, now: NOW })).ok)
@@ -320,11 +401,9 @@ describe("closing a session", () => {
   it("detaches everyone watching, because consent withdrawn stops the watching", async () => {
     await openToObservers();
     for (let index = 0; index < 3; index += 1) {
-      await takeObserverSeat({
-        missionId,
-        userId: await createUser(`observer-${index}`),
-        now: NOW,
-      });
+      const userId = await createUser(`observer-${index}`);
+      await grantPaidPack(userId);
+      await takeObserverSeat({ missionId, userId, now: NOW });
     }
 
     const detached = await detachAllObservers({ missionId, now: NOW });
@@ -340,6 +419,7 @@ describe("who may see the list", () => {
   it("shows the controller everyone watching", async () => {
     await openToObservers();
     const observer = await createUser("observer");
+    await grantPaidPack(observer);
     await takeObserverSeat({ missionId, userId: observer, now: NOW });
 
     const result = await listMissionObservers({
@@ -359,6 +439,8 @@ describe("who may see the list", () => {
     await openToObservers();
     const mine = await createUser("mine");
     const other = await createUser("other");
+    await grantPaidPack(mine);
+    await grantPaidPack(other);
     await takeObserverSeat({ missionId, userId: mine, now: NOW });
     await takeObserverSeat({ missionId, userId: other, now: NOW });
 
@@ -423,6 +505,7 @@ describe("the controller's consent (DV-101)", () => {
       expect(() => zMission.parse(opened.value)).not.toThrow();
     }
 
+    await grantPaidPack(hopeful);
     const after = await takeObserverSeat({ missionId, userId: hopeful, now: NOW });
     expect(after.ok).toBe(true);
   });
@@ -430,11 +513,9 @@ describe("the controller's consent (DV-101)", () => {
   it("detaches everyone watching when the controller closes it", async () => {
     await openToObservers();
     for (let index = 0; index < 3; index += 1) {
-      await takeObserverSeat({
-        missionId,
-        userId: await createUser(`observer-${index}`),
-        now: NOW,
-      });
+      const userId = await createUser(`observer-${index}`);
+      await grantPaidPack(userId);
+      await takeObserverSeat({ missionId, userId, now: NOW });
     }
 
     const closed = await setMissionObservation({

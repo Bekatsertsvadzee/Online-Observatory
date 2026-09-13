@@ -709,6 +709,51 @@ class MissionObserverList(BaseModel):
     capacity: int = Field(..., ge=0, le=5)
 
 
+class ObserverPackStatus(StrEnum):
+    """
+    PENDING_PAYMENT holds a seat while the payment is outstanding and lapses at
+    `holdExpiresAt` if nothing settles. PAID is a seat its buyer keeps for the rest
+    of the session. CANCELLED is a payment that failed; EXPIRED is a hold that ran
+    out. Both put the seat back on sale.
+
+    """
+    pending_payment = 'PENDING_PAYMENT'
+    paid = 'PAID'
+    cancelled = 'CANCELLED'
+    expired = 'EXPIRED'
+
+
+class ObserverPack(BaseModel):
+    """
+    One purchased, view-only seat on a session somebody else controls (ADR-007).
+
+    The pack is the sale; `MissionObserver` is the attachment to it. They are
+    separate because a seat outlives a connection: an observer whose phone drops
+    still owns what they paid for.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: UUID
+    mission_id: UUID = Field(..., alias='missionId')
+    user_id: UUID = Field(..., alias='userId')
+    status: ObserverPackStatus
+    price_minor: int = Field(..., alias='priceMinor', ge=0)
+    currency: Currency
+    payment_id: UUID | None = Field(None, alias='paymentId')
+    hold_expires_at: AwareDatetime | None = Field(None, alias='holdExpiresAt', description='When an unpaid hold lapses. Null once the pack is no longer holding one.')
+    created_at: AwareDatetime = Field(..., alias='createdAt')
+
+
+class ObserverPackWithPaymentIntent(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    observer_pack: ObserverPack = Field(..., alias='observerPack')
+    payment_intent: PaymentIntent = Field(..., alias='paymentIntent')
+
+
 class MissionObservationSettings(BaseModel):
     """
     The controller's consent to being observed. Set only by the session owner.

@@ -108,6 +108,7 @@ beforeEach(async () => {
   await database.networkAvailabilityWindow.deleteMany();
   await database.observatoryNetworkNode.deleteMany();
   await database.safetyEnvelope.deleteMany();
+  await database.observerPack.deleteMany();
   await database.booking.deleteMany();
   await database.mission.deleteMany();
   await database.payment.deleteMany();

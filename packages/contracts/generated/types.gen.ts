@@ -896,6 +896,57 @@ export type MissionObserverList = {
 };
 
 /**
+ * PENDING_PAYMENT holds a seat while the payment is outstanding and lapses at
+ * `holdExpiresAt` if nothing settles. PAID is a seat its buyer keeps for the rest
+ * of the session. CANCELLED is a payment that failed; EXPIRED is a hold that ran
+ * out. Both put the seat back on sale.
+ *
+ */
+export const ObserverPackStatus = {
+    PENDING_PAYMENT: 'PENDING_PAYMENT',
+    PAID: 'PAID',
+    CANCELLED: 'CANCELLED',
+    EXPIRED: 'EXPIRED'
+} as const;
+
+/**
+ * PENDING_PAYMENT holds a seat while the payment is outstanding and lapses at
+ * `holdExpiresAt` if nothing settles. PAID is a seat its buyer keeps for the rest
+ * of the session. CANCELLED is a payment that failed; EXPIRED is a hold that ran
+ * out. Both put the seat back on sale.
+ *
+ */
+export type ObserverPackStatus = typeof ObserverPackStatus[keyof typeof ObserverPackStatus];
+
+/**
+ * One purchased, view-only seat on a session somebody else controls (ADR-007).
+ *
+ * The pack is the sale; `MissionObserver` is the attachment to it. They are
+ * separate because a seat outlives a connection: an observer whose phone drops
+ * still owns what they paid for.
+ *
+ */
+export type ObserverPack = {
+    id: string;
+    missionId: string;
+    userId: string;
+    status: ObserverPackStatus;
+    priceMinor: number;
+    currency: Currency;
+    paymentId?: string | null;
+    /**
+     * When an unpaid hold lapses. Null once the pack is no longer holding one.
+     */
+    holdExpiresAt?: string | null;
+    createdAt: string;
+};
+
+export type ObserverPackWithPaymentIntent = {
+    observerPack: ObserverPack;
+    paymentIntent: PaymentIntent;
+};
+
+/**
  * The controller's consent to being observed. Set only by the session owner.
  * Sessions are private by default and become observable only by this call.
  *
@@ -2792,6 +2843,45 @@ export type JoinMissionAsObserverResponses = {
 };
 
 export type JoinMissionAsObserverResponse = JoinMissionAsObserverResponses[keyof JoinMissionAsObserverResponses];
+
+export type PurchaseObserverPackData = {
+    body?: never;
+    path: {
+        missionId: string;
+    };
+    query?: never;
+    url: '/missions/{missionId}/observer-pack';
+};
+
+export type PurchaseObserverPackErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+};
+
+export type PurchaseObserverPackError = PurchaseObserverPackErrors[keyof PurchaseObserverPackErrors];
+
+export type PurchaseObserverPackResponses = {
+    /**
+     * Seat held and a payment intent opened.
+     */
+    201: ObserverPackWithPaymentIntent;
+};
+
+export type PurchaseObserverPackResponse = PurchaseObserverPackResponses[keyof PurchaseObserverPackResponses];
 
 export type ListMissionEventsData = {
     body?: never;

@@ -9,8 +9,9 @@ import type {
 import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
 
-import { getDatabase } from "@/lib/db/client";
+import { hasPaidObserverPack } from "@/features/missions/observer-pack";
 import { LIVE_MISSION_STATES } from "@/features/missions/session";
+import { getDatabase } from "@/lib/db/client";
 
 /**
  * Observer seats: a paid, view-only place on a session somebody else controls.
@@ -117,8 +118,10 @@ export async function listMissionObservers(input: {
  * held-slot index and DV-058's active-owner index; the difference is that "at
  * most N rows" is not something a unique index can say, so the lock says it.
  *
- * The payment this seat requires is deliberately not checked here. DV-102 owns
- * it, and until then the route refuses before reaching this function.
+ * The payment is checked here rather than at the route, so that no caller can be
+ * the one that forgets. DV-102 sells the seat as an `ObserverPack`; this reads
+ * PAID and nothing else, inside the same locked transaction that counts the
+ * seats. A seat somebody is merely holding is not a seat they own.
  */
 export async function takeObserverSeat(input: {
   missionId: string;
@@ -180,6 +183,17 @@ export async function takeObserverSeat(input: {
           status: 403,
           code: "MISSION_NOT_OBSERVABLE",
           message: "The controller has not opened this session to observers.",
+        } satisfies ObserverFailure;
+      }
+
+      // ADR-007 rule: the seat is paid for. Nothing attaches without one, and
+      // the 402 is the contract's answer for a seat that has not settled.
+      if (!(await hasPaidObserverPack(tx, missionId, userId))) {
+        return {
+          ok: false,
+          status: 402,
+          code: "PAYMENT_REQUIRED",
+          message: "An Observer Pack seat for this session has not been paid for.",
         } satisfies ObserverFailure;
       }
 
