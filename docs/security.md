@@ -97,6 +97,41 @@ The production platform should terminate TLS and add HSTS, a restrictive Content
 
 Database backups must be encrypted and access-controlled. Restrict the application database role to the Darkview schema. Production role changes require an audited administrative path; public registration always creates `USER`.
 
+## Dependency advisories
+
+Triaged 2026-09-14, from the P2 finding in `docs/audits/2026-09-13-review.md`. `npm audit`
+reports eight high-severity packages, four of them with `--omit=dev`. None is fixed by an
+upgrade the version policy allows, and none is reachable from a request.
+
+| Package | Installed | Reached through | When it runs | Reachable from a request |
+| --- | --- | --- | --- | --- |
+| `js-yaml` | 4.2.0 | `@hey-api/openapi-ts` 0.99.0 → `@hey-api/json-schema-ref-parser` 1.4.4 | `contracts:generate` and `contracts:check`, parsing this repository's own `contracts/openapi.yaml` | No |
+| `deepmerge-ts` | 7.1.5 | `prisma` 7.9.1 → `@prisma/config` 7.9.1 | The Prisma CLI loading `packages/db/prisma.config.ts` | No |
+| `mysql2` | 3.15.3 | `prisma` 7.9.1 | Never: the datasource is PostgreSQL | No |
+| `prisma`, `@prisma/config`, `@hey-api/openapi-ts`, `@hey-api/json-schema-ref-parser`, `@hey-api/shared` | — | the three above | as above | No |
+
+**Why nothing is patched.**
+
+- `npm audit fix` proposes `prisma` 6.19.3 and `@hey-api/openapi-ts` 0.97.0. Both are
+  major downgrades, which the version policy forbids mid-phase.
+- The newest releases inside the pinned majors do not help. `prisma` 7.10.0 pins the same
+  `mysql2` 3.15.3 and, through `@prisma/config` 7.10.0, the same `deepmerge-ts` 7.1.5.
+  `@hey-api/openapi-ts` 0.99.0 is the latest release and pins `js-yaml` 4.2.0 exactly.
+- Every vulnerable version is an exact pin in its parent. An `overrides` entry would run
+  those tools on a dependency their authors did not release them with, and for
+  `deepmerge-ts` that is a major version. Not done.
+
+**Why the production audit still lists Prisma.** `prisma` is a devDependency of
+`packages/db`, and an *optional* peer of `@prisma/client`. Because the workspace install
+contains it, `npm ls --omit=dev` shows it under both services. A production install that
+omits `packages/db`'s dev dependencies would not contain it, which is to be confirmed when
+hosting is chosen. Migrations (`prisma migrate deploy`) then run from an install that has
+it, not from the service image.
+
+**When to look again:** any release of `prisma` 7.x or `@hey-api/openapi-ts` that changes
+these pins, any advisory against a package that runs while handling a request, and the
+hosting decision.
+
 ## Verification checklist before hardware integration
 
 - Apply the Prisma migration and configure the email delivery webhook.
