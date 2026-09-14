@@ -1,4 +1,8 @@
-import type { AgentToCloudMessage, CloudToAgentMessage } from "@darkview/contracts";
+import type {
+  AgentToCloudMessage,
+  CloudToAgentMessage,
+  ObservatoryTelemetry,
+} from "@darkview/contracts";
 import type { CaptureAssetKind } from "@darkview/db/enums";
 import type { StorageConfiguration } from "@darkview/storage/config";
 import { captureObjectKey } from "@darkview/storage/keys";
@@ -36,6 +40,12 @@ export class AgentLink {
   private state: LinkState = "AWAITING_HELLO";
   private lastActivityAt: number;
   private readonly missionOwnership = new Map<string, boolean>();
+  /**
+   * The latest telemetry this agent reported (ADR-017). One sample, replaced by
+   * every delta and gone with the link, so it can never outlive the connection that
+   * produced it.
+   */
+  private telemetry: ObservatoryTelemetry | null = null;
   /**
    * The live-frame header whose pixels have not arrived yet.
    *
@@ -84,6 +94,10 @@ export class AgentLink {
 
   get lastSeenAt(): number {
     return this.lastActivityAt;
+  }
+
+  get latestTelemetry(): ObservatoryTelemetry | null {
+    return this.telemetry;
   }
 
   async receive(raw: string): Promise<void> {
@@ -470,6 +484,10 @@ export class AgentLink {
   private async applyStateDelta(
     message: Extract<AgentToCloudMessage, { type: "AGENT_STATE_DELTA" }>,
   ): Promise<void> {
+    // Kept whether or not the delta names a mission: the operator console reads
+    // observatory-wide telemetry, and an idle observatory is still worth watching.
+    this.telemetry = message.telemetry;
+
     const missionId = message.missionId;
     if (!missionId) return;
     if (!(await this.ownsMission(missionId))) {

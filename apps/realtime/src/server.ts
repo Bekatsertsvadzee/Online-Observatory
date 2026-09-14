@@ -20,6 +20,7 @@ import { MissionRelay } from "@/mission/broadcast";
 import { MissionChannel } from "@/mission/channel";
 import { MissionChannelRegistry } from "@/mission/registry";
 import type { ChannelUser } from "@/mission/store";
+import { handleInternalRequest } from "@/internal/http";
 import { handleStreamRequest } from "@/stream/http";
 import { LiveStream } from "@/stream/live-stream";
 import { getEnvironment } from "@/env";
@@ -68,6 +69,7 @@ export function createRealtimeServer(
   appUrl: string,
   streamSecret: string,
   storage: StorageConfiguration,
+  internalSecret: string,
 ) {
   const registry = new AgentLinkRegistry();
   const relay = new AgentRelay(store, registry);
@@ -75,6 +77,19 @@ export function createRealtimeServer(
   const live = new LiveStream(appUrl, streamSecret);
   const broadcast = new MissionRelay(store, missions, live);
   const httpServer = createServer((request, response) => {
+    // ADR-017: the API's read of live telemetry. Synchronous and database-free, so
+    // it is answered before the stream handler and cannot reject.
+    if (
+      handleInternalRequest(
+        { registry, secret: internalSecret },
+        request,
+        response,
+        request.headers.authorization,
+      )
+    ) {
+      return;
+    }
+
     // The service's first HTTP surface beyond the upgrade handshake (ADR-011).
     // Everything that is not a live view is still 404, including a stream request
     // that fails any of its checks -- the handler answers those itself so that a
@@ -316,6 +331,7 @@ if (process.env.NODE_ENV !== "test") {
     // ADR-012: a service that cannot sign refuses to start. This throws here,
     // before a socket is accepted, rather than at the first capture of the night.
     getStorageConfiguration(),
+    environment.REALTIME_INTERNAL_SECRET,
   );
   server.listen(environment.REALTIME_PORT);
 

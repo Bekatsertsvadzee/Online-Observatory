@@ -317,6 +317,18 @@ export const zObservatoryTelemetry = z.strictObject({
     reportedAt: z.iso.datetime()
 });
 
+/**
+ * The latest telemetry the realtime service holds for one connected observatory,
+ * as served on x-darkview-internal to the API (ADR-017). Internal: never sent to a
+ * client directly.
+ *
+ */
+export const zObservatoryTelemetrySnapshot = z.strictObject({
+    observatoryId: z.uuid(),
+    telemetry: zObservatoryTelemetry,
+    lastHeartbeatAt: z.iso.datetime()
+});
+
 export const zSetObservatoryModeRequest = z.strictObject({
     mode: zObservatoryMode,
     reason: z.string().min(8),

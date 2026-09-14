@@ -23,6 +23,13 @@ const serverEnvironmentSchema = z.object({
    * unsigned. Never read in production, where SANDBOX is refused before this.
    */
   PAYMENT_SANDBOX_WEBHOOK_SECRET: z.string().min(32).optional(),
+  /**
+   * Where the API reads live operator telemetry from the realtime service, and the
+   * secret it presents there (ADR-017). An origin, not a path. Optional: unset,
+   * `GET /admin/observatory/state` answers 503 and nothing else is affected.
+   */
+  REALTIME_INTERNAL_URL: z.url().optional(),
+  REALTIME_INTERNAL_SECRET: z.string().min(32).optional(),
 });
 
 export type ServerEnvironment = z.infer<typeof serverEnvironmentSchema>;

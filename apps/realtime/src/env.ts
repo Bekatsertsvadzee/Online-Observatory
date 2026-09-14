@@ -21,6 +21,12 @@ const schema = z.object({
    * and a short one is guessable regardless of the algorithm.
    */
   STREAM_SIGNING_SECRET: z.string().min(32),
+  /**
+   * The secret the API presents on `/internal/*` (ADR-017). No default and a
+   * 32-character floor, for the reasons above; separate from both secrets above
+   * so it can be rotated alone.
+   */
+  REALTIME_INTERNAL_SECRET: z.string().min(32),
 });
 
 export type RealtimeEnvironment = z.infer<typeof schema>;

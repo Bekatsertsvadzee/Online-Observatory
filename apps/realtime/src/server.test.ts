@@ -58,7 +58,13 @@ beforeEach(async () => {
   store.registerToken(hashDeviceToken(DEVICE_TOKEN), realObservatory);
   clients = [];
 
-  server = createRealtimeServer(store, APP_URL, STREAM_SECRET, FAKE_STORAGE);
+  server = createRealtimeServer(
+    store,
+    APP_URL,
+    STREAM_SECRET,
+    FAKE_STORAGE,
+    "an-internal-secret-of-at-least-32-characters",
+  );
   const httpServer = server.listen(0);
   await new Promise<void>((resolve) => httpServer.once("listening", () => resolve()));
   port = (httpServer.address() as AddressInfo).port;
