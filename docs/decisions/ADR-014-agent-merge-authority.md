@@ -151,3 +151,31 @@ the maintainer deciding, and a list they have read and approved is that decision
 **When this is withdrawn.** Under the same rule as the record itself: an agent that
 performs an action nobody named, or treats an approval as covering later actions,
 restores one approval per action.
+
+## Incident, 2026-09-14 — #81 merged with CI unread, and authority restored
+
+- **Decided by:** project maintainer, in session, after the agent reported it
+
+**What happened.** The maintainer approved pushing, opening and merging #81. The agent
+ran the push, a CI wait and the merge in one command. GitHub had not yet registered
+the pull request's run; `gh pr checks --watch` reported "no checks" and exited as a
+success, and the merge ran. That broke condition 2: a pending or unread run is a
+refusal.
+
+**What it cost.** Nothing reached `main` that had not been tested. `main` at `4c1978f`
+was identical to the commit the agent had verified locally (`118bc41`: contract check,
+lint, typecheck, unit, PostgreSQL integration, build, agent tests), and CI then passed
+on that content: run `34842349968` on `main` and run `34842339392` on the pull request.
+The authorship was the maintainer's.
+
+**Decision.** Under *When this would be revisited*, the record was withdrawn by the
+incident. The maintainer restored it the same day, with one condition added to
+condition 2:
+
+> The merge is never issued in the same command as a push or a CI wait. Before merging,
+> the agent reads a run for the **exact head SHA** being merged and merges only if that
+> run shows `completed` and `success`, and states its id. No run yet is not a pass; the
+> agent waits and reads again.
+
+A second merge over an unread or failed run withdraws this record again, and restoring
+it a second time is a new decision, not a repeat of this one.
