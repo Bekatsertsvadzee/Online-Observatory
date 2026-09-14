@@ -135,6 +135,26 @@ x-darkview-websockets:
         Commands go through POST /missions/{missionId}/command so that the cloud mints
         and signs the envelope.
 
+x-darkview-internal:
+  description: |
+    Calls between Darkview's own cloud processes. Not client surface: no browser or
+    mobile client may call these, and the reverse proxy must not route them from the
+    internet. Their payloads are still defined here, because they cross a process
+    boundary, and are generated into TypeScript and Zod like every other payload.
+  routes:
+    - name: observatoryTelemetry
+      method: GET
+      url: /internal/observatories/{observatoryId}/state
+      served_by: apps/realtime
+      called_by: apps/api, for GET /admin/observatory/state (ADR-017)
+      auth: realtimeInternalSecret
+      response:
+        $ref: "#/components/schemas/ObservatoryTelemetrySnapshot"
+      constraints: |
+        The latest telemetry the connected agent reported, held in memory and
+        released when the link closes. Every refusal and every absence -- no or wrong
+        secret, unknown observatory, no link, no sample yet -- is the same 404.
+
 paths:
   /auth/register:
     post:
@@ -898,6 +918,14 @@ paths:
       operationId: adminGetObservatoryState
       tags: [admin]
       summary: Full operator telemetry for the observatory.
+      description: |
+        ADR-017. Telemetry is read live from the realtime service, which holds it only
+        while the agent is connected. When there is no telemetry to report -- the agent
+        is not connected, or the realtime service cannot be reached -- this answers 503
+        OBSERVATORY_OFFLINE rather than inventing device health it cannot see. With no
+        safety envelope recorded it answers 503 SAFETY_NOT_CONFIGURED. The envelope and
+        the missions stay readable through /admin/observatory/safety-envelope and
+        /admin/missions, which do not depend on the link.
       security:
         - userSession: [operator]
       responses:
@@ -909,6 +937,8 @@ paths:
                 $ref: "#/components/schemas/OperatorObservatoryState"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /admin/observatory/mode:
     post:
@@ -1393,6 +1423,15 @@ components:
         Provider signature over the raw webhook body. The exact header name and
         algorithm are provider configuration and must be confirmed against the
         provider's own documentation before implementation. Nothing here is invented.
+    realtimeInternalSecret:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Shared secret the API presents to the realtime service on x-darkview-internal
+        routes (ADR-017). Held only in cloud secret storage, separate from AUTH_SECRET
+        and STREAM_SIGNING_SECRET so each can be rotated alone. Never sent to a client
+        or to the observatory.
 
   parameters:
     NodeId:
@@ -2019,6 +2058,25 @@ components:
         updatedAt:
           type: string
           format: date-time
+
+    ObservatoryTelemetrySnapshot:
+      type: object
+      description: |
+        The latest telemetry the realtime service holds for one connected observatory,
+        as served on x-darkview-internal to the API (ADR-017). Internal: never sent to a
+        client directly.
+      additionalProperties: false
+      required: [observatoryId, telemetry, lastHeartbeatAt]
+      properties:
+        observatoryId:
+          type: string
+          format: uuid
+        telemetry:
+          $ref: "#/components/schemas/ObservatoryTelemetry"
+        lastHeartbeatAt:
+          type: string
+          format: date-time
+          description: The last message of any kind from the agent's link, on the cloud's clock.
 
     ObservatoryTelemetry:
       type: object

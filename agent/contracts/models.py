@@ -1813,6 +1813,21 @@ class AdminUpdateTargetRequest(BaseModel):
     description_ka: str | None = Field(None, alias='descriptionKa')
 
 
+class ObservatoryTelemetrySnapshot(BaseModel):
+    """
+    The latest telemetry the realtime service holds for one connected observatory,
+    as served on x-darkview-internal to the API (ADR-017). Internal: never sent to a
+    client directly.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    telemetry: ObservatoryTelemetry
+    last_heartbeat_at: AwareDatetime = Field(..., alias='lastHeartbeatAt', description="The last message of any kind from the agent's link, on the cloud's clock.")
+
+
 class OperatorObservatoryState(BaseModel):
     model_config = ConfigDict(
         extra='forbid',

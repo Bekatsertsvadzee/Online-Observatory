@@ -410,6 +410,21 @@ export type PublicObservatoryStatus = {
 };
 
 /**
+ * The latest telemetry the realtime service holds for one connected observatory,
+ * as served on x-darkview-internal to the API (ADR-017). Internal: never sent to a
+ * client directly.
+ *
+ */
+export type ObservatoryTelemetrySnapshot = {
+    observatoryId: string;
+    telemetry: ObservatoryTelemetry;
+    /**
+     * The last message of any kind from the agent's link, on the cloud's clock.
+     */
+    lastHeartbeatAt: string;
+};
+
+/**
  * Operator-grade telemetry. Delivered to the operator console and to the mission channel in reduced form.
  */
 export type ObservatoryTelemetry = {
@@ -3185,6 +3200,10 @@ export type AdminGetObservatoryStateErrors = {
      * Authenticated but not permitted.
      */
     403: ApiError;
+    /**
+     * A dependency this request needs is not configured or not reachable.
+     */
+    503: ApiError;
 };
 
 export type AdminGetObservatoryStateError = AdminGetObservatoryStateErrors[keyof AdminGetObservatoryStateErrors];
