@@ -13,6 +13,8 @@ import {
   LIVE_MISSION_STATES,
   TERMINAL_COMMAND_STATUSES,
   TERMINAL_MISSION_STATES,
+  failureReasonForRefusedStart,
+  isStartingGoto,
   isTerminalCommandStatus,
   type ActiveSession,
   type CaptureOutcome,
@@ -27,6 +29,7 @@ import {
   type RelayableCommand,
   type ResumeOutcome,
 } from "@/link/store";
+import { AGENT_CHANNEL } from "@/link/command-listener";
 import type { ChannelUser, MissionChannelStore, MissionSnapshot } from "@/mission/store";
 
 /**
@@ -488,7 +491,7 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
     ): Promise<CommandVerdictOutcome> {
       const command = await database.observatoryCommand.findUnique({
         where: { id: verdict.commandId },
-        select: { observatoryId: true },
+        select: { observatoryId: true, missionId: true, type: true, payload: true },
       });
       // Logged and dropped, never created. A row here is a command the cloud
       // minted; an agent that could insert one could invent its own authority.
@@ -543,7 +546,80 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
         );
       }
 
+      if (count === 1 && status === "REJECTED" && isStartingGoto(command.type, command.payload)) {
+        await failRefusedStart(database, {
+          observatoryId: verdict.observatoryId,
+          missionId: command.missionId,
+          commandId: verdict.commandId,
+          rejectionReason: verdict.rejectionReason,
+          detail: verdict.detail,
+          decidedAt: verdict.decidedAt,
+        });
+      }
+
       return count === 1 ? "RECORDED" : "IGNORED_STALE";
+    },
+
+    async closeUnstartedMissions(now: Date): Promise<string[]> {
+      // Candidates by slot start, then by slot end in code: the end is start plus a
+      // per-booking duration, which Prisma cannot compare against now in a filter.
+      const candidates = await database.mission.findMany({
+        where: { state: "SCHEDULED", booking: { is: { slotStartAt: { lte: now } } } },
+        select: {
+          id: true,
+          mode: true,
+          isDemo: true,
+          booking: { select: { slotStartAt: true, durationMinutes: true } },
+        },
+      });
+
+      const closed: string[] = [];
+      for (const mission of candidates) {
+        if (!mission.booking) continue;
+        const slotEndsAt = new Date(
+          mission.booking.slotStartAt.getTime() + mission.booking.durationMinutes * 60_000,
+        );
+        if (slotEndsAt > now) continue;
+
+        const applied = await database.$transaction(async (tx) => {
+          // Conditional: a customer whose start committed a moment ago keeps it.
+          const { count } = await tx.mission.updateMany({
+            where: { id: mission.id, state: "SCHEDULED" },
+            data: { state: "CANCELLED", failureReason: "SESSION_EXPIRED", completedAt: now },
+          });
+          if (count === 0) return false;
+
+          await tx.missionEvent.create({
+            data: {
+              missionId: mission.id,
+              state: "CANCELLED",
+              failureReason: "SESSION_EXPIRED",
+              source: "CLOUD",
+              message: "Nobody started this mission before its booked slot ended.",
+              occurredAt: now,
+              simulated: mission.mode === "SIMULATED",
+              isDemo: mission.isDemo,
+            },
+          });
+
+          await recordAuditEvent(
+            {
+              category: "MISSION",
+              action: "MISSION_NOT_STARTED",
+              missionId: mission.id,
+              entityType: "Mission",
+              entityId: mission.id,
+              detail: { slotEndedAt: slotEndsAt.toISOString() },
+              isDemo: mission.isDemo,
+            },
+            tx,
+          );
+          return true;
+        });
+
+        if (applied) closed.push(mission.id);
+      }
+      return closed;
     },
 
     async loadSafetyEnvelope(
@@ -598,6 +674,84 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       return mission?.id ?? null;
     },
   };
+}
+
+/**
+ * ADR-018 §3: the agent refused the GOTO that started a mission.
+ *
+ * Fails the mission only while it is still PREPARING -- a runner that got further
+ * than that was started by something the agent accepted. One transaction for the
+ * state, the event, the revocation and the audit row, and the agent is told nobody
+ * owns the mission on the same commit, as the API tells it about a new owner.
+ */
+async function failRefusedStart(
+  database: PrismaClient,
+  input: {
+    observatoryId: string;
+    missionId: string;
+    commandId: string;
+    rejectionReason: CommandVerdictRecord["rejectionReason"];
+    detail: string | null;
+    decidedAt: Date;
+  },
+): Promise<void> {
+  const failureReason = failureReasonForRefusedStart(input.rejectionReason);
+
+  await database.$transaction(async (tx) => {
+    const mission = await tx.mission.findUnique({
+      where: { id: input.missionId },
+      select: { mode: true, isDemo: true },
+    });
+    if (!mission) return;
+
+    const { count } = await tx.mission.updateMany({
+      where: { id: input.missionId, observatoryId: input.observatoryId, state: "PREPARING" },
+      data: { state: "FAILED", failureReason },
+    });
+    if (count === 0) return;
+
+    // CLOUD: the agent refused a command, the cloud decided what that means for
+    // the mission. The agent's own words stay on the command row.
+    await tx.missionEvent.create({
+      data: {
+        missionId: input.missionId,
+        state: "FAILED",
+        failureReason,
+        source: "CLOUD",
+        commandId: input.commandId,
+        message: input.detail,
+        occurredAt: input.decidedAt,
+        simulated: mission.mode === "SIMULATED",
+        isDemo: mission.isDemo,
+      },
+    });
+
+    await tx.missionSession.updateMany({
+      where: { missionId: input.missionId, revokedAt: null },
+      data: { revokedAt: new Date(), revokedFor: "START_REFUSED_BY_AGENT" },
+    });
+
+    await recordAuditEvent(
+      {
+        category: "MISSION",
+        action: "MISSION_START_REFUSED_BY_AGENT",
+        missionId: input.missionId,
+        commandId: input.commandId,
+        entityType: "Mission",
+        entityId: input.missionId,
+        detail: { rejectionReason: input.rejectionReason, failureReason },
+        isDemo: mission.isDemo,
+      },
+      tx,
+    );
+
+    await tx.$executeRaw`SELECT pg_notify(${AGENT_CHANNEL}, ${JSON.stringify({
+      kind: "SESSION",
+      observatoryId: input.observatoryId,
+      missionId: input.missionId,
+      sessionId: null,
+    })})`;
+  });
 }
 
 /**

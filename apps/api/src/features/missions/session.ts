@@ -1,10 +1,17 @@
 import "server-only";
 
-import type { ErrorCode, MissionSession } from "@darkview/contracts";
+import { randomUUID } from "node:crypto";
+
+import type { ErrorCode, GotoPayload, MissionSession } from "@darkview/contracts";
 import { recordAuditEvent } from "@darkview/db/audit";
 
+import { COMMAND_TTL_SECONDS } from "@/features/missions/command";
 import { getDatabase } from "@/lib/db/client";
+import { horizontalAirlessOf } from "@/lib/ephemeris/engine";
+import { equatorialFor } from "@/lib/ephemeris/visibility";
 import { notifyAgent } from "@/lib/observatory/relay";
+import { evaluatePointing, isMeasured } from "@/lib/safety/envelope";
+import { loadSafetyEnvelope, siteOf } from "@/lib/safety/store";
 
 /**
  * The states during which a mission may command the mount.
@@ -102,7 +109,8 @@ export async function startMissionSession(input: {
     where: { id: missionId },
     include: {
       observatory: { include: { weatherState: true } },
-      booking: { select: { slotStartAt: true, durationMinutes: true } },
+      target: true,
+      booking: { select: { slotStartAt: true, durationMinutes: true, targetId: true } },
     },
   });
 
@@ -112,7 +120,20 @@ export async function startMissionSession(input: {
     return { ok: false, status: 404, code: "NOT_FOUND", message: "No such mission." };
   }
 
+  // ADR-018: a scheduled mission is started by the customer who booked it. An
+  // operator reaches a live mission through the override, not by starting one.
+  const scheduled = mission.state === "SCHEDULED";
+  if (scheduled && mission.userId !== actor.id) {
+    return {
+      ok: false,
+      status: 409,
+      code: "SESSION_NOT_OWNER",
+      message: "Only the customer who booked this mission may start it.",
+    };
+  }
+
   if (
+    !scheduled &&
     !LIVE_MISSION_STATES.includes(mission.state as (typeof LIVE_MISSION_STATES)[number])
   ) {
     return {
@@ -150,6 +171,10 @@ export async function startMissionSession(input: {
       code: "MISSION_NOT_ACTIVE",
       message: "The booked slot for this mission has already ended.",
     };
+  }
+
+  if (scheduled) {
+    return startScheduledMission({ mission, actorId: actor.id, now, expiresAt });
   }
 
   try {
@@ -222,6 +247,229 @@ export async function startMissionSession(input: {
       status: 409,
       code: "SESSION_NOT_OWNER",
       message: "Another session already owns this mission.",
+    };
+  }
+}
+
+type StartableMission = {
+  id: string;
+  userId: string;
+  observatoryId: string;
+  mode: string;
+  isDemo: boolean;
+  observatory: { latitude: number; longitude: number; mode: string };
+  target: Parameters<typeof equatorialFor>[0] & {
+    id: string;
+    opticalConfig: string;
+    imagingProfile: string;
+  };
+  booking: { slotStartAt: Date; durationMinutes: number; targetId: string } | null;
+};
+
+/**
+ * Start a scheduled mission: ADR-018.
+ *
+ * The caller has already checked ownership, the link, the weather hold and that
+ * the slot has not ended. This adds the slot's start, the envelope and the cloud's
+ * pointing pre-check, and then does four things in one transaction: moves the
+ * mission to PREPARING, opens the session, mints the GOTO for the booked target,
+ * and records it. The agent is told about the session before the command, so the
+ * owner the GOTO names is the owner it already holds.
+ *
+ * Every refusal writes nothing, so the customer may try again inside the slot.
+ */
+async function startScheduledMission(input: {
+  mission: StartableMission;
+  actorId: string;
+  now: Date;
+  expiresAt: Date;
+}): Promise<SessionResult> {
+  const { mission, actorId, now, expiresAt } = input;
+  const booking = mission.booking;
+
+  if (!booking) {
+    return {
+      ok: false,
+      status: 409,
+      code: "MISSION_NOT_ACTIVE",
+      message: "A scheduled mission with no booking has no slot to start in.",
+    };
+  }
+  // No early start. The slot before belongs to somebody else until it ends.
+  if (now < booking.slotStartAt) {
+    return {
+      ok: false,
+      status: 409,
+      code: "MISSION_NOT_ACTIVE",
+      message: "The booked slot has not started yet.",
+    };
+  }
+  if (booking.targetId !== mission.target.id) {
+    return {
+      ok: false,
+      status: 409,
+      code: "INTERNAL",
+      message: "The mission's target and its booking disagree.",
+    };
+  }
+
+  const site = siteOf(mission.observatory);
+  const config = await loadSafetyEnvelope(mission.observatoryId);
+  if (!isMeasured(config)) {
+    return {
+      ok: false,
+      status: 409,
+      code: "SAFETY_NOT_CONFIGURED",
+      message: "MAX_ALT_SAFE is unmeasured, so nothing may slew.",
+    };
+  }
+
+  const coordinates = equatorialFor(mission.target, now, site);
+  const horizontal = horizontalAirlessOf(coordinates, now, site);
+  const verdict = evaluatePointing({
+    config,
+    site,
+    at: now,
+    altitudeDegrees: horizontal.altitudeDegrees,
+    azimuthDegrees: horizontal.azimuthDegrees,
+  });
+  if (!verdict.permitted) {
+    return { ok: false, status: 409, code: "SAFETY_REFUSED", message: verdict.detail };
+  }
+
+  const goto: GotoPayload = {
+    kind: "GOTO",
+    targetId: mission.target.id,
+    coordinates,
+    opticalConfig: mission.target.opticalConfig as GotoPayload["opticalConfig"],
+    imagingProfile: mission.target.imagingProfile as GotoPayload["imagingProfile"],
+    recenter: false,
+  };
+
+  const database = getDatabase();
+
+  try {
+    const opened = await database.$transaction(async (tx) => {
+      // Conditional, so two starts cannot both win: the second finds the mission
+      // no longer SCHEDULED and writes nothing. Mission_active_per_observatory_unique
+      // refuses this update outright if another mission is live here.
+      const moved = await tx.mission.updateMany({
+        where: { id: mission.id, state: "SCHEDULED" },
+        data: { state: "PREPARING", startedAt: now },
+      });
+      if (moved.count !== 1) return null;
+
+      await tx.missionEvent.create({
+        data: {
+          missionId: mission.id,
+          state: "PREPARING",
+          source: "CLOUD",
+          message: "Started by the customer inside the booked slot.",
+          occurredAt: now,
+          simulated: mission.mode === "SIMULATED",
+          isDemo: mission.isDemo,
+        },
+      });
+
+      const session = await tx.missionSession.create({
+        data: {
+          missionId: mission.id,
+          userId: actorId,
+          issuedAt: now,
+          expiresAt,
+          isDemo: mission.isDemo,
+        },
+      });
+
+      await notifyAgent(tx, {
+        kind: "SESSION",
+        observatoryId: mission.observatoryId,
+        missionId: mission.id,
+        sessionId: session.id,
+      });
+
+      const commandId = randomUUID();
+      const commandExpiresAt = new Date(now.getTime() + COMMAND_TTL_SECONDS * 1000);
+
+      await tx.observatoryCommand.create({
+        data: {
+          id: commandId,
+          missionId: mission.id,
+          sessionId: session.id,
+          userId: actorId,
+          observatoryId: mission.observatoryId,
+          type: "GOTO",
+          status: "RECEIVED",
+          issuedAt: now,
+          expiresAt: commandExpiresAt,
+          payload: goto as object,
+          simulated: mission.observatory.mode === "SIMULATED",
+          isDemo: mission.isDemo,
+        },
+      });
+
+      await notifyAgent(tx, {
+        kind: "COMMAND",
+        commandId,
+        observatoryId: mission.observatoryId,
+      });
+
+      await recordAuditEvent(
+        {
+          category: "MISSION",
+          action: "MISSION_SESSION_OPENED",
+          actorUserId: actorId,
+          missionId: mission.id,
+          entityType: "MissionSession",
+          entityId: session.id,
+          detail: {
+            actorRole: "USER",
+            expiresAt: expiresAt.toISOString(),
+            bounded: "BOOKING",
+          },
+          isDemo: mission.isDemo,
+        },
+        tx,
+      );
+
+      await recordAuditEvent(
+        {
+          category: "MISSION",
+          action: "MISSION_STARTED",
+          actorUserId: actorId,
+          missionId: mission.id,
+          commandId,
+          entityType: "Mission",
+          entityId: mission.id,
+          detail: {
+            sessionId: session.id,
+            slotStartAt: booking.slotStartAt.toISOString(),
+            coordinates,
+          },
+          isDemo: mission.isDemo,
+        },
+        tx,
+      );
+
+      return session;
+    });
+
+    if (!opened) {
+      return {
+        ok: false,
+        status: 409,
+        code: "MISSION_NOT_ACTIVE",
+        message: "This mission has already been started.",
+      };
+    }
+    return { ok: true, session: toContractSession(opened) };
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    return {
+      ok: false,
+      status: 409,
+      code: "CONFLICT",
+      message: "Another mission is live at this observatory.",
     };
   }
 }

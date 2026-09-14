@@ -44,6 +44,12 @@ function toBuffer(data: Buffer | ArrayBuffer | Buffer[]): Buffer {
  */
 const PENDING_SWEEP_INTERVAL_SECONDS = 15;
 
+/**
+ * How often a slot nobody started is closed (ADR-018). Slots are twenty minutes or
+ * more, so a minute's lag in marking a no-show costs nothing.
+ */
+const UNSTARTED_SWEEP_INTERVAL_SECONDS = 60;
+
 /** `/ws/mission/{missionId}`, as the contract's missionClient channel names it. */
 const MISSION_PATH = /^\/ws\/mission\/([0-9a-fA-F-]{36})$/;
 
@@ -272,6 +278,17 @@ export function createRealtimeServer(
     }
   }, PENDING_SWEEP_INTERVAL_SECONDS * 1000);
 
+  /**
+   * ADR-018 §4: a booked slot nobody started closes at its end. Here because this
+   * is the only long-lived process; an API that did it on request would leave a
+   * mission SCHEDULED for as long as nobody asked about it.
+   */
+  const unstartedSweep = setInterval(() => {
+    void store.closeUnstartedMissions(new Date()).catch((error) => {
+      console.error("darkview realtime: no-show sweep", error);
+    });
+  }, UNSTARTED_SWEEP_INTERVAL_SECONDS * 1000);
+
   return {
     registry,
     relay,
@@ -281,6 +298,7 @@ export function createRealtimeServer(
     close: async () => {
       clearInterval(heartbeatSweep);
       clearInterval(pendingSweep);
+      clearInterval(unstartedSweep);
       sockets.close();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     },
