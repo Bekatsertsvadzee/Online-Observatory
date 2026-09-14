@@ -38,14 +38,21 @@ export async function requireApiSession(): Promise<GuardResult> {
  * calls this rather than `requireApiSession`.
  */
 export async function requireApiMutation(): Promise<GuardResult> {
-  const requestHeaders = await headers();
-  const { APP_URL } = getServerEnvironment();
-
-  if (!isSameOrigin(requestHeaders.get("origin"), APP_URL)) {
-    return { ok: false, response: forbidden() };
-  }
+  const refusal = await crossOriginRefusal();
+  if (refusal) return { ok: false, response: refusal };
 
   return requireApiSession();
+}
+
+/**
+ * The Origin half of `requireApiMutation`, for the routes that issue a session
+ * rather than require one: sign-in, registration and verification (ADR-016 §3).
+ * Returns the 403 to send, or `null` to carry on. A missing Origin is refused.
+ */
+export async function crossOriginRefusal() {
+  const requestHeaders = await headers();
+  const { APP_URL } = getServerEnvironment();
+  return isSameOrigin(requestHeaders.get("origin"), APP_URL) ? null : forbidden();
 }
 
 /**

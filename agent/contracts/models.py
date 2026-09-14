@@ -101,6 +101,31 @@ class User(BaseModel):
     created_at: AwareDatetime = Field(..., alias='createdAt')
 
 
+class RegisterRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    display_name: str = Field(..., alias='displayName', max_length=80, min_length=2)
+    email: EmailStr = Field(..., max_length=254)
+    password: str = Field(..., max_length=128, min_length=12)
+    locale: Locale
+
+
+class SignInRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    email: EmailStr = Field(..., max_length=254)
+    password: str = Field(..., max_length=128, min_length=1)
+
+
+class VerifyEmailRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    token: str = Field(..., max_length=128, min_length=16, pattern='^[A-Za-z0-9_-]+$')
+
+
 class TargetType(StrEnum):
     """
     Phase 1 catalogue classes only. Every class in this enum is one the

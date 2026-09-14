@@ -68,6 +68,22 @@ export const zUser = z.strictObject({
     createdAt: z.iso.datetime()
 });
 
+export const zRegisterRequest = z.strictObject({
+    displayName: z.string().min(2).max(80),
+    email: z.email().max(254),
+    password: z.string().min(12).max(128),
+    locale: zLocale
+});
+
+export const zSignInRequest = z.strictObject({
+    email: z.email().max(254),
+    password: z.string().min(1).max(128)
+});
+
+export const zVerifyEmailRequest = z.strictObject({
+    token: z.string().min(16).max(128).regex(/^[A-Za-z0-9_-]+$/)
+});
+
 /**
  * Phase 1 catalogue classes only. Every class in this enum is one the
  * NexStar 6SE + ASI585MC combination can present convincingly from a Bortle 8-9
@@ -1665,6 +1681,27 @@ export const zTargetSlug = z.string().regex(/^[a-z0-9-]+$/);
  *
  */
 export const zIdempotencyKey = z.string().min(8).max(128).regex(/^[A-Za-z0-9_.:-]+$/);
+
+export const zRegisterBody = zRegisterRequest;
+
+export const zVerifyEmailBody = zVerifyEmailRequest;
+
+/**
+ * Verified and signed in. Sets the session cookies.
+ */
+export const zVerifyEmailResponse = zUser;
+
+export const zSignInBody = zSignInRequest;
+
+/**
+ * Signed in. Sets the session cookies.
+ */
+export const zSignInResponse = zUser;
+
+/**
+ * Signed out.
+ */
+export const zSignOutResponse = z.void();
 
 /**
  * The current user.
