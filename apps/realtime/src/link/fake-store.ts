@@ -15,6 +15,8 @@ import {
   COMMAND_STATUS_FOR,
   LIVE_MISSION_STATES,
   TERMINAL_MISSION_STATES,
+  failureReasonForRefusedStart,
+  isStartingGoto,
   isTerminalCommandStatus,
   type ActiveSession,
   type CaptureOutcome,
@@ -41,6 +43,8 @@ export type FakeMission = {
   userId: string;
   targetId: string;
   telescopeId: string;
+  /** The end of the booked slot, for a booked mission. */
+  slotEndsAt?: Date;
 };
 
 export type FakeMissionEvent = {
@@ -452,7 +456,71 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
         decidedAt: verdict.decidedAt.toISOString(),
       },
     });
+
+    const missionId = command.envelope.missionId;
+    const mission = this.missions.get(missionId);
+    if (
+      status === "REJECTED" &&
+      isStartingGoto(command.envelope.type, command.envelope.payload) &&
+      mission?.state === "PREPARING"
+    ) {
+      const failureReason = failureReasonForRefusedStart(verdict.rejectionReason);
+      mission.state = "FAILED";
+      mission.failureReason = failureReason;
+      this.missionEvents.push({
+        missionId,
+        state: "FAILED",
+        failureReason,
+        source: "CLOUD",
+        commandId: verdict.commandId,
+        message: verdict.detail,
+        occurredAt: verdict.decidedAt,
+        simulated: mission.mode === "SIMULATED",
+        isDemo: mission.isDemo,
+      });
+      for (const session of [...this.sessions.values()]) {
+        if (session.missionId !== missionId) continue;
+        this.sessions.delete(session.sessionId);
+        this.revoked.push({ sessionId: session.sessionId, reason: "START_REFUSED_BY_AGENT" });
+      }
+      this.audit("MISSION", "MISSION_START_REFUSED_BY_AGENT", {
+        missionId,
+        commandId: verdict.commandId,
+        entityId: missionId,
+        detail: { rejectionReason: verdict.rejectionReason, failureReason },
+      });
+    }
+
     return "RECORDED";
+  }
+
+  async closeUnstartedMissions(now: Date): Promise<string[]> {
+    const closed: string[] = [];
+    for (const [missionId, mission] of this.missions) {
+      if (mission.state !== "SCHEDULED" || !mission.slotEndsAt || mission.slotEndsAt > now) {
+        continue;
+      }
+      mission.state = "CANCELLED";
+      mission.failureReason = "SESSION_EXPIRED";
+      this.missionEvents.push({
+        missionId,
+        state: "CANCELLED",
+        failureReason: "SESSION_EXPIRED",
+        source: "CLOUD",
+        commandId: null,
+        message: "Nobody started this mission before its booked slot ended.",
+        occurredAt: now,
+        simulated: mission.mode === "SIMULATED",
+        isDemo: mission.isDemo,
+      });
+      this.audit("MISSION", "MISSION_NOT_STARTED", {
+        missionId,
+        entityId: missionId,
+        detail: { slotEndedAt: mission.slotEndsAt.toISOString() },
+      });
+      closed.push(missionId);
+    }
+    return closed;
   }
 
   /** The command id, if this observatory really owns a command by that id. */

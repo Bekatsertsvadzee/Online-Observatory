@@ -58,6 +58,11 @@ export type AuditAction =
   | "OBSERVER_PACK_CAPTURED_WITHOUT_SEAT"
   // MISSION
   | "MISSION_SCHEDULED"
+  // ADR-018: the customer started it inside the slot; nobody did before the slot
+  // ended; the agent refused the GOTO that would have started it.
+  | "MISSION_STARTED"
+  | "MISSION_NOT_STARTED"
+  | "MISSION_START_REFUSED_BY_AGENT"
   | "MISSION_SESSION_OPENED"
   | "MISSION_SESSION_REVOKED"
   | "MISSION_RESOLVED_AFTER_AGENT_RESTART"

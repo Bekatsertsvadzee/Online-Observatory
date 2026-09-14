@@ -41,6 +41,29 @@ export const LIVE_MISSION_STATES = [
  */
 export const TERMINAL_MISSION_STATES = ["COMPLETE", "CANCELLED", "FAILED"] as const;
 
+/**
+ * Is this the GOTO that starts a mission, rather than a recentring one?
+ *
+ * ADR-018 mints it with `recenter: false`; RECENTER mints `recenter: true`. Both
+ * stores read this rather than restating it.
+ */
+export function isStartingGoto(type: string, payload: unknown): boolean {
+  if (type !== "GOTO" || typeof payload !== "object" || payload === null) return false;
+  const goto = payload as { kind?: unknown; recenter?: unknown };
+  return goto.kind === "GOTO" && goto.recenter !== true;
+}
+
+/**
+ * What a refused start is filed as. A SAFETY_ refusal is the agent's envelope saying
+ * no, which the contract names SAFETY_REFUSED; anything else has no failure reason
+ * that would not be a guess, and the command row keeps the agent's own words.
+ */
+export function failureReasonForRefusedStart(
+  rejectionReason: CommandRejectionReason | null,
+): MissionFailureReason | null {
+  return rejectionReason?.startsWith("SAFETY_") ? "SAFETY_REFUSED" : null;
+}
+
 /** The command statuses a later ack must not overwrite. */
 export const TERMINAL_COMMAND_STATUSES = [
   "COMPLETED",
@@ -196,7 +219,20 @@ export interface LinkStore {
   }): Promise<ResumeOutcome>;
 
   /**
+   * ADR-018 §4: close every booked mission nobody started before its slot ended.
+   *
+   * CANCELLED with SESSION_EXPIRED, a CLOUD event and a MISSION_NOT_STARTED audit
+   * row. The booking is left CONFIRMED -- the money is the refund engine's. Returns
+   * the ids closed. Commands nothing: a mission that never started holds no mount.
+   */
+  closeUnstartedMissions(now: Date): Promise<string[]>;
+
+  /**
    * Record the agent's verdict on one command.
+   *
+   * ADR-018 §3: a REJECTED verdict on the GOTO that started a mission, while that
+   * mission is still PREPARING, also fails the mission and revokes its session, so a
+   * start the observatory refused cannot hold Mission_active_per_observatory_unique.
    *
    * The agent decides every command independently of the cloud, and a REJECTED
    * ack carrying a SAFETY_ reason after the cloud approved the command is the

@@ -482,9 +482,11 @@ describe("refusing to open a session at all", () => {
   });
 
   it("will not start a mission that is not live", async () => {
+    // COMPLETE, not SCHEDULED: a scheduled mission is started by ADR-018's path,
+    // tested below.
     await database.mission.update({
       where: { id: missionId },
-      data: { state: "SCHEDULED" },
+      data: { state: "COMPLETE" },
     });
 
     const result = await startMissionSession({
@@ -863,5 +865,180 @@ describe("cloud-side safety pre-validation", () => {
 
     expect(result.ok).toBe(true);
     expect(await database.observatoryCommand.count()).toBe(1);
+  });
+});
+
+/**
+ * ADR-018 -- a customer starts their booked mission inside the slot, and nothing
+ * else does. Every refusal writes nothing, so the customer may try again.
+ */
+describe("starting a scheduled mission", () => {
+  const SLOT_MINUTES = 30;
+
+  beforeEach(async () => {
+    // The fixture's OBSERVING mission would hold Mission_active_per_observatory_unique,
+    // and its booking would hold the slot these tests book.
+    await database.mission.update({ where: { id: missionId }, data: { state: "COMPLETE" } });
+    await database.booking.deleteMany();
+  });
+
+  async function scheduled(slotStartAt = new Date(NOW.getTime() - 5 * 60_000)) {
+    const mission = await database.mission.create({
+      data: {
+        userId: ownerId,
+        targetId,
+        observatoryId,
+        telescopeId,
+        state: "SCHEDULED",
+        scheduledFor: slotStartAt,
+      },
+    });
+    await database.booking.create({
+      data: {
+        userId: ownerId,
+        targetId,
+        observatoryId,
+        telescopeId,
+        slotStartAt,
+        durationMinutes: SLOT_MINUTES,
+        status: "CONFIRMED",
+        priceMinor: 4500,
+        currency: "GEL",
+        missionId: mission.id,
+      },
+    });
+    return mission.id;
+  }
+
+  const start = (id: string, userId = ownerId, role: "USER" | "OPERATOR" = "USER") =>
+    startMissionSession({ missionId: id, actor: actor(userId, role), now: NOW });
+
+  async function expectUnchanged(id: string) {
+    const row = await database.mission.findUniqueOrThrow({ where: { id } });
+    expect(row.state).toBe("SCHEDULED");
+    expect(await database.missionSession.count({ where: { missionId: id } })).toBe(0);
+    expect(await database.observatoryCommand.count({ where: { missionId: id } })).toBe(0);
+    expect(
+      await database.missionEvent.count({ where: { missionId: id, state: "PREPARING" } }),
+    ).toBe(0);
+  }
+
+  it("moves it to PREPARING, opens the session and mints the GOTO for the booked target", async () => {
+    const id = await scheduled();
+
+    const result = await start(id);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const mission = await database.mission.findUniqueOrThrow({ where: { id } });
+    expect(mission.state).toBe("PREPARING");
+    expect(mission.startedAt).toEqual(NOW);
+    // Five minutes late to a thirty-minute slot leaves twenty-five.
+    expect(result.session.expiresAt).toBe(new Date(NOW.getTime() + 25 * 60_000).toISOString());
+
+    const event = await database.missionEvent.findFirstOrThrow({
+      where: { missionId: id, state: "PREPARING" },
+    });
+    expect(event.source).toBe("CLOUD");
+
+    const commands = await database.observatoryCommand.findMany({ where: { missionId: id } });
+    expect(commands).toHaveLength(1);
+    const [command] = commands;
+    expect(command.type).toBe("GOTO");
+    expect(command.sessionId).toBe(result.session.sessionId);
+    expect(command.userId).toBe(ownerId);
+    const payload = command.payload as {
+      kind: string;
+      targetId: string;
+      recenter: boolean;
+      coordinates: { raHours: number; decDegrees: number; epoch: string };
+    };
+    expect(payload).toMatchObject({ kind: "GOTO", targetId, recenter: false });
+    expect(payload.coordinates.raHours).toBeCloseTo(16.6949, 4);
+    expect(payload.coordinates.decDegrees).toBeCloseTo(36.4613, 4);
+
+    // The agent must hold the owner before the GOTO naming it arrives.
+    const deadline = Date.now() + 3_000;
+    let mine: string[] = [];
+    for (;;) {
+      mine = notifications
+        .map((raw) => JSON.parse(raw) as { kind: string; missionId?: string; commandId?: string })
+        .filter((note) => note.missionId === id || note.commandId === command.id)
+        .map((note) => note.kind);
+      if (mine.includes("COMMAND") || Date.now() > deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(mine).toEqual(["SESSION", "COMMAND"]);
+  });
+
+  it("refuses before the slot starts, and writes nothing", async () => {
+    const id = await scheduled(new Date(NOW.getTime() + 10 * 60_000));
+
+    await expect(start(id)).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      code: "MISSION_NOT_ACTIVE",
+    });
+    await expectUnchanged(id);
+  });
+
+  it("refuses once the slot has ended", async () => {
+    const id = await scheduled(new Date(NOW.getTime() - (SLOT_MINUTES + 1) * 60_000));
+
+    await expect(start(id)).resolves.toMatchObject({ status: 409, code: "MISSION_NOT_ACTIVE" });
+    await expectUnchanged(id);
+  });
+
+  it("refuses while MAX_ALT_SAFE is unmeasured", async () => {
+    const id = await scheduled();
+    await createSafetyEnvelope(null);
+
+    await expect(start(id)).resolves.toMatchObject({
+      status: 409,
+      code: "SAFETY_NOT_CONFIGURED",
+    });
+    await expectUnchanged(id);
+  });
+
+  it("refuses a target the pointing check refuses, and a later try can still succeed", async () => {
+    const id = await scheduled();
+    // M13 is at 67.7 degrees; a ceiling of 40 puts it out of reach.
+    await createSafetyEnvelope(40);
+
+    await expect(start(id)).resolves.toMatchObject({ status: 409, code: "SAFETY_REFUSED" });
+    await expectUnchanged(id);
+
+    await createSafetyEnvelope(FAKE_MEASURED_MAX_ALTITUDE_DEGREES);
+    await expect(start(id)).resolves.toMatchObject({ ok: true });
+  });
+
+  it("refuses while another mission is live at the observatory", async () => {
+    const id = await scheduled();
+    await database.mission.update({ where: { id: missionId }, data: { state: "OBSERVING" } });
+
+    await expect(start(id)).resolves.toMatchObject({ status: 409, code: "CONFLICT" });
+    await expectUnchanged(id);
+  });
+
+  it("starts exactly once when two requests race", async () => {
+    const id = await scheduled();
+
+    const results = await Promise.all([start(id), start(id)]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(await database.missionSession.count({ where: { missionId: id } })).toBe(1);
+    expect(await database.observatoryCommand.count({ where: { missionId: id } })).toBe(1);
+  });
+
+  it("is started only by the customer who booked it", async () => {
+    const id = await scheduled();
+
+    await expect(start(id, await createUser(), "OPERATOR")).resolves.toMatchObject({
+      status: 409,
+      code: "SESSION_NOT_OWNER",
+    });
+    await expect(start(id, await createUser())).resolves.toMatchObject({ status: 404 });
+    await expectUnchanged(id);
   });
 });
