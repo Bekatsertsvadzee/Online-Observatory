@@ -136,6 +136,117 @@ x-darkview-websockets:
         and signs the envelope.
 
 paths:
+  /auth/register:
+    post:
+      operationId: register
+      tags: [identity]
+      summary: Create an account and send a verification link.
+      description: |
+        ADR-016. Answers 202 whether or not the address already holds an account, so
+        this endpoint cannot be used to learn which addresses do. An unverified
+        address is sent a fresh link; a verified one is sent nothing. No session is
+        issued until the address is verified.
+
+        The link points at the web client, APP_URL/{locale}/verify-email/{token},
+        which posts the token to /auth/verify-email.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "202":
+          description: Accepted. A verification link is sent if one is owed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /auth/verify-email:
+    post:
+      operationId: verifyEmail
+      tags: [identity]
+      summary: Consume a verification token and sign in.
+      description: |
+        ADR-016. A token is single-use and expires thirty minutes after it was sent.
+        Verifying ends every other session the user held, then issues the session
+        cookies described under the userSession security scheme.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyEmailRequest"
+      responses:
+        "200":
+          description: Verified and signed in. Sets the session cookies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /auth/sign-in:
+    post:
+      operationId: signIn
+      tags: [identity]
+      summary: Exchange an email and password for a session.
+      description: |
+        ADR-016. A wrong email and a wrong password receive the same 401, and take the
+        same time. An address that has not been verified receives 403 only once the
+        password has been checked. Sets the session cookies on success.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignInRequest"
+      responses:
+        "200":
+          description: Signed in. Sets the session cookies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /auth/sign-out:
+    post:
+      operationId: signOut
+      tags: [identity]
+      summary: End the current session and clear its cookies.
+      responses:
+        "204":
+          description: Signed out.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /me:
     get:
       operationId: getCurrentUser
@@ -1248,12 +1359,24 @@ paths:
 components:
   securitySchemes:
     userSession:
-      type: http
-      scheme: bearer
-      bearerFormat: opaque
+      type: apiKey
+      in: cookie
+      name: __Host-darkview_session
       description: |
-        Customer or operator session credential. Operator-only routes additionally
-        require role OPERATOR. This credential never travels to the observatory.
+        Customer or operator session credential (ADR-016). Operator-only routes
+        additionally require role OPERATOR. This credential never travels to the
+        observatory.
+
+        Issued by /auth/sign-in and /auth/verify-email as two cookies, both Secure,
+        SameSite=Lax and Path=/: `__Host-darkview_session` (HttpOnly, the credential)
+        and `__Host-darkview_csrf` (readable by the page). A session is valid only
+        when both are present. Outside production the `__Host-` prefix is dropped,
+        because a browser refuses it over plain HTTP. No token is ever returned in a
+        response body.
+
+        Every mutating request must carry an Origin header equal to the web client's
+        origin; a missing Origin is refused. The API, the realtime service and the
+        web client are served from one host.
     agentDeviceToken:
       type: http
       scheme: bearer
@@ -1389,6 +1512,18 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiError"
+    TooManyRequests:
+      description: Rate limited. The body does not say how much budget remains or when it returns.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    ServiceUnavailable:
+      description: A dependency this request needs is not configured or not reachable.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
 
   schemas:
     # ---------------------------------------------------------------------------
@@ -1509,6 +1644,51 @@ components:
         createdAt:
           type: string
           format: date-time
+
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [displayName, email, password, locale]
+      properties:
+        displayName:
+          type: string
+          minLength: 2
+          maxLength: 80
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+        locale:
+          $ref: "#/components/schemas/Locale"
+
+    SignInRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+
+    VerifyEmailRequest:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 16
+          maxLength: 128
+          pattern: "^[A-Za-z0-9_-]+$"
 
     # ---------------------------------------------------------------------------
     # Targets

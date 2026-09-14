@@ -89,6 +89,22 @@ export type User = {
     createdAt: string;
 };
 
+export type RegisterRequest = {
+    displayName: string;
+    email: string;
+    password: string;
+    locale: Locale;
+};
+
+export type SignInRequest = {
+    email: string;
+    password: string;
+};
+
+export type VerifyEmailRequest = {
+    token: string;
+};
+
 /**
  * Phase 1 catalogue classes only. Every class in this enum is one the
  * NexStar 6SE + ASI585MC combination can present convincingly from a Bortle 8-9
@@ -2201,6 +2217,148 @@ export type TargetSlug = string;
  *
  */
 export type IdempotencyKey = string;
+
+export type RegisterData = {
+    body: RegisterRequest;
+    path?: never;
+    query?: never;
+    url: '/auth/register';
+};
+
+export type RegisterErrors = {
+    /**
+     * Malformed request.
+     */
+    400: ApiError;
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+    /**
+     * Rate limited. The body does not say how much budget remains or when it returns.
+     */
+    429: ApiError;
+    /**
+     * A dependency this request needs is not configured or not reachable.
+     */
+    503: ApiError;
+};
+
+export type RegisterError = RegisterErrors[keyof RegisterErrors];
+
+export type RegisterResponses = {
+    /**
+     * Accepted. A verification link is sent if one is owed.
+     */
+    202: unknown;
+};
+
+export type VerifyEmailData = {
+    body: VerifyEmailRequest;
+    path?: never;
+    query?: never;
+    url: '/auth/verify-email';
+};
+
+export type VerifyEmailErrors = {
+    /**
+     * Malformed request.
+     */
+    400: ApiError;
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type VerifyEmailError = VerifyEmailErrors[keyof VerifyEmailErrors];
+
+export type VerifyEmailResponses = {
+    /**
+     * Verified and signed in. Sets the session cookies.
+     */
+    200: User;
+};
+
+export type VerifyEmailResponse = VerifyEmailResponses[keyof VerifyEmailResponses];
+
+export type SignInData = {
+    body: SignInRequest;
+    path?: never;
+    query?: never;
+    url: '/auth/sign-in';
+};
+
+export type SignInErrors = {
+    /**
+     * Malformed request.
+     */
+    400: ApiError;
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+    /**
+     * Rate limited. The body does not say how much budget remains or when it returns.
+     */
+    429: ApiError;
+};
+
+export type SignInError = SignInErrors[keyof SignInErrors];
+
+export type SignInResponses = {
+    /**
+     * Signed in. Sets the session cookies.
+     */
+    200: User;
+};
+
+export type SignInResponse = SignInResponses[keyof SignInResponses];
+
+export type SignOutData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/auth/sign-out';
+};
+
+export type SignOutErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+};
+
+export type SignOutError = SignOutErrors[keyof SignOutErrors];
+
+export type SignOutResponses = {
+    /**
+     * Signed out.
+     */
+    204: void;
+};
+
+export type SignOutResponse = SignOutResponses[keyof SignOutResponses];
 
 export type GetCurrentUserData = {
     body?: never;

@@ -45,6 +45,17 @@ function routeFilesUnder(directory: string): string[] {
  */
 const SIGNED_SERVER_TO_SERVER = new Set(["payments/webhook/route.ts"]);
 
+/**
+ * Routes that issue a session, so there is none yet to require (ADR-016). They
+ * are still mutations a cross-site form could send, so each must refuse a foreign
+ * Origin itself -- the test below holds them to `crossOriginRefusal`.
+ */
+const SESSION_ISSUING = new Set([
+  "auth/sign-in/route.ts",
+  "auth/register/route.ts",
+  "auth/verify-email/route.ts",
+]);
+
 describe("every admin route is behind the operator guard", () => {
   const adminRoutes = routeFilesUnder(adminDirectory);
 
@@ -88,7 +99,8 @@ describe("every admin route is behind the operator guard", () => {
         return (
           segment !== "admin" &&
           !publicRoutes.has(segment) &&
-          !SIGNED_SERVER_TO_SERVER.has(relative)
+          !SIGNED_SERVER_TO_SERVER.has(relative) &&
+          !SESSION_ISSUING.has(relative)
         );
       })
       .filter((file) => {
@@ -136,9 +148,21 @@ describe("every admin route is behind the operator guard", () => {
         );
       })
       .map((file) => path.relative(appDirectory, file))
-      .filter((relative) => !SIGNED_SERVER_TO_SERVER.has(relative));
+      .filter(
+        (relative) => !SIGNED_SERVER_TO_SERVER.has(relative) && !SESSION_ISSUING.has(relative),
+      );
 
     expect(withoutOriginCheck).toEqual([]);
+  });
+
+  it("refuses a foreign Origin first on every route that issues a session", () => {
+    for (const relative of SESSION_ISSUING) {
+      const source = readFileSync(path.join(appDirectory, relative), "utf8");
+      const handler = source.slice(source.indexOf("export async function POST"));
+      expect(handler, relative).toMatch(
+        /^export async function POST\(request: Request\) \{\n\s+const refusal = await crossOriginRefusal\(\);\n\s+if \(refusal\) return refusal;/,
+      );
+    }
   });
 
   it("builds the operator mutation guard on the same-origin guard", () => {

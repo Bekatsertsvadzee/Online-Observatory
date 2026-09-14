@@ -60,6 +60,20 @@ const UNMETERED_BY_DESIGN = [
   // be a regression dressed as hardening, and the moment an operator most needs
   // it is the moment they have been hammering the console.
   "admin/network/nodes/[nodeId]/suspend/route.ts",
+  // Registration and sign-in are metered, but not by meterRequest: they have no
+  // account to key on, so `features/auth/authenticate.ts` meters them with
+  // consumeLimit on the address and the email together, plus the address alone
+  // for registration (ADR-016 §5). A meter keyed on an account would meter
+  // nothing here.
+  "auth/register/route.ts",
+  "auth/sign-in/route.ts",
+  // Signing out ends a session, which is the stopping direction. A limiter able
+  // to delay it would keep a stolen cookie alive for as long as it refused.
+  "auth/sign-out/route.ts",
+  // A verification token is 256 random bits and single-use. A meter cannot make
+  // guessing one less likely than it already is, and refusing the one real
+  // attempt would strand a customer who clicked their own link twice.
+  "auth/verify-email/route.ts",
 ];
 
 describe("every mutating route is metered", () => {
