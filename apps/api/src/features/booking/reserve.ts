@@ -110,7 +110,7 @@ type PaymentRow = {
   redirectUrl: string | null;
 };
 
-function toContractBooking(row: BookingRow): ContractBooking {
+export function toContractBooking(row: BookingRow): ContractBooking {
   return {
     id: row.id,
     userId: row.userId,

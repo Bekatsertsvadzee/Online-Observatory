@@ -29,6 +29,7 @@ const { PAYMENT_HOLD_MINUTES, releaseSlotForFailedPayment, reserveSlot } =
   await import("@/features/booking/reserve");
 const { listSlotsForDate } = await import("@/features/booking/slots");
 const { listBookableObservatories } = await import("@/features/booking/observatories");
+const { cancelMyBooking, getMyBooking } = await import("@/features/booking/manage");
 const { nightWindow } = await import("@/lib/slots/darkness");
 const { generateSlots, PROVISIONAL_SLOT_PRICE_MINOR, SLOT_DURATION_MINUTES } =
   await import("@/lib/slots/generate");
@@ -1325,5 +1326,74 @@ describe("retrying a booking", () => {
     expect(second.replayed).toBe(true);
     expect(second.body.booking.slotStartAt).toBe(first.body.booking.slotStartAt);
     expect(await database.booking.count()).toBe(1);
+  });
+});
+
+/**
+ * #73 -- POST /bookings/{bookingId}/cancel and GET /bookings/{bookingId}.
+ *
+ * Only an unpaid hold can be cancelled until refunds exist (maintainer decision,
+ * 2026-09-14). A paid booking is refused and stays held.
+ */
+describe("cancelling a booking", () => {
+  async function held() {
+    const slotStartAt = firstSlotStartAt();
+    const result = await reserve({ slotStartAt });
+    if (!result.ok) throw new Error("fixture reservation failed");
+    return { slotStartAt, booking: result.body.booking };
+  }
+
+  it("releases an unpaid hold, fails its payment, and puts the slot back on sale", async () => {
+    const { slotStartAt, booking } = await held();
+
+    const result = await cancelMyBooking({ userId, bookingId: booking.id, reason: "clouds" });
+
+    expect(result).toMatchObject({ ok: true, booking: { id: booking.id, status: "CANCELLED" } });
+    const payment = await database.payment.findUniqueOrThrow({
+      where: { id: booking.paymentId! },
+    });
+    expect(payment.status).toBe("FAILED");
+    expect(payment.failureReason).toBe("Cancelled by customer: clouds");
+
+    const retry = await reserve({ userId: await createUser(), slotStartAt });
+    expect(retry.ok).toBe(true);
+  });
+
+  it("refuses a paid booking with 409 and leaves it held", async () => {
+    const { slotStartAt, booking } = await held();
+    await database.booking.update({
+      where: { id: booking.id },
+      data: { status: "CONFIRMED", holdExpiresAt: null },
+    });
+
+    const result = await cancelMyBooking({ userId, bookingId: booking.id });
+
+    expect(result).toMatchObject({ ok: false, status: 409, code: "CONFLICT" });
+    expect(await heldBookingsAt(slotStartAt)).toBe(1);
+  });
+
+  it("refuses to cancel a booking twice", async () => {
+    const { booking } = await held();
+    await cancelMyBooking({ userId, bookingId: booking.id });
+
+    await expect(cancelMyBooking({ userId, bookingId: booking.id })).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+    });
+  });
+
+  it("answers another customer's booking exactly as a missing one, and touches nothing", async () => {
+    const { slotStartAt, booking } = await held();
+    const stranger = await createUser();
+
+    const theirs = await cancelMyBooking({ userId: stranger, bookingId: booking.id });
+    const missing = await cancelMyBooking({ userId: stranger, bookingId: randomUUID() });
+
+    expect(theirs).toEqual(missing);
+    expect(theirs).toMatchObject({ ok: false, status: 404 });
+    expect(await heldBookingsAt(slotStartAt)).toBe(1);
+
+    expect(await getMyBooking({ userId: stranger, bookingId: booking.id })).toBeNull();
+    expect(await getMyBooking({ userId, bookingId: booking.id })).toEqual(booking);
   });
 });

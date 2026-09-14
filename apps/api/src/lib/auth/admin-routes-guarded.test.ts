@@ -90,7 +90,17 @@ describe("every admin route is behind the operator guard", () => {
     //            step before choosing a slot (ADR-015), and GET /slots cannot be
     //            called without an id from here. It carries no coordinates, no
     //            owner and no device identity; a test holds it to that.
-    const publicRoutes = new Set(["health", "targets", "slots", "observatories"]);
+    //   observatory
+    //            public by contract (security: []) -- the status chip. Mode, link,
+    //            weather and whether a mission is running; no device, no address
+    //            and no telemetry.
+    const publicRoutes = new Set([
+      "health",
+      "targets",
+      "slots",
+      "observatories",
+      "observatory",
+    ]);
 
     const unguarded = routeFilesUnder(appDirectory)
       .filter((file) => {
