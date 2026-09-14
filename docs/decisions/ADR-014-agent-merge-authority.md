@@ -118,3 +118,36 @@ statement that an agent merges only under this record's five conditions.
 
 `CLAUDE.md` § Definition of done, item 8: "Never merge and never deploy." becomes
 "Never deploy", with merging governed by this record.
+
+## Amendment, 2026-09-14 — one approval may name several actions
+
+- **Decided by:** project maintainer, in session
+- **Changes:** condition 1's "one approval, one merge", and the matching per-push rule
+  in `CLAUDE.md` § Definition of done
+
+**What changed.** When the maintainer approves a message that names several actions —
+several merges, several pushes, deleting branches — every action it names is approved,
+and the agent carries each of them out without asking again one by one.
+
+**What did not change.**
+
+- Approval is still given in the session, by the maintainer, for actions the agent has
+  named. It is not standing permission, and it does not cover an action proposed after
+  the approval was given.
+- Conditions 2 to 5 hold for every merge: green CI on the head being merged, a squash,
+  no agent in the authorship, `main` only. The agent still states the CI run id it
+  read.
+- A production deploy, a production migration and real-hardware mode are outside any
+  such approval. Each still needs the maintainer's own explicit request.
+- The harness's own permission checks are not relaxed by this record. Where Claude Code
+  refuses an action the maintainer approved, the agent says so and hands over the
+  command; it does not retry or route around the refusal.
+
+**Why.** On 2026-09-14 the maintainer approved three reviewed, green pull requests in
+one message and was then asked to approve each merge again. Asking twice for the same
+decision adds no judgement the first answer lacked; the control this record protects is
+the maintainer deciding, and a list they have read and approved is that decision.
+
+**When this is withdrawn.** Under the same rule as the record itself: an agent that
+performs an action nobody named, or treats an approval as covering later actions,
+restores one approval per action.

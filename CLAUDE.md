@@ -208,9 +208,9 @@ Every change in this repository must be independently verifiable. Treat it accor
 - Never fabricate timestamps, commits, tests or hardware evidence.
 - Never backdate a commit. Real history only.
 - Never merge directly to `main` **except** under ADR-014, which requires the
-  maintainer's approval of that specific merge in that session, green CI on the
-  parent, a squash, no agent in the authorship, and `main` as the only target.
-  An agent that merges states the CI run id it read.
+  maintainer's approval of that merge in that session, green CI on the parent, a
+  squash, no agent in the authorship, and `main` as the only target. An agent that
+  merges states the CI run id it read.
 - Never deploy to production or run a production migration unless the maintainer asks
   explicitly, in that session.
 - Material that predates this repository is recorded in the private provenance record
@@ -227,16 +227,18 @@ Every change in this repository must be independently verifiable. Treat it accor
 5. Contracts and docs updated only if genuinely required.
 6. Screenshots or simulator evidence produced for UI and agent work.
 7. Risks and assumptions listed explicitly.
-8. Work stays on its branch until reviewed. An agent may **request** to push the
-   branch, but must wait for the maintainer's explicit approval on that prompt before
-   the push happens. Never deploy. Merging is governed by ADR-014: permitted only
-   with the maintainer's approval of that specific merge, and never as a standing
-   permission.
+8. Work stays on its branch until reviewed. An agent **proposes** each git or GitHub
+   action — commit, push, pull request, merge, branch deletion — and carries it out
+   only after the maintainer approves it in that session. Never deploy. A merge also
+   meets ADR-014's conditions.
 
-Pushing is maintainer-approved, per push. Do not batch several branches into one
-approval request, and do not treat an earlier approval as standing permission for
-later pushes in the same session. The same rule governs merging under ADR-014: one
-approval, one merge.
+Approval is per exchange, not standing. When the maintainer approves a message that
+names several actions — several pushes, several merges, deleting branches — every
+action it names is approved, and the agent carries all of them out without asking
+again one by one (ADR-014, amendment of 2026-09-14). An approval covers only what was
+named: it is not permission for actions proposed later, and it never extends to a
+production deploy, a production migration or real-hardware mode, each of which needs
+the maintainer's own explicit request.
 
 ## Commit attribution
 
