@@ -142,3 +142,36 @@ def test_a_malformed_setup_file_is_refused_without_quoting_it(monkeypatch, tmp_p
     assert main([]) == 2
     assert "the-secret-token-on-a-bad-line" not in caplog.text
     assert "line 1" in caplog.text
+
+
+def test_the_loop_starts_and_stops_the_upload_worker(monkeypatch, tmp_path):
+    """`run()` owns the supervisor's threads as well as the watchdog's.
+
+    The upload worker is the only path a capture takes to storage. Before this
+    test nothing in the process started it: every capture was queued, the grant
+    expired, and the customer's Collection stayed empty.
+    """
+    import threading
+    from uuid import uuid4 as new_id
+
+    from darkview_agent.capture.upload import Uploader
+    from darkview_agent.config import AgentConfig
+
+    lifecycle: list[str] = []
+    monkeypatch.setattr(Uploader, "start", lambda self: lifecycle.append("start"))
+    monkeypatch.setattr(
+        Uploader, "stop", lambda self, timeout_seconds=5.0: lifecycle.append("stop")
+    )
+
+    config = AgentConfig(
+        cloud_url="wss://cloud.example/ws/agent",
+        device_token="a-device-token",
+        observatory_id=new_id(),
+        state_path=tmp_path / "state" / "agent.sqlite",
+    )
+    stop = threading.Event()
+    stop.set()
+
+    entrypoint.run(config, stop)
+
+    assert lifecycle == ["start", "stop"]

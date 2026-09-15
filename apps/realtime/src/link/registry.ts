@@ -58,9 +58,17 @@ export class AgentLinkRegistry {
 
     for (const [observatoryId, link] of [...this.links]) {
       if (!link.isExpired(at)) continue;
-      await link.expire();
+      // Removed before the store is told, not after. `expire` writes to the
+      // database, and a link that stayed registered because that write failed
+      // would refuse the observatory's own reconnect with "already connected"
+      // for as long as the database was away.
       this.links.delete(observatoryId);
       expired.push(observatoryId);
+      try {
+        await link.expire();
+      } catch (error) {
+        console.error(`darkview realtime: expiring ${observatoryId}`, error);
+      }
     }
 
     return expired;

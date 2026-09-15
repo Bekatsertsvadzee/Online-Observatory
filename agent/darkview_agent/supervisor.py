@@ -57,6 +57,7 @@ from darkview_agent.command.audit import AuditEvent, AuditLog
 from darkview_agent.command.validator import Ack, CommandValidator, SessionOwnership
 from darkview_agent.config import AgentConfig
 from darkview_agent.devices.base import DeviceError
+from darkview_agent.devices.frame import Frame
 from darkview_agent.link.session import LinkSession
 from darkview_agent.mission.runner import (
     FinishedCapture,
@@ -69,7 +70,7 @@ from darkview_agent.mission.solver import PlateSolver, SimSolver
 from darkview_agent.runtime import Devices
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
 from darkview_agent.safety.envelope import SafetyEnvelope, normalise_azimuth
-from darkview_agent.safety.watchdog import Watchdog
+from darkview_agent.safety.watchdog import Watchdog, WatchdogAction, WatchdogTrigger
 from darkview_agent.state.store import StateStore, StoredMission, StoredOwnership
 from darkview_agent.stream.mjpeg import LiveView, StreamSettings
 
@@ -169,6 +170,8 @@ class Supervisor:
         uploader: Uploader | None = None,
         store: StateStore | None = None,
         now: Callable[[], datetime] | None = None,
+        frames: list[tuple[str | None, Frame]] | None = None,
+        live_view: LiveView | None = None,
     ) -> None:
         self._config = config
         self._devices = devices
@@ -187,6 +190,16 @@ class Supervisor:
         # holding the device lock, and everything that follows a capture --
         # encoding a JPEG, asking the cloud for a grant -- must happen outside it.
         self._captures: list[FinishedCapture] = [] if captures is None else captures
+        # The runner's third outbox: the frames it wants shown. Encoding a JPEG
+        # and writing it to the socket both happen after the lock is released,
+        # for the same reason as the other two. Only the latest is ever sent --
+        # a live frame is worth nothing once the next one exists.
+        self._frames: list[tuple[str | None, Frame]] = [] if frames is None else frames
+        self._live_view = live_view
+        # How far through the watchdog's history the runner has been told. The
+        # watchdog acts on its own thread and the runner is only ever driven from
+        # here, so this is the one place the two are joined.
+        self._watchdog_actions_seen = 0
         # Not `uploader or Uploader()`: an injected uploader is how a test drives
         # a failed PUT, and silently replacing one would make that test pass for
         # the wrong reason.
@@ -353,11 +366,20 @@ class Supervisor:
         self._expire_owner(at_time)
 
         with self._watchdog.device_lock:
+            self._apply_watchdog_actions(at_time)
+            if self._link.is_online:
+                self._runner.resume_capture()
             self._runner.pump(at_time)
 
         # Outside the lock, deliberately. See `_outbox`.
         while self._outbox:
             self._link.send(self._outbox.pop(0).to_message())
+
+        if self._frames:
+            mission_id, frame = self._frames[-1]
+            self._frames.clear()
+            if self._live_view is not None:
+                self._live_view.offer(mission_id, frame)
 
         # Also outside the lock: encoding a capture is CPU the mount must not
         # wait on, and asking for a grant is a network round trip.
@@ -465,6 +487,29 @@ class Supervisor:
         self._owner = owner
         self._validator.set_ownership(owner.ownership if owner else None)
         self._persist_owner()
+
+    def _apply_watchdog_actions(self, at_time: datetime) -> None:
+        """Tell the runner what the watchdog did while it was not looking.
+
+        The watchdog parks and stops capture on its own thread and the runner has
+        no view of either. Left unjoined, a mission carries on after a Park --
+        the next centring slew takes the mount straight back out of Park with no
+        link to anyone -- and a mission whose exposure was aborted waits for that
+        exposure to complete, which it never will.
+
+        A Park ends the mission. The runner's own terminal path parks again,
+        which is a no-op on a parked mount, and records the reason for the cloud
+        to read when the link returns. A capture stop alone holds the mission
+        where it is, so a heartbeat blip costs the customer one exposure rather
+        than their session.
+        """
+        actions = self._watchdog.actions
+        for action in actions[self._watchdog_actions_seen :]:
+            if action.parked or action.park_failure is not None:
+                self._runner.cancel(at_time, _failure_reason_for(action))
+            elif action.stopped_capture:
+                self._runner.suspend_capture()
+        self._watchdog_actions_seen = len(actions)
 
     def _expire_owner(self, at_time: datetime) -> None:
         """Drop an owner whose session has run out, without waiting to be told.
@@ -1147,6 +1192,7 @@ def build_supervisor(
     audit = AuditLog(sink=store.append_audit if store else None)
     outbox: list[MissionEvent] = []
     captures: list[FinishedCapture] = []
+    frames: list[tuple[str | None, Frame]] = []
 
     link = LinkSession(
         observatory_id=config.observatory_id,
@@ -1172,7 +1218,7 @@ def build_supervisor(
         solver=solver or SimSolver(),
         clock=clock,
         emit=outbox.append,
-        show=lambda frame: live_view.offer(runner.mission_id, frame),
+        show=lambda frame: frames.append((runner.mission_id, frame)),
         on_capture=captures.append,
         **(
             {} if observing_seconds is None else {"observing_seconds": observing_seconds}
@@ -1199,7 +1245,19 @@ def build_supervisor(
         uploader=uploader,
         store=store,
         now=now,
+        frames=frames,
+        live_view=live_view,
     )
+
+
+def _failure_reason_for(action: WatchdogAction) -> MissionFailureReason:
+    if action.trigger is WatchdogTrigger.link_dead:
+        return MissionFailureReason.agent_link_lost
+    if action.trigger is WatchdogTrigger.weather_unsafe:
+        return MissionFailureReason.weather_unsafe
+    if action.trigger is WatchdogTrigger.operator_abort:
+        return MissionFailureReason.operator_abort
+    return MissionFailureReason.mount_fault
 
 
 def _mount_pointing(devices: Devices) -> tuple[float, float]:

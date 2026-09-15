@@ -138,12 +138,17 @@ class Watchdog:
     def link_is_online(self) -> None:
         """Called whenever the link confirms it is alive.
 
-        Resets both timers and clears the stopped-capture latch, so a recovered
-        link lets a mission resume rather than staying suppressed.
+        Resets both timers and clears both latches, so a recovered link lets a
+        mission resume rather than staying suppressed -- and so the next outage
+        parks again. The parked latch only exists to stop a dead link parking on
+        every poll; a mount that a later mission has unparked is not parked any
+        more, and a latch that outlived the outage would leave the second outage
+        of the night with no Park at all.
         """
         with self._lock:
             self._last_online_monotonic = self._clock.monotonic()
             self._capture_stopped = False
+            self._parked = False
 
     def report_device_fault(self, detail: str) -> None:
         """Criterion 3: a fault from any driver triggers the terminal sequence."""

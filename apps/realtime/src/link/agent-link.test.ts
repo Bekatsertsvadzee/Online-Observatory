@@ -264,4 +264,21 @@ describe("one connection per observatory", () => {
     expect(expired).toEqual([observatory.id]);
     expect(registry.get(busy.observatory.id)).toBe(busy);
   });
+
+  it("drops an expired link even when the store cannot be told", async () => {
+    const registry = new AgentLinkRegistry();
+    const quiet = makeLink();
+    registry.admit(observatory.id, quiet);
+    store.markLinkLost = async () => {
+      throw new Error("database away");
+    };
+
+    now += HEARTBEAT_GRACE_SECONDS * 1000 + 1;
+    const expired = await registry.expireSilent(now);
+
+    expect(expired).toEqual([observatory.id]);
+    expect(registry.get(observatory.id)).toBeUndefined();
+    expect(closedWith).toEqual(["heartbeat lost"]);
+    expect(registry.admit(observatory.id, makeLink())).toEqual({ admitted: true });
+  });
 });

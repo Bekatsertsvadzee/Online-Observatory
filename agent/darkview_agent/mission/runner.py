@@ -171,6 +171,9 @@ class _Progress:
     solve_attempts: int = 0
     frames_captured: int = 0
     exposure_started: bool = False
+    #: The watchdog has aborted the exposure and the link is not yet back. No
+    #: exposure is started while this holds; the one that was running is gone.
+    capture_suspended: bool = False
     #: The CAPTURE command this run is being kept for, and the profile it named.
     #: Both None on a mission nobody has pressed Capture on -- the mission still
     #: runs the state machine, and PROCESSING has nothing to deliver.
@@ -309,6 +312,27 @@ class MissionRunner:
             return
         self._fail(MissionState.cancelled, reason, at_time, "cancelled")
 
+    def suspend_capture(self) -> None:
+        """The watchdog has aborted the exposure. Hold until the link is back.
+
+        The runner cannot tell on its own: `SimCamera.exposure_complete()` is
+        False forever after an abort, and a real camera answers the same way, so
+        a runner left waiting for that exposure would wait for the rest of the
+        night with the mount tracking. Forgetting the exposure means the next
+        pump after `resume_capture` starts a fresh one, and holding means it does
+        not start one while the watchdog still wants capture stopped.
+        """
+        progress = self._progress
+        if progress is None:
+            return
+        progress.exposure_started = False
+        progress.capture_suspended = True
+
+    def resume_capture(self) -> None:
+        progress = self._progress
+        if progress is not None:
+            progress.capture_suspended = False
+
     # ------------------------------------------------------------------
     # The pump
     # ------------------------------------------------------------------
@@ -430,6 +454,8 @@ class MissionRunner:
     def _do_verifying(self, at_time: datetime) -> None:
         progress = self._require_progress()
 
+        if progress.capture_suspended:
+            return
         if not progress.exposure_started:
             self._devices.camera.expose(
                 progress.request.exposure_milliseconds, progress.request.gain
@@ -556,6 +582,8 @@ class MissionRunner:
     def _do_capturing(self, at_time: datetime) -> None:
         progress = self._require_progress()
 
+        if progress.capture_suspended:
+            return
         if not progress.exposure_started:
             self._devices.camera.expose(
                 progress.request.exposure_milliseconds, progress.request.gain

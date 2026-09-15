@@ -685,3 +685,107 @@ def test_mission_events_are_sent_outside_the_device_lock():
     assert agent.events(), "the mission produced no events to check"
     assert held_during_send, "nothing was sent, so nothing was checked"
     assert not any(held_during_send)
+
+
+# ----------------------------------------------------------------------
+# The watchdog and the runner, joined
+# ----------------------------------------------------------------------
+
+
+def test_a_link_dead_park_ends_the_mission_and_the_mount_stays_parked():
+    """A watchdog Park is the end of the mission, not an interruption of it.
+
+    Before this test the runner had no view of the watchdog: it kept driving the
+    state machine after the Park, and its next slew took the mount straight back
+    out of Park with no link to anyone.
+    """
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+    agent.command(agent.goto())
+    run_to(agent, MissionState.slewing)
+
+    agent.connector.current.kill()
+    # No welcome is delivered on the redial, so the link stays down.
+    agent.advance(61.0, steps=4)
+    action = agent.supervisor.watchdog.evaluate()
+    assert action is not None and action.parked is True
+
+    agent.pump()
+
+    assert agent.supervisor.runner.is_active is False
+    assert agent.supervisor.runner.state is MissionState.cancelled
+    assert agent.supervisor.runner.failure_reason.value == "AGENT_LINK_LOST"
+
+    # Nothing the runner does afterwards moves the mount.
+    agent.advance(120.0, steps=20)
+    assert agent.mount.status().parked is True
+    assert agent.mount.status().slewing is False
+
+
+def test_a_heartbeat_blip_costs_one_exposure_not_the_mission():
+    """The watchdog aborts the exposure at the heartbeat threshold and the link
+    comes back before the link-dead threshold. The mission must carry on.
+
+    Before this test the runner waited for the aborted exposure to complete,
+    which it never does, so a fifteen-second blip during CAPTURING left the
+    mission there for the rest of the night with the mount tracking.
+    """
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+    agent.command(agent.goto())
+    run_to(agent, MissionState.capturing)
+    assert agent.supervisor.runner.is_active
+
+    agent.connector.current.kill()
+    agent.pump()  # the exposure starts; the dead socket is noticed
+    assert agent.devices.camera.status().exposing is True
+
+    # Fifteen seconds in which the main loop makes no pass. The watchdog thread
+    # acts alone, as it would in the process.
+    agent.clock.advance(16.0)
+    agent.wall.advance(16.0)
+    action = agent.supervisor.watchdog.evaluate()
+    assert action is not None
+    assert action.stopped_capture is True and action.parked is False
+    assert agent.devices.camera.status().exposing is False
+
+    # Held, not failed, and no exposure is started while the link is down.
+    agent.advance(4.0, steps=2)
+    assert agent.supervisor.runner.state is MissionState.capturing
+    assert agent.devices.camera.status().exposing is False
+
+    # The link returns on the redialled socket.
+    agent.connector.current.deliver_welcome()
+    agent.pump()
+    assert agent.supervisor.link.is_online is True
+
+    run_to(agent, MissionState.complete)
+    assert agent.mount.status().parked is True
+
+
+def test_live_frames_are_sent_outside_the_device_lock():
+    """The same rule as mission events, for the frames.
+
+    A live frame is encoded to JPEG and written to the socket. Both used to
+    happen inside the runner's pump, under the watchdog's device lock, so a
+    congested uplink could hold the lock a Park needs.
+    """
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+
+    lock = agent.supervisor.watchdog.device_lock
+    held_during_send: list[bool] = []
+    transport = agent.connector.current
+    original = transport.send_binary
+
+    def record_whether_the_lock_is_held(payload):
+        held_during_send.append(lock._is_owned())
+        return original(payload)
+
+    transport.send_binary = record_whether_the_lock_is_held  # type: ignore[method-assign]
+
+    agent.command(agent.goto())
+    run_to(agent, MissionState.complete)
+
+    assert held_during_send, "no live frame was sent, so nothing was checked"
+    assert not any(held_during_send)

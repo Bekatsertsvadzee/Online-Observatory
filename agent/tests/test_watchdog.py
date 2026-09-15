@@ -590,3 +590,37 @@ def test_an_injected_audit_log_is_actually_used():
 
     assert watchdog.audit is shared
     assert len(shared.events_of_kind("WATCHDOG_TRIGGERED")) == 1
+
+
+def test_the_second_outage_of_the_night_parks_again():
+    """The parked latch must not outlive the outage that set it.
+
+    A first link loss parks. The link comes back, a mission unparks the mount
+    and slews, and the link dies again. Before this test the latch set by the
+    first Park was never cleared, so the second outage stopped capture and then
+    left the mount tracking with nobody reachable -- the one condition the
+    watchdog exists for.
+    """
+    clock = ManualClock()
+    devices = build_devices(clock)
+    devices.mount.connect()
+    devices.mount.unpark()
+    watchdog = build_watchdog(clock, devices)
+    watchdog.link_is_online()
+
+    clock.advance(LINK_DEAD_SECONDS + 1.0)
+    assert watchdog.evaluate().parked is True
+
+    # The link returns and a mission takes the mount out of Park.
+    watchdog.link_is_online()
+    devices.mount.unpark()
+    devices.mount.slew_to(45.0, 180.0)
+    assert devices.mount.status().parked is False
+
+    clock.advance(LINK_DEAD_SECONDS + 1.0)
+    action = watchdog.evaluate()
+
+    assert action is not None
+    assert action.trigger is WatchdogTrigger.link_dead
+    assert action.parked is True
+    assert devices.mount.status().parked is True
