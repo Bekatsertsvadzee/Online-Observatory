@@ -158,7 +158,13 @@ export function createRealtimeServer(
       sockets.handleUpgrade(request, socket, head, (connection) => {
         watch(connection, mission[1], user);
       });
-    })();
+    })().catch((error) => {
+      // The database dropping during the token or cookie lookup. Caught for the
+      // same reason as every other path in this file: an unhandled rejection
+      // ends the process, and the process holds every observatory's socket.
+      console.error("darkview realtime: upgrade", error);
+      socket.destroy();
+    });
   });
 
   /**
@@ -208,11 +214,20 @@ export function createRealtimeServer(
       // five seconds, at three queries a time, on an observatory doing nothing.
       // The periodic half of the fallback is the timer below.
       const before = link.currentState;
-      void link.receive(data.toString()).then(() => {
-        if (before !== "ONLINE" && link.currentState === "ONLINE") {
-          void relay.sweep(observatory.id);
-        }
-      });
+      void link
+        .receive(data.toString())
+        .then(() => {
+          if (before !== "ONLINE" && link.currentState === "ONLINE") {
+            return relay.sweep(observatory.id);
+          }
+        })
+        .catch((error) => {
+          // A store rejection while handling one agent message -- a heartbeat
+          // during a database blip -- is logged, not left to end the process.
+          // The agent gets no ack and replays; every other observatory keeps
+          // its link.
+          console.error("darkview realtime: agent message", error);
+        });
     });
     connection.on("close", () => {
       registry.release(observatory.id, link);
@@ -220,7 +235,9 @@ export function createRealtimeServer(
       // response still writing it is closed. Holding the last frame of a dead
       // link would show a customer a still image and call it live.
       live.releaseObservatory(observatory.id);
-      void store.markLinkLost(observatory.id, new Date());
+      void store.markLinkLost(observatory.id, new Date()).catch((error) => {
+        console.error("darkview realtime: link lost", error);
+      });
     });
   }
 
@@ -261,7 +278,9 @@ export function createRealtimeServer(
 
   const heartbeatSweep = setInterval(() => {
     const at = Date.now();
-    void registry.expireSilent(at);
+    void registry.expireSilent(at).catch((error) => {
+      console.error("darkview realtime: heartbeat sweep", error);
+    });
     missions.expireSilent(at);
     // Frames whose mission stopped sending without saying so. Mission end and link
     // loss are released explicitly above; this covers everything that just stops.
@@ -282,14 +301,19 @@ export function createRealtimeServer(
    */
   const pendingSweep = setInterval(() => {
     for (const observatoryId of registry.observatoryIds()) {
-      void relay.sweepPendingCommands(observatoryId).then((sent) => {
-        if (sent > 0) {
-          console.warn(
-            `relay fallback sent ${sent} command(s) for ${observatoryId}; ` +
-              "the notification path did not deliver them",
-          );
-        }
-      });
+      void relay
+        .sweepPendingCommands(observatoryId)
+        .then((sent) => {
+          if (sent > 0) {
+            console.warn(
+              `relay fallback sent ${sent} command(s) for ${observatoryId}; ` +
+                "the notification path did not deliver them",
+            );
+          }
+        })
+        .catch((error) => {
+          console.error("darkview realtime: pending sweep", error);
+        });
     }
   }, PENDING_SWEEP_INTERVAL_SECONDS * 1000);
 

@@ -76,6 +76,10 @@ def run(config: AgentConfig, stop: threading.Event) -> None:
         store=store,
     )
     supervisor.recover()
+    # The upload worker. Without this every capture is queued and nothing ever
+    # PUTs it: the agent renders the deliverable, asks for the grant, and lets it
+    # expire in silence.
+    supervisor.start()
 
     watchdog = WatchdogThread(supervisor.watchdog)
     watchdog.start()
@@ -110,6 +114,9 @@ def run(config: AgentConfig, stop: threading.Event) -> None:
                 devices.mount.park()
             except Exception as error:
                 logger.error("could not park the mount on shutdown: %s", error)
+        # After the park: an upload in flight is given its moment only once the
+        # mount is where it should be.
+        supervisor.stop()
         # Closed after the park, so the audit event the park may write still has
         # somewhere to go.
         store.close()
