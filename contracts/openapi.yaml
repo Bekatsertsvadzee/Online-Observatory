@@ -1419,6 +1419,106 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /admin/network/nodes/{nodeId}/device-token:
+    post:
+      operationId: adminIssueDeviceToken
+      tags: [admin]
+      summary: Issue the device token a node's agent connects with.
+      description: |
+        ADR-020. Operators only, at any approval state: a token lets the agent
+        connect, and the link still refuses to operate anything until the node is
+        APPROVED. The token is in this response and nowhere else -- only its SHA-256
+        is stored -- so it cannot be read back. 409 when the node already has one;
+        rotate it instead.
+      security:
+        - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceTokenChangeRequest"
+      responses:
+        "201":
+          description: The token, shown once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceTokenIssued"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/network/nodes/{nodeId}/device-token/rotate:
+    post:
+      operationId: adminRotateDeviceToken
+      tags: [admin]
+      summary: Replace a node's device token, cutting off the old one now.
+      description: |
+        ADR-020. The old token stops authenticating on commit, and a link still
+        connected with it is closed. 409 when the node has no token to rotate.
+      security:
+        - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceTokenChangeRequest"
+      responses:
+        "200":
+          description: The new token, shown once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceTokenIssued"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/network/nodes/{nodeId}/device-token/revoke:
+    post:
+      operationId: adminRevokeDeviceToken
+      tags: [admin]
+      summary: Revoke a node's device token, immediately.
+      description: |
+        ADR-013's "revoke its token in one row", and an emergency stop like suspend:
+        never refused, never metered, and a live mission on the node is cancelled.
+        The link is closed and no agent can connect until a token is issued again.
+      security:
+        - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceTokenChangeRequest"
+      responses:
+        "204":
+          description: Revoked. Also answered when the node had no token.
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
 
 components:
   securitySchemes:
@@ -3679,7 +3779,9 @@ components:
       properties:
         action:
           type: string
-          enum: [REGISTERED, SUBMITTED, APPROVED, SUSPENDED]
+          enum:
+            [REGISTERED, SUBMITTED, APPROVED, SUSPENDED, DEVICE_TOKEN_ISSUED,
+             DEVICE_TOKEN_ROTATED, DEVICE_TOKEN_REVOKED]
         occurredAt:
           type: string
           format: date-time
@@ -3803,6 +3905,37 @@ components:
         reason:
           type: string
           minLength: 8
+
+    DeviceTokenChangeRequest:
+      type: object
+      description: Why the operator is issuing, rotating or revoking. Recorded verbatim.
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 8
+
+    DeviceTokenIssued:
+      type: object
+      description: |
+        The only place a device token ever appears. Give it to the owner for
+        `python -m darkview_agent setup`; it cannot be shown again.
+      additionalProperties: false
+      required: [nodeId, observatoryId, deviceToken, issuedAt]
+      properties:
+        nodeId:
+          type: string
+          format: uuid
+        observatoryId:
+          type: string
+          format: uuid
+        deviceToken:
+          type: string
+          description: "Presented by the agent as `Authorization: Bearer`. Never logged."
+        issuedAt:
+          type: string
+          format: date-time
 
     AuditCategory:
       type: string

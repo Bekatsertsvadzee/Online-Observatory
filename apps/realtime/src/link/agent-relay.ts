@@ -27,7 +27,8 @@ export type NotificationPayload =
       missionId: string;
       sessionId: string | null;
     }
-  | { kind: "ENVELOPE"; observatoryId: string };
+  | { kind: "ENVELOPE"; observatoryId: string }
+  | { kind: "CREDENTIAL"; observatoryId: string };
 
 export type RelayOutcome = "SENT" | "NO_LINK" | "NOT_FOUND" | "MALFORMED";
 
@@ -66,7 +67,31 @@ export class AgentRelay {
     if (notification?.kind === "ENVELOPE") {
       return this.relayEnvelope(notification.observatoryId);
     }
+    if (notification?.kind === "CREDENTIAL") {
+      return this.closeForCredentialChange(notification.observatoryId);
+    }
     return "MALFORMED";
+  }
+
+  /**
+   * The observatory's device token was rotated or revoked (ADR-020).
+   *
+   * A token is checked once, at the handshake, so the link open now was admitted
+   * with a token that may no longer exist. It is closed unconditionally rather
+   * than re-checked: after a rotate the agent reconnects with the new token if it
+   * has one, and after a revoke it cannot reconnect at all. Closing a link that
+   * was already using the new token costs one reconnect; leaving a revoked one
+   * open would leave the telescope with an agent nobody authorised.
+   *
+   * The server's close handler releases the registry entry and records the link
+   * lost, the same path a heartbeat loss takes.
+   */
+  closeForCredentialChange(observatoryId: string): RelayOutcome {
+    const link = this.registry.get(observatoryId);
+    if (!link) return "NO_LINK";
+
+    link.terminate("device token changed");
+    return "SENT";
   }
 
   async relayCommand(commandId: string): Promise<RelayOutcome> {

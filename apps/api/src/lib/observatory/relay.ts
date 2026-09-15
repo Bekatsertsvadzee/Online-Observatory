@@ -43,7 +43,13 @@ export type AgentNotification =
    * owns the socket, never lifted out of a notification payload that anything able
    * to reach the database could have written.
    */
-  | { kind: "ENVELOPE"; observatoryId: string };
+  | { kind: "ENVELOPE"; observatoryId: string }
+  /**
+   * The device token was rotated or revoked (ADR-020). A link authenticated with
+   * the old one is closed; a token is checked only at the handshake, so without
+   * this a revoked agent would stay connected until it next dropped.
+   */
+  | { kind: "CREDENTIAL"; observatoryId: string };
 
 /**
  * `$executeRaw`, not `$queryRaw`: `pg_notify` returns void, and Prisma refuses to
