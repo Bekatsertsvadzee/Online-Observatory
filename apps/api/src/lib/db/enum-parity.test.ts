@@ -47,6 +47,10 @@ const DATABASE_ONLY = new Set([
   "CaptureAccessStatus",
   "CollectionKind",
   "CreditLedgerReason",
+  // DV-064: the email outbox. Read by the realtime service's dispatcher; no
+  // client is told either value.
+  "EmailNotificationKind",
+  "EmailNotificationStatus",
   "EquipmentStatus",
   "MissionJoinPolicy",
   "MissionParticipantStatus",

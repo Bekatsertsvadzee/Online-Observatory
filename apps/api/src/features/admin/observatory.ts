@@ -9,8 +9,12 @@ import type {
   WeatherState,
 } from "@darkview/contracts";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { queueEmail } from "@darkview/db/notifications";
 
 import { randomUUID } from "node:crypto";
+
+/** How far ahead a weather hold reaches when deciding whom to email (DV-064). */
+const WEATHER_HOLD_NOTICE_HOURS = 24;
 
 import { getDatabase } from "@/lib/db/client";
 import { COMMAND_TTL_SECONDS } from "@/features/missions/command";
@@ -195,6 +199,29 @@ export async function setWeatherHold(input: {
         setByUserId: actorUserId,
       },
     });
+
+    // DV-064: customers whose slot this hold affects are emailed. Only when the hold
+    // goes on -- saving an active hold again with a new note tells nobody twice.
+    if (request.holdActive && !previous?.holdActive) {
+      const affected = await tx.booking.findMany({
+        where: {
+          observatoryId,
+          status: "CONFIRMED",
+          slotStartAt: { lt: new Date(now.getTime() + WEATHER_HOLD_NOTICE_HOURS * 3_600_000) },
+        },
+        select: { id: true, userId: true, slotStartAt: true, durationMinutes: true },
+      });
+      for (const booking of affected) {
+        const endsAt = booking.slotStartAt.getTime() + booking.durationMinutes * 60_000;
+        if (endsAt <= now.getTime()) continue;
+        await queueEmail(tx, {
+          userId: booking.userId,
+          kind: "WEATHER_HOLD",
+          dedupeKey: `weather-hold:${booking.id}:${now.toISOString()}`,
+          payload: { bookingId: booking.id },
+        });
+      }
+    }
 
     // A hold has to reach a mission that is already running, or it is only half a
     // rule: `startMissionSession` refuses a new session under a hold, and until now

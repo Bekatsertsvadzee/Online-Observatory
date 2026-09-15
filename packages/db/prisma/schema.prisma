@@ -364,6 +364,7 @@ model User {
   captureAccess       CaptureAccess[]
   networkNodes        ObservatoryNetworkNode[] @relation("NetworkNodeOwner")
   observerPacks       ObserverPack[]
+  emailNotifications  EmailNotification[]
 }
 
 model Account {
@@ -1208,4 +1209,41 @@ model NetworkAvailabilityWindow {
 
   @@unique([nodeId, weekday, startMinute, endMinute])
   @@index([nodeId, enabled, weekday])
+}
+
+enum EmailNotificationKind {
+  BOOKING_CONFIRMED
+  SLOT_REMINDER
+  WEATHER_HOLD
+  CAPTURE_READY
+}
+
+/// SKIPPED: not sent because it no longer applies. FAILED: ran out of attempts.
+enum EmailNotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+/// DV-064. The email outbox. Written in the transaction of the event that causes
+/// it; delivered by the realtime service. `payload` carries ids only -- what the
+/// email says is read at the moment it is sent, and never a secret.
+model EmailNotification {
+  id            String                  @id @default(uuid()) @db.Uuid
+  userId        String                  @db.Uuid
+  kind          EmailNotificationKind
+  /// One email per event per recipient; a repeated event writes no second row.
+  dedupeKey     String                  @unique
+  payload       Json
+  status        EmailNotificationStatus @default(PENDING)
+  attempts      Int                     @default(0)
+  nextAttemptAt DateTime                @default(now())
+  lastError     String?
+  sentAt        DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+  user          User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
 }

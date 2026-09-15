@@ -1,6 +1,9 @@
 import { createServer } from "node:http";
 
+import { PrismaPg } from "@prisma/adapter-pg";
 import { WebSocketServer, type WebSocket } from "ws";
+
+import { PrismaClient } from "@darkview/db";
 
 import { authenticateAgent } from "@/auth/device-token";
 import { authenticateClient, isAllowedOrigin } from "@/auth/user-session";
@@ -24,8 +27,15 @@ import { handleInternalRequest } from "@/internal/http";
 import { handleStreamRequest } from "@/stream/http";
 import { LiveStream } from "@/stream/live-stream";
 import { getEnvironment } from "@/env";
+import { dispatchPendingEmails, queueSlotReminders } from "@/notifications/email";
 
 const AGENT_PATH = "/ws/agent";
+
+/** How often bookings starting within the reminder window are queued (DV-064). */
+const REMINDER_SWEEP_INTERVAL_SECONDS = 60;
+
+/** How often the email outbox is delivered (DV-064). */
+const EMAIL_DISPATCH_INTERVAL_SECONDS = 30;
 
 /**
  * `ws` hands a binary message as a Buffer, an ArrayBuffer or an array of Buffers
@@ -368,6 +378,40 @@ if (process.env.NODE_ENV !== "test") {
     onError: (error) => console.error("darkview realtime: listener", error),
   });
   void listener.start();
+
+  // DV-064. Its own client, so the link's store interface stays as narrow as the
+  // link needs. Reminders are queued whether or not delivery is configured; an
+  // outbox that fills while the mail service is unset is delivered once it is set.
+  const notifications = new PrismaClient({
+    adapter: new PrismaPg({ connectionString: environment.DATABASE_URL }),
+  });
+  setInterval(() => {
+    void queueSlotReminders(notifications, new Date()).catch((error) => {
+      console.error("darkview realtime: slot reminders", error);
+    });
+  }, REMINDER_SWEEP_INTERVAL_SECONDS * 1000);
+
+  const webhook =
+    environment.NOTIFICATION_WEBHOOK_URL && environment.NOTIFICATION_WEBHOOK_SECRET
+      ? { url: environment.NOTIFICATION_WEBHOOK_URL, secret: environment.NOTIFICATION_WEBHOOK_SECRET }
+      : null;
+  if (webhook) {
+    setInterval(() => {
+      void dispatchPendingEmails({ database: notifications, webhook, now: new Date() })
+        .then((summary) => {
+          if (summary.failed > 0) {
+            console.error(`darkview realtime: ${summary.failed} email(s) gave up after every retry`);
+          }
+        })
+        .catch((error) => {
+          console.error("darkview realtime: email delivery", error);
+        });
+    }, EMAIL_DISPATCH_INTERVAL_SECONDS * 1000);
+  } else {
+    console.warn(
+      "darkview realtime: NOTIFICATION_WEBHOOK_URL is not set; emails are queued and not sent",
+    );
+  }
 
   console.log(
     `darkview realtime listening on :${environment.REALTIME_PORT}${AGENT_PATH}`,

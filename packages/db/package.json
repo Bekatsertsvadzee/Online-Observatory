@@ -11,6 +11,7 @@
     "./development-seed": "./prisma/development-seed.ts",
     "./phase1-catalogue": "./prisma/phase1-catalogue.ts",
     "./capture": "./capture.ts",
+    "./notifications": "./notifications.ts",
     "./rate-limit": "./rate-limit.ts"
   },
   "scripts": {
