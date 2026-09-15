@@ -55,6 +55,9 @@ const UNMETERED_BY_DESIGN = [
   // flood of anything else deny an operator the one control that frees a
   // telescope nobody can book behind.
   "admin/missions/[missionId]/cancel/route.ts",
+  // Revoking a device token is the other one-row emergency stop ADR-013 names,
+  // beside suspension, and follows Park for the same reason (ADR-020).
+  "admin/network/nodes/[nodeId]/device-token/revoke/route.ts",
   // Suspending a partner node is the emergency stop for a telescope nobody is
   // standing next to (ADR-013). It follows Park: a limiter able to delay it would
   // be a regression dressed as hardening, and the moment an operator most needs

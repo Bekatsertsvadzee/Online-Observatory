@@ -87,6 +87,11 @@ export type AuditAction =
   | "NETWORK_NODE_SUBMITTED"
   | "NETWORK_NODE_APPROVED"
   | "NETWORK_NODE_SUSPENDED"
+  // ADR-020: the one credential a node's agent connects with. The token itself is
+  // never in the row; FORBIDDEN_DETAIL_KEYS below refuses any detail that tries.
+  | "NETWORK_NODE_DEVICE_TOKEN_ISSUED"
+  | "NETWORK_NODE_DEVICE_TOKEN_ROTATED"
+  | "NETWORK_NODE_DEVICE_TOKEN_REVOKED"
   // OPERATOR_OVERRIDE
   | "OPERATOR_OVERRIDE_ISSUED"
   | "OPERATOR_MISSION_CANCELLED"

@@ -1559,7 +1559,7 @@ export type NetworkNodeEnvelopeEvidence = {
 };
 
 export type NetworkNodeHistoryEntry = {
-    action: 'REGISTERED' | 'SUBMITTED' | 'APPROVED' | 'SUSPENDED';
+    action: 'REGISTERED' | 'SUBMITTED' | 'APPROVED' | 'SUSPENDED' | 'DEVICE_TOKEN_ISSUED' | 'DEVICE_TOKEN_ROTATED' | 'DEVICE_TOKEN_REVOKED';
     occurredAt: string;
     actorUserId: string | null;
     /**
@@ -1635,6 +1635,28 @@ export type ApproveNetworkNodeRequest = {
 
 export type SuspendNetworkNodeRequest = {
     reason: string;
+};
+
+/**
+ * Why the operator is issuing, rotating or revoking. Recorded verbatim.
+ */
+export type DeviceTokenChangeRequest = {
+    reason: string;
+};
+
+/**
+ * The only place a device token ever appears. Give it to the owner for
+ * `python -m darkview_agent setup`; it cannot be shown again.
+ *
+ */
+export type DeviceTokenIssued = {
+    nodeId: string;
+    observatoryId: string;
+    /**
+     * Presented by the agent as `Authorization: Bearer`. Never logged.
+     */
+    deviceToken: string;
+    issuedAt: string;
 };
 
 export const AuditCategory = {
@@ -3782,3 +3804,116 @@ export type AdminSuspendNetworkNodeResponses = {
 };
 
 export type AdminSuspendNetworkNodeResponse = AdminSuspendNetworkNodeResponses[keyof AdminSuspendNetworkNodeResponses];
+
+export type AdminIssueDeviceTokenData = {
+    body: DeviceTokenChangeRequest;
+    path: {
+        nodeId: string;
+    };
+    query?: never;
+    url: '/admin/network/nodes/{nodeId}/device-token';
+};
+
+export type AdminIssueDeviceTokenErrors = {
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type AdminIssueDeviceTokenError = AdminIssueDeviceTokenErrors[keyof AdminIssueDeviceTokenErrors];
+
+export type AdminIssueDeviceTokenResponses = {
+    /**
+     * The token, shown once.
+     */
+    201: DeviceTokenIssued;
+};
+
+export type AdminIssueDeviceTokenResponse = AdminIssueDeviceTokenResponses[keyof AdminIssueDeviceTokenResponses];
+
+export type AdminRotateDeviceTokenData = {
+    body: DeviceTokenChangeRequest;
+    path: {
+        nodeId: string;
+    };
+    query?: never;
+    url: '/admin/network/nodes/{nodeId}/device-token/rotate';
+};
+
+export type AdminRotateDeviceTokenErrors = {
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type AdminRotateDeviceTokenError = AdminRotateDeviceTokenErrors[keyof AdminRotateDeviceTokenErrors];
+
+export type AdminRotateDeviceTokenResponses = {
+    /**
+     * The new token, shown once.
+     */
+    200: DeviceTokenIssued;
+};
+
+export type AdminRotateDeviceTokenResponse = AdminRotateDeviceTokenResponses[keyof AdminRotateDeviceTokenResponses];
+
+export type AdminRevokeDeviceTokenData = {
+    body: DeviceTokenChangeRequest;
+    path: {
+        nodeId: string;
+    };
+    query?: never;
+    url: '/admin/network/nodes/{nodeId}/device-token/revoke';
+};
+
+export type AdminRevokeDeviceTokenErrors = {
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type AdminRevokeDeviceTokenError = AdminRevokeDeviceTokenErrors[keyof AdminRevokeDeviceTokenErrors];
+
+export type AdminRevokeDeviceTokenResponses = {
+    /**
+     * Revoked. Also answered when the node had no token.
+     */
+    204: void;
+};
+
+export type AdminRevokeDeviceTokenResponse = AdminRevokeDeviceTokenResponses[keyof AdminRevokeDeviceTokenResponses];

@@ -1120,7 +1120,10 @@ export const zNetworkNodeHistoryEntry = z.strictObject({
         'REGISTERED',
         'SUBMITTED',
         'APPROVED',
-        'SUSPENDED'
+        'SUSPENDED',
+        'DEVICE_TOKEN_ISSUED',
+        'DEVICE_TOKEN_ROTATED',
+        'DEVICE_TOKEN_REVOKED'
     ]),
     occurredAt: z.iso.datetime(),
     actorUserId: z.uuid().nullable(),
@@ -1197,6 +1200,25 @@ export const zApproveNetworkNodeRequest = z.strictObject({
 
 export const zSuspendNetworkNodeRequest = z.strictObject({
     reason: z.string().min(8)
+});
+
+/**
+ * Why the operator is issuing, rotating or revoking. Recorded verbatim.
+ */
+export const zDeviceTokenChangeRequest = z.strictObject({
+    reason: z.string().min(8)
+});
+
+/**
+ * The only place a device token ever appears. Give it to the owner for
+ * `python -m darkview_agent setup`; it cannot be shown again.
+ *
+ */
+export const zDeviceTokenIssued = z.strictObject({
+    nodeId: z.uuid(),
+    observatoryId: z.uuid(),
+    deviceToken: z.string(),
+    issuedAt: z.iso.datetime()
 });
 
 export const zAuditCategory = z.enum([
@@ -2123,3 +2145,36 @@ export const zAdminSuspendNetworkNodePath = z.object({
  * The suspended node.
  */
 export const zAdminSuspendNetworkNodeResponse = zNetworkNode;
+
+export const zAdminIssueDeviceTokenBody = zDeviceTokenChangeRequest;
+
+export const zAdminIssueDeviceTokenPath = z.object({
+    nodeId: z.uuid()
+});
+
+/**
+ * The token, shown once.
+ */
+export const zAdminIssueDeviceTokenResponse = zDeviceTokenIssued;
+
+export const zAdminRotateDeviceTokenBody = zDeviceTokenChangeRequest;
+
+export const zAdminRotateDeviceTokenPath = z.object({
+    nodeId: z.uuid()
+});
+
+/**
+ * The new token, shown once.
+ */
+export const zAdminRotateDeviceTokenResponse = zDeviceTokenIssued;
+
+export const zAdminRevokeDeviceTokenBody = zDeviceTokenChangeRequest;
+
+export const zAdminRevokeDeviceTokenPath = z.object({
+    nodeId: z.uuid()
+});
+
+/**
+ * Revoked. Also answered when the node had no token.
+ */
+export const zAdminRevokeDeviceTokenResponse = z.void();

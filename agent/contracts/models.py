@@ -1239,6 +1239,9 @@ class Action(StrEnum):
     submitted = 'SUBMITTED'
     approved = 'APPROVED'
     suspended = 'SUSPENDED'
+    device_token_issued = 'DEVICE_TOKEN_ISSUED'
+    device_token_rotated = 'DEVICE_TOKEN_ROTATED'
+    device_token_revoked = 'DEVICE_TOKEN_REVOKED'
 
 
 class NetworkNodeHistoryEntry(BaseModel):
@@ -1296,6 +1299,31 @@ class SuspendNetworkNodeRequest(BaseModel):
         extra='forbid',
     )
     reason: str = Field(..., min_length=8)
+
+
+class DeviceTokenChangeRequest(BaseModel):
+    """
+    Why the operator is issuing, rotating or revoking. Recorded verbatim.
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    reason: str = Field(..., min_length=8)
+
+
+class DeviceTokenIssued(BaseModel):
+    """
+    The only place a device token ever appears. Give it to the owner for
+    `python -m darkview_agent setup`; it cannot be shown again.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    node_id: UUID = Field(..., alias='nodeId')
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    device_token: str = Field(..., alias='deviceToken', description='Presented by the agent as `Authorization: Bearer`. Never logged.')
+    issued_at: AwareDatetime = Field(..., alias='issuedAt')
 
 
 class AuditCategory(StrEnum):
