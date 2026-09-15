@@ -28,13 +28,19 @@ final park.
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import sys
 import threading
 from types import FrameType
 
-from darkview_agent import runtime
-from darkview_agent.config import AgentConfig, ConfigurationError, load_config
+from darkview_agent import runtime, setup
+from darkview_agent.config import (
+    AgentConfig,
+    ConfigurationError,
+    load_config,
+    resolve_environment,
+)
 from darkview_agent.link.session import LinkState, ProtocolVersionRefused
 from darkview_agent.link.websocket import build_connector
 from darkview_agent.safety.envelope import SafetyEnvelope
@@ -109,13 +115,18 @@ def run(config: AgentConfig, stop: threading.Event) -> None:
         store.close()
 
 
-def main() -> int:
+def main(arguments: list[str] | None = None) -> int:
+    arguments = sys.argv[1:] if arguments is None else arguments
+    if arguments[:1] == ["setup"]:
+        return setup.main(arguments[1:])
+
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
 
     try:
-        config = load_config()
+        # The file `setup` writes, overridden by anything set in the process (DV-123).
+        config = load_config(resolve_environment(dict(os.environ)))
     except ConfigurationError as error:
         logger.error("%s", error)
         return 2
