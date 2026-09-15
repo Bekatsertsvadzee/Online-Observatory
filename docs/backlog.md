@@ -1163,9 +1163,10 @@ tests), and a coordinate leaking into the public list.
   constraint holds, but a 409 the customer should never have been offered.
 - **ADR-015 §2, duration filtering the target list,** is not built. Nothing sells a
   second length, so nothing needs it yet.
-- **The admin routes remain single-observatory** through `currentObservatoryId()`.
-  That was already recorded as waiting on a contract change, and DV-066 does not
-  change it.
+- **The admin routes remained single-observatory** through `currentObservatoryId()`.
+  That was already recorded as waiting on a contract change, and DV-066 did not
+  change it. **Issue #76 has since changed it** (ADR-019): every observatory route
+  takes the id in its path, and `currentObservatoryId()` is gone.
 
 ## What DV-065 built, and the check it turned up
 

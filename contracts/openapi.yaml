@@ -146,7 +146,7 @@ x-darkview-internal:
       method: GET
       url: /internal/observatories/{observatoryId}/state
       served_by: apps/realtime
-      called_by: apps/api, for GET /admin/observatory/state (ADR-017)
+      called_by: apps/api, for GET /admin/observatories/{observatoryId}/state (ADR-017)
       auth: realtimeInternalSecret
       response:
         $ref: "#/components/schemas/ObservatoryTelemetrySnapshot"
@@ -282,15 +282,21 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /observatory/state:
+  /observatories/{observatoryId}/state:
     get:
       operationId: getObservatoryStatus
       tags: [observatory]
-      summary: Public observatory status.
+      summary: Public status of one bookable observatory.
       description: |
         Powers the public status page and the live status chip. Contains no device
         address, no credential and no raw driver state.
+
+        ADR-019: answered for an observatory `GET /observatories` lists. An id that
+        does not exist and one that is not bookable are one 404, so a customer
+        cannot learn by probing ids that a suspended partner node exists.
       security: []
+      parameters:
+        - $ref: "#/components/parameters/ObservatoryId"
       responses:
         "200":
           description: Public observatory status.
@@ -298,6 +304,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PublicObservatoryStatus"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /observatories:
     get:
@@ -913,21 +921,27 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
-  /admin/observatory/state:
+  /admin/observatories/{observatoryId}/state:
     get:
       operationId: adminGetObservatoryState
       tags: [admin]
-      summary: Full operator telemetry for the observatory.
+      summary: Full operator telemetry for one observatory.
       description: |
         ADR-017. Telemetry is read live from the realtime service, which holds it only
         while the agent is connected. When there is no telemetry to report -- the agent
         is not connected, or the realtime service cannot be reached -- this answers 503
         OBSERVATORY_OFFLINE rather than inventing device health it cannot see. With no
         safety envelope recorded it answers 503 SAFETY_NOT_CONFIGURED. The envelope and
-        the missions stay readable through /admin/observatory/safety-envelope and
-        /admin/missions, which do not depend on the link.
+        the missions stay readable through
+        /admin/observatories/{observatoryId}/safety-envelope and /admin/missions, which
+        do not depend on the link.
+
+        ADR-019: any observatory that exists, bookable or not -- an operator reviewing
+        or suspending a partner node has to be able to read it.
       security:
         - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/ObservatoryId"
       responses:
         "200":
           description: Operator observatory state.
@@ -937,14 +951,16 @@ paths:
                 $ref: "#/components/schemas/OperatorObservatoryState"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
-  /admin/observatory/mode:
+  /admin/observatories/{observatoryId}/mode:
     post:
       operationId: adminSetObservatoryMode
       tags: [admin]
-      summary: Switch the observatory between SIMULATED and REAL hardware.
+      summary: Switch one observatory between SIMULATED and REAL hardware.
       description: |
         SIMULATED is the default and the normal state. Switching to REAL is an explicit,
         attended operator action outside the normal test workflow: it requires an
@@ -953,6 +969,8 @@ paths:
         recorded in the audit log.
       security:
         - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/ObservatoryId"
       requestBody:
         required: true
         content:
@@ -968,18 +986,24 @@ paths:
                 $ref: "#/components/schemas/OperatorObservatoryState"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
-  /admin/observatory/safety-envelope:
+  /admin/observatories/{observatoryId}/safety-envelope:
     get:
       operationId: adminGetSafetyEnvelope
       tags: [admin]
-      summary: The active safety envelope configuration.
+      summary: One observatory's active safety envelope configuration.
+      description: |
+        404 when the observatory does not exist or has no envelope recorded.
       security:
         - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/ObservatoryId"
       responses:
         "200":
           description: Safety envelope.
@@ -989,10 +1013,12 @@ paths:
                 $ref: "#/components/schemas/SafetyEnvelopeConfig"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
     put:
       operationId: adminSetSafetyEnvelope
       tags: [admin]
-      summary: Record a measured safety envelope.
+      summary: Record a measured safety envelope for one observatory.
       description: |
         maxAltitudeDegrees is a measured value from the physical optical train, not a
         configuration preference. Supplying it requires measuredAt and measuredBy. While
@@ -1000,6 +1026,8 @@ paths:
         the cloud and the agent.
       security:
         - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/ObservatoryId"
       requestBody:
         required: true
         content:
@@ -1015,20 +1043,24 @@ paths:
                 $ref: "#/components/schemas/SafetyEnvelopeConfig"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
-  /admin/observatory/weather-hold:
+  /admin/observatories/{observatoryId}/weather-hold:
     post:
       operationId: adminSetWeatherHold
       tags: [admin]
-      summary: Set or clear an operator weather hold.
+      summary: Set or clear an operator weather hold on one observatory.
       description: |
         A hold blocks every new mission start. Affected customers are notified and
         refunded or rescheduled. Phase 1 requires the manual operator hold; an automatic
         sensor-driven hold is only used if a sensor is actually fitted.
       security:
         - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/ObservatoryId"
       requestBody:
         required: true
         content:
@@ -1044,6 +1076,8 @@ paths:
                 $ref: "#/components/schemas/WeatherState"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /admin/override:
     post:
@@ -1434,6 +1468,14 @@ components:
         or to the observatory.
 
   parameters:
+    ObservatoryId:
+      name: observatoryId
+      in: path
+      required: true
+      description: An `id` from `GET /observatories`, or for an operator any observatory.
+      schema:
+        type: string
+        format: uuid
     NodeId:
       name: nodeId
       in: path

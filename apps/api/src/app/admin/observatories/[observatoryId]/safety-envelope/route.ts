@@ -1,18 +1,17 @@
-import { zSafetyEnvelopeConfig } from "@darkview/contracts/zod";
+import {
+  zAdminGetSafetyEnvelopePath,
+  zAdminSetSafetyEnvelopePath,
+  zSafetyEnvelopeConfig,
+} from "@darkview/contracts/zod";
 
 import { setSafetyEnvelope } from "@/features/admin/safety-envelope";
 import { requireOperator, requireOperatorMutation } from "@/lib/auth/api-guard";
-import { getDatabase } from "@/lib/db/client";
 import { apiError } from "@/lib/http/api-error";
 import { ADMIN_MUTATION_POLICY, meterRequest } from "@/lib/security/rate-limit";
 import { loadSafetyEnvelope } from "@/lib/safety/store";
 
 /**
- * The safety envelope for the observatory.
- *
- * Phase 1 runs one observatory, so this addresses it the same way the slot and
- * target routes do -- the earliest one -- rather than inventing an id parameter
- * the contract does not have.
+ * The safety envelope for one observatory (ADR-019).
  *
  * `maxAltitudeDegrees` is the field that matters. While it is null the system is
  * UNMEASURED and every slew is refused by the cloud and, independently, by the
@@ -21,24 +20,15 @@ import { loadSafetyEnvelope } from "@/lib/safety/store";
  */
 export const dynamic = "force-dynamic";
 
-async function currentObservatoryId(): Promise<string | null> {
-  const observatory = await getDatabase().observatory.findFirst({
-    select: { id: true },
-    orderBy: { createdAt: "asc" },
-  });
-  return observatory?.id ?? null;
-}
+type Context = { params: Promise<{ observatoryId: string }> };
 
-export async function GET() {
+export async function GET(_request: Request, context: Context) {
   const guard = await requireOperator();
   if (!guard.ok) return guard.response;
 
-  const observatoryId = await currentObservatoryId();
-  if (!observatoryId) {
-    return apiError(404, "NOT_FOUND", "No observatory is configured.");
-  }
-
-  const envelope = await loadSafetyEnvelope(observatoryId);
+  // An unknown observatory has no envelope, and is answered the same way.
+  const path = zAdminGetSafetyEnvelopePath.safeParse(await context.params);
+  const envelope = path.success ? await loadSafetyEnvelope(path.data.observatoryId) : null;
   if (!envelope) {
     return apiError(404, "NOT_FOUND", "No safety envelope has been recorded.");
   }
@@ -46,9 +36,12 @@ export async function GET() {
   return Response.json(envelope);
 }
 
-export async function PUT(request: Request) {
+export async function PUT(request: Request, context: Context) {
   const guard = await requireOperatorMutation();
   if (!guard.ok) return guard.response;
+
+  const path = zAdminSetSafetyEnvelopePath.safeParse(await context.params);
+  if (!path.success) return apiError(404, "NOT_FOUND", "No such observatory.");
 
   let payload: unknown;
   try {
@@ -67,11 +60,6 @@ export async function PUT(request: Request) {
     });
   }
 
-  const observatoryId = await currentObservatoryId();
-  if (!observatoryId) {
-    return apiError(404, "NOT_FOUND", "No observatory is configured.");
-  }
-
   const limited = await meterRequest({
     policy: ADMIN_MUTATION_POLICY,
     scope: "admin-safety-envelope",
@@ -82,7 +70,7 @@ export async function PUT(request: Request) {
   if (limited) return limited;
 
   const result = await setSafetyEnvelope({
-    observatoryId,
+    observatoryId: path.data.observatoryId,
     envelope: parsed.data,
     actorUserId: guard.session.user.id,
   });

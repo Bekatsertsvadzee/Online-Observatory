@@ -2204,6 +2204,11 @@ export type AdminUpdateTargetRequest = {
     descriptionKa?: string | null;
 };
 
+/**
+ * An `id` from `GET /observatories`, or for an operator any observatory.
+ */
+export type ObservatoryId = string;
+
 export type NodeId = string;
 
 /**
@@ -2402,10 +2407,24 @@ export type GetCurrentUserResponse = GetCurrentUserResponses[keyof GetCurrentUse
 
 export type GetObservatoryStatusData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * An `id` from `GET /observatories`, or for an operator any observatory.
+         */
+        observatoryId: string;
+    };
     query?: never;
-    url: '/observatory/state';
+    url: '/observatories/{observatoryId}/state';
 };
+
+export type GetObservatoryStatusErrors = {
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+};
+
+export type GetObservatoryStatusError = GetObservatoryStatusErrors[keyof GetObservatoryStatusErrors];
 
 export type GetObservatoryStatusResponses = {
     /**
@@ -3190,9 +3209,14 @@ export type GetCaptureDownloadResponse = GetCaptureDownloadResponses[keyof GetCa
 
 export type AdminGetObservatoryStateData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * An `id` from `GET /observatories`, or for an operator any observatory.
+         */
+        observatoryId: string;
+    };
     query?: never;
-    url: '/admin/observatory/state';
+    url: '/admin/observatories/{observatoryId}/state';
 };
 
 export type AdminGetObservatoryStateErrors = {
@@ -3200,6 +3224,10 @@ export type AdminGetObservatoryStateErrors = {
      * Authenticated but not permitted.
      */
     403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
     /**
      * A dependency this request needs is not configured or not reachable.
      */
@@ -3219,9 +3247,14 @@ export type AdminGetObservatoryStateResponse = AdminGetObservatoryStateResponses
 
 export type AdminSetObservatoryModeData = {
     body: SetObservatoryModeRequest;
-    path?: never;
+    path: {
+        /**
+         * An `id` from `GET /observatories`, or for an operator any observatory.
+         */
+        observatoryId: string;
+    };
     query?: never;
-    url: '/admin/observatory/mode';
+    url: '/admin/observatories/{observatoryId}/mode';
 };
 
 export type AdminSetObservatoryModeErrors = {
@@ -3229,6 +3262,10 @@ export type AdminSetObservatoryModeErrors = {
      * Authenticated but not permitted.
      */
     403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
     /**
      * Conflicts with current state, for example a slot already taken or a session already held.
      */
@@ -3252,9 +3289,14 @@ export type AdminSetObservatoryModeResponse = AdminSetObservatoryModeResponses[k
 
 export type AdminGetSafetyEnvelopeData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * An `id` from `GET /observatories`, or for an operator any observatory.
+         */
+        observatoryId: string;
+    };
     query?: never;
-    url: '/admin/observatory/safety-envelope';
+    url: '/admin/observatories/{observatoryId}/safety-envelope';
 };
 
 export type AdminGetSafetyEnvelopeErrors = {
@@ -3262,6 +3304,10 @@ export type AdminGetSafetyEnvelopeErrors = {
      * Authenticated but not permitted.
      */
     403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
 };
 
 export type AdminGetSafetyEnvelopeError = AdminGetSafetyEnvelopeErrors[keyof AdminGetSafetyEnvelopeErrors];
@@ -3277,9 +3323,14 @@ export type AdminGetSafetyEnvelopeResponse = AdminGetSafetyEnvelopeResponses[key
 
 export type AdminSetSafetyEnvelopeData = {
     body: SafetyEnvelopeConfig;
-    path?: never;
+    path: {
+        /**
+         * An `id` from `GET /observatories`, or for an operator any observatory.
+         */
+        observatoryId: string;
+    };
     query?: never;
-    url: '/admin/observatory/safety-envelope';
+    url: '/admin/observatories/{observatoryId}/safety-envelope';
 };
 
 export type AdminSetSafetyEnvelopeErrors = {
@@ -3287,6 +3338,10 @@ export type AdminSetSafetyEnvelopeErrors = {
      * Authenticated but not permitted.
      */
     403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
     /**
      * Well-formed but rejected by validation or by the safety envelope.
      */
@@ -3306,9 +3361,14 @@ export type AdminSetSafetyEnvelopeResponse = AdminSetSafetyEnvelopeResponses[key
 
 export type AdminSetWeatherHoldData = {
     body: SetWeatherHoldRequest;
-    path?: never;
+    path: {
+        /**
+         * An `id` from `GET /observatories`, or for an operator any observatory.
+         */
+        observatoryId: string;
+    };
     query?: never;
-    url: '/admin/observatory/weather-hold';
+    url: '/admin/observatories/{observatoryId}/weather-hold';
 };
 
 export type AdminSetWeatherHoldErrors = {
@@ -3316,6 +3376,10 @@ export type AdminSetWeatherHoldErrors = {
      * Authenticated but not permitted.
      */
     403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
 };
 
 export type AdminSetWeatherHoldError = AdminSetWeatherHoldErrors[keyof AdminSetWeatherHoldErrors];
