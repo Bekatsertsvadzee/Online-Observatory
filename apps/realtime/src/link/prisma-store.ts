@@ -5,6 +5,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
 import { CAPTURE_CONTRACT_COLUMNS, toContractCapture } from "@darkview/db/capture";
+import { queueEmail } from "@darkview/db/notifications";
 
 import type { CommandEnvelope, SafetyEnvelopeConfig } from "@darkview/contracts";
 
@@ -411,6 +412,15 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
           },
           tx,
         );
+
+        // DV-064. The DUPLICATE path above returns before this, so a re-sent
+        // capture queues nothing; the dedupe key is the second guard.
+        await queueEmail(tx, {
+          userId: mission.userId,
+          kind: "CAPTURE_READY",
+          dedupeKey: `capture-ready:${row.id}`,
+          payload: { captureId: row.id },
+        });
 
         // thumbnailUrl is null and must be: it is a signed, short-expiry URL
         // minted against a caller, and there is no caller here. The client asks

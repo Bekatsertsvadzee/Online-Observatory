@@ -27,7 +27,22 @@ const schema = z.object({
    * so it can be rotated alone.
    */
   REALTIME_INTERNAL_SECRET: z.string().min(32),
-});
+  /**
+   * Where email notifications are delivered, and the key that signs them (DV-064).
+   * Optional: unset, emails are still queued in the outbox and nothing is sent,
+   * which a restart with both set then catches up on. Both or neither.
+   */
+  NOTIFICATION_WEBHOOK_URL: z.url().optional(),
+  NOTIFICATION_WEBHOOK_SECRET: z.string().min(32).optional(),
+}).refine(
+  (environment) =>
+    Boolean(environment.NOTIFICATION_WEBHOOK_URL) ===
+    Boolean(environment.NOTIFICATION_WEBHOOK_SECRET),
+  {
+    message: "NOTIFICATION_WEBHOOK_URL and NOTIFICATION_WEBHOOK_SECRET are set together.",
+    path: ["NOTIFICATION_WEBHOOK_URL"],
+  },
+);
 
 export type RealtimeEnvironment = z.infer<typeof schema>;
 

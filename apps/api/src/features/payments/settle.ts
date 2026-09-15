@@ -3,6 +3,7 @@ import "server-only";
 import type { ErrorCode, PaymentProvider } from "@darkview/contracts";
 import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { queueEmail } from "@darkview/db/notifications";
 
 import { releaseHeldSlot } from "@/features/booking/reserve";
 import { TERMINAL_MISSION_STATES } from "@/features/missions/session";
@@ -260,6 +261,14 @@ export async function settlePayment(input: {
     await tx.booking.update({
       where: { id: booking.id },
       data: { status: "CONFIRMED", missionId: mission.id },
+    });
+
+    // DV-064. In this transaction, so a confirmation that rolls back emails nobody.
+    await queueEmail(tx, {
+      userId: booking.userId,
+      kind: "BOOKING_CONFIRMED",
+      dedupeKey: `booking-confirmed:${booking.id}`,
+      payload: { bookingId: booking.id },
     });
 
     await recordAuditEvent(

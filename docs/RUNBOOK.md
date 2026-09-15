@@ -77,6 +77,7 @@ deliberate — a permissive fallback silently disables the check it stands for.
 | `STREAM_SIGNING_SECRET` | realtime | Signs live-view URLs (ADR-011). ≥ 32 characters. A known fallback is worse than no signing, because it looks like it works. |
 | `REALTIME_INTERNAL_SECRET` | realtime (required), api | What the API presents on `/internal/*` to read live operator telemetry (ADR-017). ≥ 32 characters, the same value in both services, separate from every other secret. On the API it is optional together with `REALTIME_INTERNAL_URL` -- the realtime service's origin as the API reaches it -- and without both `GET /admin/observatories/{observatoryId}/state` answers 503. **The reverse proxy must not route `/internal/*` from the internet**; the secret is the control, and that is the second line. |
 | `EMAIL_VERIFICATION_WEBHOOK_URL` / `_SECRET` | api | Registration is refused without them. |
+| `NOTIFICATION_WEBHOOK_URL` / `_SECRET` | realtime | Where customer emails are delivered, signed with HMAC-SHA256 in `x-darkview-signature` and deduplicated by `idempotency-key` (DV-064). Optional, both or neither: unset, emails are queued in `EmailNotification` and nothing is sent until they are set. |
 | `S3_ENDPOINT` / `_REGION` / `_BUCKET` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | both | Object storage (ADR-012). Both services refuse to start without them: a Collection whose every download is broken is worse than a server that says why it will not come up. |
 
 `PAYMENT_SANDBOX_WEBHOOK_SECRET` is optional, and what it guards is the sandbox payment
