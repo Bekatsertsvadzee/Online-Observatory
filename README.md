@@ -119,6 +119,18 @@ runs. It is development-only — the seed refuses to run unless `NODE_ENV=develo
 
 ### The agent's environment
 
+On a new machine, run the guided setup (DV-123) instead of exporting these by hand:
+
+```bash
+agent/.venv/bin/python -m darkview_agent setup           # asks, checks, writes ~/.darkview/agent.env (0600)
+agent/.venv/bin/python -m darkview_agent setup --check   # proves the install on the simulator
+```
+
+The agent reads that file at start, and anything set in the process environment overrides
+it. The file can never select real hardware: one containing `DARKVIEW_AGENT_DRIVER_MODE` or
+`DARKVIEW_AGENT_ATTENDED` refuses to start. Setup collects a device token but cannot issue
+one — nothing does yet (#86).
+
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `DARKVIEW_AGENT_OBSERVATORY_ID` | yes | Which observatory this is. Must match the record the device token belongs to. |
@@ -129,6 +141,7 @@ runs. It is development-only — the seed refuses to run unless `NODE_ENV=develo
 | `DARKVIEW_AGENT_DRIVER_MODE` | no | `SIMULATED` (default) or `REAL`. |
 | `DARKVIEW_AGENT_ATTENDED` | no | Set only when an operator is physically at the observatory. `REAL` without it refuses to start. |
 | `DARKVIEW_AGENT_STATE_PATH` | no | The local state store. Defaults to `~/.darkview/agent-state.sqlite3`. |
+| `DARKVIEW_AGENT_ENV_FILE` | no | The setup file. Defaults to `~/.darkview/agent.env`. Process environment only. |
 | `DARKVIEW_AGENT_OPTICAL_CONFIG` | no | Which optical train is fitted, reported on every capture. `F10_NATIVE` (default), `F20_BARLOW` or `F6_3_REDUCER`. Set it when a barlow or reducer is on the telescope. |
 
 The agent refuses to start without the first three: one that cannot reach the cloud

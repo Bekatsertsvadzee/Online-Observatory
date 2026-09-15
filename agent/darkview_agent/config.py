@@ -36,6 +36,14 @@ class ConfigurationError(Exception):
 #: commands it has already run.
 DEFAULT_STATE_PATH = Path.home() / ".darkview" / "agent-state.sqlite3"
 
+#: Where `python -m darkview_agent setup` writes its answers (DV-123).
+DEFAULT_ENV_FILE = Path.home() / ".darkview" / "agent.env"
+
+#: Settings a file may never carry. Real-hardware mode is an attended operator's
+#: act, taken in the process they are standing beside; a file outlives the person
+#: who wrote it, and one left on disk would put the next unattended start on REAL.
+FILE_FORBIDDEN_SETTINGS = ("DARKVIEW_AGENT_DRIVER_MODE", "DARKVIEW_AGENT_ATTENDED")
+
 
 def _env_flag(environment: dict[str, str], name: str) -> bool:
     return environment.get(name, "").strip().lower() in {"1", "true", "yes"}
@@ -75,6 +83,46 @@ class AgentConfig:
     def can_dial_out(self) -> bool:
         """Whether there is enough configuration to open the link at all."""
         return bool(self.cloud_url and self.device_token and self.observatory_id)
+
+
+def env_file_path(environment: dict[str, str]) -> Path:
+    raw = environment.get("DARKVIEW_AGENT_ENV_FILE", "").strip()
+    return Path(raw).expanduser() if raw else DEFAULT_ENV_FILE
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """`NAME=value` lines, blanks and `#` comments ignored.
+
+    A malformed line is reported by number, never quoted: the line that failed to
+    parse may be the one holding the device token.
+    """
+    values: dict[str, str] = {}
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        name, separator, value = stripped.partition("=")
+        name = name.strip()
+        if not separator or not name.startswith("DARKVIEW_AGENT_"):
+            raise ConfigurationError(
+                f"{path} line {number} is not a DARKVIEW_AGENT_ setting in NAME=value form."
+            )
+        if name in FILE_FORBIDDEN_SETTINGS:
+            raise ConfigurationError(
+                f"Refusing to start: {path} sets {name}. Real-hardware mode is only ever "
+                "selected in the process environment by an operator physically present "
+                "at the observatory, never from a file."
+            )
+        values[name] = value.strip()
+    return values
+
+
+def resolve_environment(process_environment: dict[str, str]) -> dict[str, str]:
+    """The setup file's values, with the process environment taking precedence."""
+    path = env_file_path(process_environment)
+    if not path.is_file():
+        return dict(process_environment)
+    return {**read_env_file(path), **process_environment}
 
 
 def load_config(environment: dict[str, str] | None = None) -> AgentConfig:
