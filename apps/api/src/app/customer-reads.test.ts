@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   getMyMission: vi.fn(),
   listMyMissions: vi.fn(),
   getTargetBySlug: vi.fn(),
-  currentObservatoryId: vi.fn(),
+  findBookableObservatory: vi.fn(),
   readPublicObservatoryStatus: vi.fn(),
 }));
 
@@ -36,8 +36,8 @@ vi.mock("@/features/missions/mine", () => ({
   listMyMissions: mocks.listMyMissions,
 }));
 vi.mock("@/features/targets/catalogue", () => ({ getTargetBySlug: mocks.getTargetBySlug }));
-vi.mock("@/lib/http/current-observatory", () => ({
-  currentObservatoryId: mocks.currentObservatoryId,
+vi.mock("@/features/booking/observatories", () => ({
+  findBookableObservatory: mocks.findBookableObservatory,
 }));
 vi.mock("@/features/observatory/status", () => ({
   readPublicObservatoryStatus: mocks.readPublicObservatoryStatus,
@@ -48,7 +48,7 @@ import { zPublicObservatoryStatus } from "@darkview/contracts/zod";
 import { POST as cancelBooking } from "./bookings/[bookingId]/cancel/route";
 import { GET as getBooking } from "./bookings/[bookingId]/route";
 import { GET as getMission } from "./missions/[missionId]/route";
-import { GET as getObservatoryState } from "./observatory/state/route";
+import { GET as getObservatoryState } from "./observatories/[observatoryId]/state/route";
 import { GET as getTarget } from "./targets/[slug]/route";
 
 const USER_ID = "6f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e0f";
@@ -173,14 +173,26 @@ describe("GET /targets/{slug}", () => {
   });
 });
 
-describe("GET /observatory/state", () => {
-  it("answers 404 when no observatory is configured", async () => {
-    mocks.currentObservatoryId.mockResolvedValueOnce(null);
-    expect((await getObservatoryState()).status).toBe(404);
+describe("GET /observatories/{observatoryId}/state", () => {
+  const readState = (observatoryId: string) =>
+    getObservatoryState(new Request("https://darkview.test"), params({ observatoryId }));
+
+  it("answers a malformed id with 404 without reading anything", async () => {
+    expect((await readState("first-party")).status).toBe(404);
+    expect(mocks.findBookableObservatory).not.toHaveBeenCalled();
+    expect(mocks.readPublicObservatoryStatus).not.toHaveBeenCalled();
+  });
+
+  it("answers an observatory that is not bookable with 404, and reads no status", async () => {
+    mocks.findBookableObservatory.mockResolvedValueOnce(null);
+    const response = await readState(OBSERVATORY_ID);
+    expect(mocks.findBookableObservatory).toHaveBeenCalledWith(OBSERVATORY_ID);
+    expect(response.status).toBe(404);
+    expect(mocks.readPublicObservatoryStatus).not.toHaveBeenCalled();
   });
 
   it("returns a body the contract's own schema accepts", async () => {
-    mocks.currentObservatoryId.mockResolvedValueOnce(OBSERVATORY_ID);
+    mocks.findBookableObservatory.mockResolvedValueOnce({ id: OBSERVATORY_ID });
     mocks.readPublicObservatoryStatus.mockResolvedValueOnce({
       observatoryId: OBSERVATORY_ID,
       mode: "SIMULATED",
@@ -198,7 +210,7 @@ describe("GET /observatory/state", () => {
       updatedAt: "2026-09-14T09:00:00.000Z",
     });
 
-    const response = await getObservatoryState();
+    const response = await readState(OBSERVATORY_ID);
 
     const body = await response.json();
 

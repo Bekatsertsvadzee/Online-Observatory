@@ -89,18 +89,11 @@ describe("every admin route is behind the operator guard", () => {
     //            public by contract (security: []) -- choosing a telescope is the
     //            step before choosing a slot (ADR-015), and GET /slots cannot be
     //            called without an id from here. It carries no coordinates, no
-    //            owner and no device identity; a test holds it to that.
-    //   observatory
-    //            public by contract (security: []) -- the status chip. Mode, link,
+    //            owner and no device identity; a test holds it to that. Its
+    //            `{observatoryId}/state` is the status chip (ADR-019): mode, link,
     //            weather and whether a mission is running; no device, no address
     //            and no telemetry.
-    const publicRoutes = new Set([
-      "health",
-      "targets",
-      "slots",
-      "observatories",
-      "observatory",
-    ]);
+    const publicRoutes = new Set(["health", "targets", "slots", "observatories"]);
 
     const unguarded = routeFilesUnder(appDirectory)
       .filter((file) => {

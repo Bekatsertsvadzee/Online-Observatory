@@ -1665,6 +1665,11 @@ export const zAdminUpdateTargetRequest = z.strictObject({
     descriptionKa: z.string().nullish()
 });
 
+/**
+ * An `id` from `GET /observatories`, or for an operator any observatory.
+ */
+export const zObservatoryId = z.uuid();
+
 export const zNodeId = z.uuid();
 
 /**
@@ -1719,6 +1724,10 @@ export const zSignOutResponse = z.void();
  * The current user.
  */
 export const zGetCurrentUserResponse = zUser;
+
+export const zGetObservatoryStatusPath = z.object({
+    observatoryId: z.uuid()
+});
 
 /**
  * Public observatory status.
@@ -1949,6 +1958,10 @@ export const zGetCaptureDownloadQuery = z.object({
  */
 export const zGetCaptureDownloadResponse = zCaptureDownload;
 
+export const zAdminGetObservatoryStatePath = z.object({
+    observatoryId: z.uuid()
+});
+
 /**
  * Operator observatory state.
  */
@@ -1956,10 +1969,18 @@ export const zAdminGetObservatoryStateResponse = zOperatorObservatoryState;
 
 export const zAdminSetObservatoryModeBody = zSetObservatoryModeRequest;
 
+export const zAdminSetObservatoryModePath = z.object({
+    observatoryId: z.uuid()
+});
+
 /**
  * Mode applied.
  */
 export const zAdminSetObservatoryModeResponse = zOperatorObservatoryState;
+
+export const zAdminGetSafetyEnvelopePath = z.object({
+    observatoryId: z.uuid()
+});
 
 /**
  * Safety envelope.
@@ -1968,12 +1989,20 @@ export const zAdminGetSafetyEnvelopeResponse = zSafetyEnvelopeConfig;
 
 export const zAdminSetSafetyEnvelopeBody = zSafetyEnvelopeConfig;
 
+export const zAdminSetSafetyEnvelopePath = z.object({
+    observatoryId: z.uuid()
+});
+
 /**
  * Safety envelope stored.
  */
 export const zAdminSetSafetyEnvelopeResponse = zSafetyEnvelopeConfig;
 
 export const zAdminSetWeatherHoldBody = zSetWeatherHoldRequest;
+
+export const zAdminSetWeatherHoldPath = z.object({
+    observatoryId: z.uuid()
+});
 
 /**
  * Weather state applied.

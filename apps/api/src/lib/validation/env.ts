@@ -26,7 +26,7 @@ const serverEnvironmentSchema = z.object({
   /**
    * Where the API reads live operator telemetry from the realtime service, and the
    * secret it presents there (ADR-017). An origin, not a path. Optional: unset,
-   * `GET /admin/observatory/state` answers 503 and nothing else is affected.
+   * `GET /admin/observatories/{observatoryId}/state` answers 503 and nothing else is affected.
    */
   REALTIME_INTERNAL_URL: z.url().optional(),
   REALTIME_INTERNAL_SECRET: z.string().min(32).optional(),
