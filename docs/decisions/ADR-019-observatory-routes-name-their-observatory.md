@@ -1,10 +1,10 @@
 # ADR-019 — Every observatory route names its observatory in the path
 
 - **Date:** 2026-09-15
-- **Status:** PROPOSED
+- **Status:** APPROVED
 - **Decided by:** project maintainer, in session (direction: a path parameter, applied to
   the whole group at once)
-- **Approved:** direction on 2026-09-15; this record awaits the maintainer's review
+- **Approved:** 2026-09-15, as written (direction first, then this record after it merged)
 - **Arises from:** issue #76
 - **Relates to:** `ADR-013` (partner observatories), `ADR-015` (booking per telescope),
   `ADR-017` (operator telemetry source)
