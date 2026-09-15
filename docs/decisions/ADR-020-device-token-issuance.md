@@ -1,10 +1,10 @@
 # ADR-020 — Operators issue, rotate and revoke a node's device token
 
 - **Date:** 2026-09-15
-- **Status:** PROPOSED
+- **Status:** APPROVED
 - **Decided by:** project maintainer, in session (direction: operator-issued, available
   from registration, shown once and stored hashed, with rotate and an unmetered revoke)
-- **Approved:** direction on 2026-09-15; this record awaits the maintainer's review
+- **Approved:** 2026-09-15, as written
 - **Arises from:** issue #86, found while scoping DV-123 (#87)
 - **Relates to:** `ADR-013` (partner observatories), `ADR-009` (command relay), DV-115
   (abuse controls)
