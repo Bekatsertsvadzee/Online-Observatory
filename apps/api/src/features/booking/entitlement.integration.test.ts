@@ -329,6 +329,70 @@ describe("taking a free reschedule", () => {
     );
   });
 
+  it("refuses a changed target the slot is too short to deliver, and keeps the entitlement", async () => {
+    const { bookingId } = await entitledBooking();
+    const long = await database.target.create({
+      data: {
+        slug: `m42-${randomUUID()}`,
+        nameEn: "M42",
+        nameKa: "M42",
+        type: "BRIGHT_NEBULA",
+        positionSource: "FIXED",
+        rightAscensionHours: 5.5881,
+        declinationDegrees: -5.391,
+        angularSizeArcmin: 65,
+        magnitude: 4,
+        opticalConfig: "F10_NATIVE",
+        imagingProfile: "BRIGHT_NEBULA",
+        minAltitudeDegrees: 25,
+        expectedMissionMinutes: SLOT_DURATION_MINUTES + 1,
+      },
+    });
+
+    await expect(
+      rescheduleMyBooking({
+        userId,
+        bookingId,
+        request: { slotStartAt: slotStartAt(2).toISOString(), targetId: long.id },
+        now: NOW,
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 422, code: "VALIDATION_FAILED" });
+    expect((await database.bookingEntitlement.findUniqueOrThrow({ where: { bookingId } })).outcome).toBe(
+      "OPEN",
+    );
+  });
+
+  it("accepts a changed target that fits the slot", async () => {
+    const { bookingId } = await entitledBooking();
+    const short = await database.target.create({
+      data: {
+        slug: `albireo-${randomUUID()}`,
+        nameEn: "Albireo",
+        nameKa: "Albireo",
+        type: "DOUBLE_STAR",
+        positionSource: "FIXED",
+        rightAscensionHours: 19.512,
+        declinationDegrees: 27.9597,
+        angularSizeArcmin: 1,
+        magnitude: 3.1,
+        opticalConfig: "F10_NATIVE",
+        imagingProfile: "DOUBLE_STAR",
+        minAltitudeDegrees: 25,
+        expectedMissionMinutes: 15,
+      },
+    });
+
+    const result = await rescheduleMyBooking({
+      userId,
+      bookingId,
+      request: { slotStartAt: slotStartAt(2).toISOString(), targetId: short.id },
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.booking.targetId).toBe(short.id);
+  });
+
   it("refuses a slot somebody else holds, and keeps the entitlement", async () => {
     const { bookingId } = await entitledBooking();
     await entitledBooking({ outcome: "NONE", slot: 1 });
