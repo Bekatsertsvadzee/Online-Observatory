@@ -109,6 +109,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr = Field(..., max_length=254)
     password: str = Field(..., max_length=128, min_length=12)
     locale: Locale
+    referral_code: str | None = Field(None, alias='referralCode', description="Another member's referral code (DV-096). Both receive the referral bonus once\nthis account's first paid booking settles. An unknown code is ignored.\n", max_length=16, min_length=6)
 
 
 class SignInRequest(BaseModel):
@@ -599,6 +600,7 @@ class CreateBookingRequest(BaseModel):
     duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
     locale: Locale | None = None
     voucher_code: str | None = Field(None, alias='voucherCode', description='A gift voucher code (DV-112). Case and separators are ignored.', max_length=64, min_length=8)
+    loyalty_points: int | None = Field(None, alias='loyaltyPoints', description='Points to spend on this booking (DV-095). Never with `voucherCode`.', ge=100, multiple_of=100)
 
 
 class CancelBookingRequest(BaseModel):
@@ -641,6 +643,80 @@ class PaymentIntent(BaseModel):
     status: PaymentStatus
     redirect_url: AnyUrl | None = Field(None, alias='redirectUrl')
     expires_at: AwareDatetime | None = Field(None, alias='expiresAt')
+
+
+class LoyaltyTier(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    code: str
+    name_en: str = Field(..., alias='nameEn')
+    name_ka: str = Field(..., alias='nameKa')
+    threshold_points: int = Field(..., alias='thresholdPoints', description='Purchase-earned points at which the tier begins.', ge=0)
+    discount_percent: int = Field(..., alias='discountPercent', ge=0, le=100)
+
+
+class ProgressMarker(RootModel[int]):
+    root: int = Field(..., ge=0)
+
+
+class LoyaltyScheme(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    points_per_gel: int = Field(..., alias='pointsPerGel', description='Points earned per 1 GEL of settled payment.', ge=0)
+    points_per_gel_redeemed: int = Field(..., alias='pointsPerGelRedeemed', description='Points that take 1 GEL off a booking.', gt=0)
+    welcome_bonus_points: int = Field(..., alias='welcomeBonusPoints', ge=0)
+    referral_bonus_points: int = Field(..., alias='referralBonusPoints', ge=0)
+    minimum_payable_minor: int = Field(..., alias='minimumPayableMinor', description='The least a cash booking may cost after points.', ge=0)
+    progress_markers: list[ProgressMarker] = Field(..., alias='progressMarkers', description='Milestones shown on the way to a tier. They grant nothing.')
+    tiers: list[LoyaltyTier] = Field(..., description='Ordered by threshold, lowest first.')
+
+
+class LoyaltyEntryKind(StrEnum):
+    welcome_bonus = 'WELCOME_BONUS'
+    referral_bonus = 'REFERRAL_BONUS'
+    purchase_earned = 'PURCHASE_EARNED'
+    purchase_reversed = 'PURCHASE_REVERSED'
+    redeemed = 'REDEEMED'
+    redemption_released = 'REDEMPTION_RELEASED'
+    admin_adjustment = 'ADMIN_ADJUSTMENT'
+
+
+class LoyaltyLedgerEntry(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: UUID
+    kind: LoyaltyEntryKind
+    points: int = Field(..., description='Signed change to the balance.')
+    tier_points: int = Field(..., alias='tierPoints', description='Signed change to tier points. Non-zero only for purchases and their reversal.')
+    booking_id: UUID | None = Field(None, alias='bookingId')
+    reason: str | None = None
+    created_at: AwareDatetime = Field(..., alias='createdAt')
+
+
+class LoyaltyAccount(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    user_id: UUID = Field(..., alias='userId')
+    balance: int = Field(..., description='Spendable points. Negative only when a refund reversed points already spent.')
+    tier_points: int = Field(..., alias='tierPoints')
+    tier: LoyaltyTier
+    next_tier: LoyaltyTier | None = Field(..., alias='nextTier')
+    referral_code: str = Field(..., alias='referralCode')
+    recent_entries: list[LoyaltyLedgerEntry] = Field(..., alias='recentEntries', description='The fifty most recent entries, newest first.')
+
+
+class LoyaltyAdjustmentRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    adjustment_id: UUID = Field(..., alias='adjustmentId', description='Client-generated. Makes a retried adjustment a no-op.')
+    user_id: UUID = Field(..., alias='userId')
+    points: int
+    reason: str = Field(..., max_length=500, min_length=3)
 
 
 class GiftVoucherStatus(StrEnum):
@@ -1448,6 +1524,7 @@ class AuditCategory(StrEnum):
     observatory_mode = 'OBSERVATORY_MODE'
     operator_override = 'OPERATOR_OVERRIDE'
     agent_link = 'AGENT_LINK'
+    loyalty = 'LOYALTY'
 
 
 class AuditEvent(BaseModel):
@@ -2055,6 +2132,8 @@ class Booking(BaseModel):
     currency: Currency
     payment_id: UUID | None = Field(None, alias='paymentId')
     mission_id: UUID | None = Field(None, alias='missionId')
+    tier_discount_minor: int | None = Field(None, alias='tierDiscountMinor', description="What the customer's loyalty tier took off the slot price (DV-095).", ge=0)
+    loyalty_points_redeemed: int | None = Field(None, alias='loyaltyPointsRedeemed', description='Points spent on this booking (DV-095).', ge=0)
     entitlement: BookingEntitlement | None = Field(None, description='DV-111. Null until the slot has ended and been evaluated, and when nothing\nwas lost on our side or less than half the slot was lost.\n')
     created_at: AwareDatetime = Field(..., alias='createdAt')
 

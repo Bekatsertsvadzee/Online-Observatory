@@ -11,6 +11,7 @@ import type {
 } from "@darkview/contracts";
 import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { earnOnSettledPayment } from "@darkview/db/loyalty";
 import { queueEmail } from "@darkview/db/notifications";
 import {
   deriveVoucherCode,
@@ -190,7 +191,7 @@ export async function listMyGiftVouchers(
  */
 export async function settleGiftVoucherPayment(
   tx: Prisma.TransactionClient,
-  payment: { id: string; userId: string; isDemo: boolean; provider: string },
+  payment: { id: string; userId: string; isDemo: boolean; provider: string; amountMinor: number },
   outcome: PaymentOutcome,
   now: Date,
 ): Promise<{ ok: true; applied: true; missionId: null }> {
@@ -260,6 +261,7 @@ export async function settleGiftVoucherPayment(
     },
     tx,
   );
+  await earnOnSettledPayment(tx, payment, null);
   await queueEmail(tx, {
     userId: payment.userId,
     kind: "GIFT_VOUCHER_ISSUED",

@@ -94,6 +94,12 @@ export type RegisterRequest = {
     email: string;
     password: string;
     locale: Locale;
+    /**
+     * Another member's referral code (DV-096). Both receive the referral bonus once
+     * this account's first paid booking settles. An unknown code is ignored.
+     *
+     */
+    referralCode?: string;
 };
 
 export type SignInRequest = {
@@ -733,6 +739,14 @@ export type Booking = {
     paymentId?: string | null;
     missionId?: string | null;
     /**
+     * What the customer's loyalty tier took off the slot price (DV-095).
+     */
+    tierDiscountMinor?: number;
+    /**
+     * Points spent on this booking (DV-095).
+     */
+    loyaltyPointsRedeemed?: number;
+    /**
      * DV-111. Null until the slot has ended and been evaluated, and when nothing
      * was lost on our side or less than half the slot was lost.
      *
@@ -794,6 +808,10 @@ export type CreateBookingRequest = {
      * A gift voucher code (DV-112). Case and separators are ignored.
      */
     voucherCode?: string;
+    /**
+     * Points to spend on this booking (DV-095). Never with `voucherCode`.
+     */
+    loyaltyPoints?: number;
 };
 
 export type CancelBookingRequest = {
@@ -844,6 +862,96 @@ export type BookingWithPaymentIntent = {
      * Null when a gift voucher paid for the booking (DV-112).
      */
     paymentIntent: PaymentIntent | null;
+};
+
+export type LoyaltyTier = {
+    code: string;
+    nameEn: string;
+    nameKa: string;
+    /**
+     * Purchase-earned points at which the tier begins.
+     */
+    thresholdPoints: number;
+    discountPercent: number;
+};
+
+export type LoyaltyScheme = {
+    /**
+     * Points earned per 1 GEL of settled payment.
+     */
+    pointsPerGel: number;
+    /**
+     * Points that take 1 GEL off a booking.
+     */
+    pointsPerGelRedeemed: number;
+    welcomeBonusPoints: number;
+    referralBonusPoints: number;
+    /**
+     * The least a cash booking may cost after points.
+     */
+    minimumPayableMinor: number;
+    /**
+     * Milestones shown on the way to a tier. They grant nothing.
+     */
+    progressMarkers: Array<number>;
+    /**
+     * Ordered by threshold, lowest first.
+     */
+    tiers: Array<LoyaltyTier>;
+};
+
+export const LoyaltyEntryKind = {
+    WELCOME_BONUS: 'WELCOME_BONUS',
+    REFERRAL_BONUS: 'REFERRAL_BONUS',
+    PURCHASE_EARNED: 'PURCHASE_EARNED',
+    PURCHASE_REVERSED: 'PURCHASE_REVERSED',
+    REDEEMED: 'REDEEMED',
+    REDEMPTION_RELEASED: 'REDEMPTION_RELEASED',
+    ADMIN_ADJUSTMENT: 'ADMIN_ADJUSTMENT'
+} as const;
+
+export type LoyaltyEntryKind = typeof LoyaltyEntryKind[keyof typeof LoyaltyEntryKind];
+
+export type LoyaltyLedgerEntry = {
+    id: string;
+    kind: LoyaltyEntryKind;
+    /**
+     * Signed change to the balance.
+     */
+    points: number;
+    /**
+     * Signed change to tier points. Non-zero only for purchases and their reversal.
+     */
+    tierPoints: number;
+    bookingId?: string | null;
+    reason?: string | null;
+    createdAt: string;
+};
+
+export type LoyaltyAccount = {
+    userId: string;
+    /**
+     * Spendable points. Negative only when a refund reversed points already spent.
+     */
+    balance: number;
+    tierPoints: number;
+    tier: LoyaltyTier;
+    nextTier: LoyaltyTier | null;
+    referralCode: string;
+    /**
+     * The fifty most recent entries, newest first.
+     */
+    recentEntries: Array<LoyaltyLedgerEntry>;
+};
+
+export type LoyaltyAdjustmentRequest = {
+    /**
+     * Client-generated. Makes a retried adjustment a no-op.
+     */
+    adjustmentId: string;
+    userId: string;
+    points: number;
+    reason: string;
 };
 
 /**
@@ -1845,7 +1953,8 @@ export const AuditCategory = {
     SAFETY: 'SAFETY',
     OBSERVATORY_MODE: 'OBSERVATORY_MODE',
     OPERATOR_OVERRIDE: 'OPERATOR_OVERRIDE',
-    AGENT_LINK: 'AGENT_LINK'
+    AGENT_LINK: 'AGENT_LINK',
+    LOYALTY: 'LOYALTY'
 } as const;
 
 export type AuditCategory = typeof AuditCategory[keyof typeof AuditCategory];
@@ -2886,6 +2995,47 @@ export type CreateBookingResponses = {
 
 export type CreateBookingResponse = CreateBookingResponses[keyof CreateBookingResponses];
 
+export type GetLoyaltySchemeData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/loyalty/scheme';
+};
+
+export type GetLoyaltySchemeResponses = {
+    /**
+     * The loyalty scheme.
+     */
+    200: LoyaltyScheme;
+};
+
+export type GetLoyaltySchemeResponse = GetLoyaltySchemeResponses[keyof GetLoyaltySchemeResponses];
+
+export type GetMyLoyaltyData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/loyalty';
+};
+
+export type GetMyLoyaltyErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+};
+
+export type GetMyLoyaltyError = GetMyLoyaltyErrors[keyof GetMyLoyaltyErrors];
+
+export type GetMyLoyaltyResponses = {
+    /**
+     * The loyalty account.
+     */
+    200: LoyaltyAccount;
+};
+
+export type GetMyLoyaltyResponse = GetMyLoyaltyResponses[keyof GetMyLoyaltyResponses];
+
 export type ListMyGiftVouchersData = {
     body?: never;
     path?: never;
@@ -3822,6 +3972,43 @@ export type AdminListMissionsResponses = {
 };
 
 export type AdminListMissionsResponse = AdminListMissionsResponses[keyof AdminListMissionsResponses];
+
+export type AdminAdjustLoyaltyPointsData = {
+    body: LoyaltyAdjustmentRequest;
+    path?: never;
+    query?: never;
+    url: '/admin/loyalty/adjustments';
+};
+
+export type AdminAdjustLoyaltyPointsErrors = {
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type AdminAdjustLoyaltyPointsError = AdminAdjustLoyaltyPointsErrors[keyof AdminAdjustLoyaltyPointsErrors];
+
+export type AdminAdjustLoyaltyPointsResponses = {
+    /**
+     * The customer's account after the adjustment.
+     */
+    200: LoyaltyAccount;
+};
+
+export type AdminAdjustLoyaltyPointsResponse = AdminAdjustLoyaltyPointsResponses[keyof AdminAdjustLoyaltyPointsResponses];
 
 export type AdminCancelMissionData = {
     body: AdminCancelMissionRequest;

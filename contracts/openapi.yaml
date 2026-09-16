@@ -534,6 +534,13 @@ paths:
         Send `Idempotency-Key` when retrying. Without it a retry after a timeout can
         reserve a second slot and open a second payment intent.
 
+        **Loyalty** (DV-095). A cash booking is priced at the slot price less the
+        customer's tier discount, and `loyaltyPoints` spends points on top at the
+        scheme's rate, leaving at least the scheme's minimum payable. Points are taken
+        when the slot is held and given back if the hold lapses, the payment fails or
+        the booking is refunded. `loyaltyPoints` together with `voucherCode` is 422: a
+        booking uses one price reduction. Too few points is 422.
+
         **With `voucherCode`** (DV-112) the booking is paid by the voucher: it is
         CONFIRMED at once at no charge, its mission is scheduled, and `paymentIntent` is
         null. The voucher is spent in the same transaction as the reservation, so a
@@ -563,6 +570,42 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
+
+  /loyalty/scheme:
+    get:
+      operationId: getLoyaltyScheme
+      tags: [booking]
+      summary: The loyalty club's rules, as configured.
+      description: |
+        DV-090. Tiers, thresholds, rates and bonuses are configuration data (ADR-008), so
+        a client renders them from here rather than hard-coding them.
+      security: []
+      responses:
+        "200":
+          description: The loyalty scheme.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoyaltyScheme"
+
+  /loyalty:
+    get:
+      operationId: getMyLoyalty
+      tags: [booking]
+      summary: The signed-in user's points, tier, referral code and recent ledger.
+      description: |
+        DV-091. `balance` is what can be spent; `tierPoints` is what the tier is derived
+        from, which counts only points earned on settled payments (bonuses and
+        adjustments never raise a tier). Points do not expire.
+      responses:
+        "200":
+          description: The loyalty account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoyaltyAccount"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /vouchers:
     get:
@@ -1294,6 +1337,39 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /admin/loyalty/adjustments:
+    post:
+      operationId: adminAdjustLoyaltyPoints
+      tags: [admin]
+      summary: Add or remove points on a customer's balance, with a reason.
+      description: |
+        DV-092. Idempotent by `adjustmentId`: repeating a request changes nothing. An
+        adjustment never changes `tierPoints`. A removal that would take the balance
+        below zero is 409. Audited with the operator and the reason.
+      security:
+        - userSession: [operator]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoyaltyAdjustmentRequest"
+      responses:
+        "200":
+          description: The customer's account after the adjustment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoyaltyAccount"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
   /admin/missions/{missionId}/cancel:
     post:
       operationId: adminCancelMission
@@ -2004,6 +2080,13 @@ components:
           maxLength: 128
         locale:
           $ref: "#/components/schemas/Locale"
+        referralCode:
+          type: string
+          minLength: 6
+          maxLength: 16
+          description: |
+            Another member's referral code (DV-096). Both receive the referral bonus once
+            this account's first paid booking settles. An unknown code is ignored.
 
     SignInRequest:
       type: object
@@ -2897,6 +2980,14 @@ components:
         missionId:
           type: [string, "null"]
           format: uuid
+        tierDiscountMinor:
+          type: integer
+          minimum: 0
+          description: What the customer's loyalty tier took off the slot price (DV-095).
+        loyaltyPointsRedeemed:
+          type: integer
+          minimum: 0
+          description: Points spent on this booking (DV-095).
         entitlement:
           description: |
             DV-111. Null until the slot has ended and been evaluated, and when nothing
@@ -2979,6 +3070,11 @@ components:
           minLength: 8
           maxLength: 64
           description: A gift voucher code (DV-112). Case and separators are ignored.
+        loyaltyPoints:
+          type: integer
+          minimum: 100
+          multipleOf: 100
+          description: Points to spend on this booking (DV-095). Never with `voucherCode`.
 
     CancelBookingRequest:
       type: object
@@ -3033,6 +3129,152 @@ components:
           oneOf:
             - $ref: "#/components/schemas/PaymentIntent"
             - type: "null"
+
+    LoyaltyTier:
+      type: object
+      additionalProperties: false
+      required: [code, nameEn, nameKa, thresholdPoints, discountPercent]
+      properties:
+        code:
+          type: string
+        nameEn:
+          type: string
+        nameKa:
+          type: string
+        thresholdPoints:
+          type: integer
+          minimum: 0
+          description: Purchase-earned points at which the tier begins.
+        discountPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+
+    LoyaltyScheme:
+      type: object
+      additionalProperties: false
+      required:
+        - pointsPerGel
+        - pointsPerGelRedeemed
+        - welcomeBonusPoints
+        - referralBonusPoints
+        - minimumPayableMinor
+        - progressMarkers
+        - tiers
+      properties:
+        pointsPerGel:
+          type: integer
+          minimum: 0
+          description: Points earned per 1 GEL of settled payment.
+        pointsPerGelRedeemed:
+          type: integer
+          exclusiveMinimum: 0
+          description: Points that take 1 GEL off a booking.
+        welcomeBonusPoints:
+          type: integer
+          minimum: 0
+        referralBonusPoints:
+          type: integer
+          minimum: 0
+        minimumPayableMinor:
+          type: integer
+          minimum: 0
+          description: The least a cash booking may cost after points.
+        progressMarkers:
+          type: array
+          description: Milestones shown on the way to a tier. They grant nothing.
+          items:
+            type: integer
+            minimum: 0
+        tiers:
+          type: array
+          description: Ordered by threshold, lowest first.
+          items:
+            $ref: "#/components/schemas/LoyaltyTier"
+
+    LoyaltyEntryKind:
+      type: string
+      enum:
+        - WELCOME_BONUS
+        - REFERRAL_BONUS
+        - PURCHASE_EARNED
+        - PURCHASE_REVERSED
+        - REDEEMED
+        - REDEMPTION_RELEASED
+        - ADMIN_ADJUSTMENT
+
+    LoyaltyLedgerEntry:
+      type: object
+      additionalProperties: false
+      required: [id, kind, points, tierPoints, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          $ref: "#/components/schemas/LoyaltyEntryKind"
+        points:
+          type: integer
+          description: Signed change to the balance.
+        tierPoints:
+          type: integer
+          description: Signed change to tier points. Non-zero only for purchases and their reversal.
+        bookingId:
+          type: [string, "null"]
+          format: uuid
+        reason:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+
+    LoyaltyAccount:
+      type: object
+      additionalProperties: false
+      required: [userId, balance, tierPoints, tier, nextTier, referralCode, recentEntries]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        balance:
+          type: integer
+          description: Spendable points. Negative only when a refund reversed points already spent.
+        tierPoints:
+          type: integer
+        tier:
+          $ref: "#/components/schemas/LoyaltyTier"
+        nextTier:
+          oneOf:
+            - $ref: "#/components/schemas/LoyaltyTier"
+            - type: "null"
+        referralCode:
+          type: string
+        recentEntries:
+          type: array
+          description: The fifty most recent entries, newest first.
+          items:
+            $ref: "#/components/schemas/LoyaltyLedgerEntry"
+
+    LoyaltyAdjustmentRequest:
+      type: object
+      additionalProperties: false
+      required: [adjustmentId, userId, points, reason]
+      properties:
+        adjustmentId:
+          type: string
+          format: uuid
+          description: Client-generated. Makes a retried adjustment a no-op.
+        userId:
+          type: string
+          format: uuid
+        points:
+          type: integer
+          not:
+            const: 0
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 500
 
     GiftVoucherStatus:
       type: string
@@ -4362,6 +4604,7 @@ components:
         - OBSERVATORY_MODE
         - OPERATOR_OVERRIDE
         - AGENT_LINK
+        - LOYALTY
 
     AuditEvent:
       type: object

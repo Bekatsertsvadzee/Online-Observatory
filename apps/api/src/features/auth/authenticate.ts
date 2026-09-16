@@ -7,6 +7,7 @@ import type {
   User,
   VerifyEmailRequest,
 } from "@darkview/contracts";
+import { ensureLoyaltyAccount, postLoyaltyEntry, readLoyaltyScheme } from "@darkview/db/loyalty";
 
 import { toContractUser } from "@/features/identity/user";
 import { recordAuthEvent } from "@/lib/auth/audit";
@@ -138,6 +139,19 @@ export async function register(request: RegisterRequest): Promise<{ ok: true } |
       },
     }));
 
+  // DV-096. The referrer is recorded with the account and never changed: an
+  // unverified re-registration cannot swap it. An unknown code is ignored rather
+  // than refused, so a code does not reveal whether it exists.
+  const referrer = request.referralCode
+    ? await database.loyaltyAccount.findUnique({
+        where: { referralCode: request.referralCode.toUpperCase() },
+        select: { userId: true },
+      })
+    : null;
+  await database.$transaction((tx) =>
+    ensureLoyaltyAccount(tx, user.id, { referredByUserId: referrer?.userId ?? null }),
+  );
+
   await database.$transaction([
     database.emailVerificationToken.deleteMany({ where: { userId: user.id } }),
     database.emailVerificationToken.create({
@@ -191,6 +205,19 @@ export async function verifyEmail(
     if (consumed.count !== 1) return null;
 
     await tx.session.deleteMany({ where: { userId: verification.userId } });
+
+    // DV-090. The welcome bonus on a verified address, not on sign-up, so an
+    // address nobody controls earns nothing. Once per user, however it is reached.
+    const { scheme } = await readLoyaltyScheme(tx);
+    if (scheme.welcomeBonusPoints > 0) {
+      await postLoyaltyEntry(tx, {
+        userId: verification.userId,
+        kind: "WELCOME_BONUS",
+        points: scheme.welcomeBonusPoints,
+        sourceRef: `user:${verification.userId}`,
+      });
+    }
+
     return tx.user.update({
       where: { id: verification.userId },
       data: { emailVerifiedAt: now },

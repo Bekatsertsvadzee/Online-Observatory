@@ -207,6 +207,7 @@ enum AuditCategory {
   OBSERVATORY_MODE
   OPERATOR_OVERRIDE
   AGENT_LINK
+  LOYALTY
 }
 
 enum NetworkNodeKind {
@@ -369,6 +370,8 @@ model User {
   bookingEntitlements BookingEntitlement[]
   giftVouchersBought  GiftVoucher[]            @relation("GiftVoucherBuyer")
   giftVouchersRedeemed GiftVoucher[]           @relation("GiftVoucherRedeemer")
+  loyaltyAccount      LoyaltyAccount?
+  loyaltyEntries      LoyaltyLedgerEntry[]
 }
 
 model Account {
@@ -920,6 +923,10 @@ model Booking {
   rescheduledFrom BookingEntitlement? @relation("RescheduledTo")
   /// DV-112. The gift voucher that paid for this booking, when one did.
   redeemedVoucher GiftVoucher?
+  /// DV-095. What the customer's tier took off the slot price, in minor units.
+  tierDiscountMinor     Int @default(0)
+  /// DV-095. Points spent on this booking, taken when the slot was held.
+  loyaltyPointsRedeemed Int @default(0)
 
   @@unique([userId, idempotencyKey])
   @@index([observatoryId, slotStartAt])
@@ -1348,6 +1355,84 @@ model GiftVoucher {
   redeemedBooking   Booking?          @relation(fields: [redeemedBookingId], references: [id], onDelete: SetNull)
 
   @@index([buyerUserId, createdAt])
+}
+
+/// Contract: LoyaltyEntryKind (DV-092).
+enum LoyaltyEntryKind {
+  WELCOME_BONUS
+  REFERRAL_BONUS
+  PURCHASE_EARNED
+  PURCHASE_REVERSED
+  REDEEMED
+  REDEMPTION_RELEASED
+  ADMIN_ADJUSTMENT
+}
+
+/// DV-090. The loyalty club's rates, as data (ADR-008). Exactly one row, id 1.
+/// Seeded with the Astroman club's published terms, maintainer decision of
+/// 2026-09-15; changing a rate is an UPDATE, not a deploy.
+model LoyaltyScheme {
+  id                   Int      @id @default(1)
+  /// Points earned per 1 GEL of settled payment.
+  pointsPerGel         Int
+  /// Points that take 1 GEL off a booking.
+  pointsPerGelRedeemed Int
+  welcomeBonusPoints   Int
+  referralBonusPoints  Int
+  /// The least a cash booking may cost after points, in minor units.
+  minimumPayableMinor  Int
+  /// Milestones shown on the way to a tier. They grant nothing.
+  progressMarkers      Int[]
+  updatedAt            DateTime @updatedAt
+}
+
+/// DV-090. A tier, as data. Derived from purchase-earned points only.
+model LoyaltyTier {
+  code            String @id
+  nameEn          String
+  nameKa          String
+  thresholdPoints Int    @unique
+  discountPercent Int
+}
+
+/// DV-092. The denormalised balance behind the ledger. `balance` and `tierPoints`
+/// are the sums of the ledger's columns, and change only in the transaction that
+/// appends the entry.
+model LoyaltyAccount {
+  userId             String    @id @db.Uuid
+  balance            Int       @default(0)
+  tierPoints         Int       @default(0)
+  tierCode           String
+  referralCode       String    @unique
+  /// DV-096. Who referred this customer; set at registration and never changed.
+  referredByUserId   String?   @db.Uuid
+  /// DV-096. When both referral bonuses were granted, on the first paid booking.
+  referralRewardedAt DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// DV-092. Append-only. One entry per (user, kind, source): the same event
+/// recorded twice writes nothing the second time.
+model LoyaltyLedgerEntry {
+  id          String           @id @default(uuid()) @db.Uuid
+  userId      String           @db.Uuid
+  kind        LoyaltyEntryKind
+  /// Signed change to the balance.
+  points      Int
+  /// Signed change to tier points: non-zero only for a purchase and its reversal.
+  tierPoints  Int              @default(0)
+  /// What caused it: a payment, a booking, a referee, an adjustment id.
+  sourceRef   String
+  bookingId   String?          @db.Uuid
+  reason      String?
+  actorUserId String?          @db.Uuid
+  createdAt   DateTime         @default(now())
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, sourceRef])
+  @@index([userId, createdAt])
 }
 
 /// SKIPPED: not sent because it no longer applies. FAILED: ran out of attempts.

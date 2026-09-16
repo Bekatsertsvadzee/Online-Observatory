@@ -94,6 +94,10 @@ describe("every admin route is behind the operator guard", () => {
     //            weather and whether a mission is running; no device, no address
     //            and no telemetry.
     const publicRoutes = new Set(["health", "targets", "slots", "observatories"]);
+    // One file, not a segment: GET /loyalty beside it needs a session.
+    //   loyalty/scheme  public by contract (security: []) -- the club's published
+    //            rates and tiers, the same terms a public page prints (DV-090).
+    const publicFiles = new Set(["loyalty/scheme/route.ts"]);
 
     const unguarded = routeFilesUnder(appDirectory)
       .filter((file) => {
@@ -102,6 +106,7 @@ describe("every admin route is behind the operator guard", () => {
         return (
           segment !== "admin" &&
           !publicRoutes.has(segment) &&
+          !publicFiles.has(relative) &&
           !SIGNED_SERVER_TO_SERVER.has(relative) &&
           !SESSION_ISSUING.has(relative)
         );
