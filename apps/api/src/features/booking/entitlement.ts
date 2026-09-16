@@ -12,6 +12,7 @@ import {
   findGeneratedSlot,
   isSlotConflict,
   retryOnDeadlock,
+  targetTooLongForSlot,
   toContractBooking,
 } from "@/features/booking/reserve";
 import { getDatabase } from "@/lib/db/client";
@@ -151,6 +152,8 @@ export async function rescheduleMyBooking(input: {
       message: `A reschedule is for the same length: ${original.durationMinutes} minutes.`,
     };
   }
+  const tooLong = targetTooLongForSlot(target, slot.durationMinutes);
+  if (tooLong) return { ok: false, status: 422, code: "VALIDATION_FAILED", message: tooLong };
   switch (slot.unavailableReason) {
     case "IN_THE_PAST":
       return { ok: false, status: 409, code: "SLOT_UNAVAILABLE", message: "That slot has already started." };

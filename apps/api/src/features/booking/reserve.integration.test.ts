@@ -319,6 +319,53 @@ describe("reserving a slot", () => {
     expect(result.code).toBe("VALIDATION_FAILED");
   });
 
+  it("refuses a target the slot is too short to deliver, and holds nothing (ADR-015 §2)", async () => {
+    const long = await database.target.create({
+      data: {
+        slug: `m42-${randomUUID()}`,
+        nameEn: "M42",
+        nameKa: "M42",
+        type: "BRIGHT_NEBULA",
+        positionSource: "FIXED",
+        rightAscensionHours: 5.5881,
+        declinationDegrees: -5.391,
+        angularSizeArcmin: 65,
+        magnitude: 4,
+        opticalConfig: "F10_NATIVE",
+        imagingProfile: "BRIGHT_NEBULA",
+        minAltitudeDegrees: 25,
+        expectedMissionMinutes: SLOT_DURATION_MINUTES + 1,
+      },
+    });
+
+    const result = await reserveSlot({
+      userId,
+      request: {
+        observatoryId,
+        targetId: long.id,
+        slotStartAt: firstSlotStartAt().toISOString(),
+        durationMinutes: SLOT_DURATION_MINUTES,
+      },
+      idempotencyKey: null,
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 422, code: "VALIDATION_FAILED" });
+    expect(await database.booking.count()).toBe(0);
+    expect(await database.payment.count()).toBe(0);
+  });
+
+  it("accepts a target that needs exactly the slot's length", async () => {
+    await database.target.update({
+      where: { id: targetId },
+      data: { expectedMissionMinutes: SLOT_DURATION_MINUTES },
+    });
+
+    const result = await reserve({ slotStartAt: firstSlotStartAt() });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("refuses a slot in broad daylight", async () => {
     const noon = new Date("2026-12-16T09:00:00.000Z");
 

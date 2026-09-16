@@ -523,6 +523,9 @@ paths:
         `observatoryId` names the telescope (ADR-015). An id that is unknown, or whose
         node is not APPROVED, is 404 -- the same answer `GET /slots` gives it.
 
+        The slot's length decides which targets it can deliver (ADR-015 §2). A target
+        whose `expectedMissionMinutes` exceeds `durationMinutes` is 422.
+
         A reserved slot is held while payment is outstanding. The hold expires, and the
         slot returns to the available list, if payment does not complete in time; the
         `expiresAt` on the returned payment intent is that deadline. A failed or
@@ -639,9 +642,9 @@ paths:
         DV-111. Available while the booking's `entitlement.status` is OPEN and before
         `entitlement.expiresAt`. The new booking is on the same telescope, for the same
         length, at no charge, and is confirmed at once. It must be a slot `GET /slots`
-        offers. The target may change; one the slot length cannot deliver is refused.
-        409 with no open entitlement or when the slot is taken; 422 for an instant that
-        is not an offered slot.
+        offers. The target may change. 409 with no open entitlement or when the slot is
+        taken; 422 for an instant that is not an offered slot, or for a target whose
+        `expectedMissionMinutes` exceeds the slot's length (ADR-015 §2).
       parameters:
         - $ref: "#/components/parameters/BookingId"
       requestBody:

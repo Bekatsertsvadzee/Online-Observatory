@@ -111,6 +111,19 @@ type BookingRow = {
   } | null;
 };
 
+/**
+ * ADR-015 §2: the duration booked decides which targets it can deliver. A target
+ * whose expected mission is longer than the slot is refused, on booking and on a
+ * reschedule alike. Returns the refusal message, or null when the target fits.
+ */
+export function targetTooLongForSlot(
+  target: { nameEn: string; expectedMissionMinutes: number },
+  durationMinutes: number,
+): string | null {
+  if (target.expectedMissionMinutes <= durationMinutes) return null;
+  return `${target.nameEn} needs ${target.expectedMissionMinutes} minutes; this slot is ${durationMinutes}.`;
+}
+
 /** What a booking read selects so its entitlement reaches the contract (DV-111). */
 export const BOOKING_ENTITLEMENT_SELECT = {
   select: {
@@ -320,6 +333,9 @@ export async function reserveSlot(input: {
       message: `Slots are ${slot.durationMinutes} minutes.`,
     };
   }
+
+  const tooLong = targetTooLongForSlot(target, slot.durationMinutes);
+  if (tooLong) return { ok: false, status: 422, code: "VALIDATION_FAILED", message: tooLong };
 
   // The generator reports why a slot cannot be sold. ALREADY_BOOKED can never
   // appear here -- findGeneratedSlot passes no booked set, because whether the
