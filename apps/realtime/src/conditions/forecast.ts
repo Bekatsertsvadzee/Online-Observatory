@@ -102,14 +102,14 @@ export async function refreshViewingConditions(
     }
 
     const { source, hours } = result.forecast;
+    // Three statements however many hours a source returns. One upsert per hour held
+    // the transaction open long enough to time out on a loaded database.
     await database.$transaction([
-      ...hours.map((hour) => {
-        const values = { ...hour, source, fetchedAt: now };
-        return database.viewingForecastHour.upsert({
-          where: { observatoryId_at: { observatoryId: observatory.id, at: hour.at } },
-          create: { observatoryId: observatory.id, ...values },
-          update: values,
-        });
+      database.viewingForecastHour.deleteMany({
+        where: { observatoryId: observatory.id, at: { in: hours.map((hour) => hour.at) } },
+      }),
+      database.viewingForecastHour.createMany({
+        data: hours.map((hour) => ({ ...hour, observatoryId: observatory.id, source, fetchedAt: now })),
       }),
       database.viewingForecastHour.deleteMany({
         where: {
