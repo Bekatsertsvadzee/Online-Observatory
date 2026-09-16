@@ -336,6 +336,55 @@ class WeatherState(BaseModel):
     updated_at: AwareDatetime = Field(..., alias='updatedAt')
 
 
+class ForecastSource(StrEnum):
+    """
+    The forecast provider that produced a stored hour (DV-110).
+    """
+    meteoblue = 'METEOBLUE'
+    open_meteo = 'OPEN_METEO'
+
+
+class ViewingConditionsStatus(StrEnum):
+    """
+    UNKNOWN when no forecast is stored for the hour or the stored one is too old.
+    """
+    known = 'KNOWN'
+    unknown = 'UNKNOWN'
+
+
+class ViewingConditionsHour(BaseModel):
+    """
+    One forecast hour. Every value is null when `status` is UNKNOWN, and any value
+    the source does not provide is null when KNOWN. Cloud layers are as the source
+    defines them, which differ between providers; `source` says which applies.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    at: AwareDatetime = Field(..., description='The instant the forecast hour begins, on the hour.')
+    status: ViewingConditionsStatus
+    source: ForecastSource | None
+    fetched_at: AwareDatetime | None = Field(..., alias='fetchedAt')
+    cloud_cover_percent: float | None = Field(..., alias='cloudCoverPercent', ge=0.0, le=100.0)
+    cloud_cover_low_percent: float | None = Field(..., alias='cloudCoverLowPercent', ge=0.0, le=100.0)
+    cloud_cover_mid_percent: float | None = Field(..., alias='cloudCoverMidPercent', ge=0.0, le=100.0)
+    cloud_cover_high_percent: float | None = Field(..., alias='cloudCoverHighPercent', ge=0.0, le=100.0)
+    precipitation_probability_percent: float | None = Field(..., alias='precipitationProbabilityPercent', ge=0.0, le=100.0)
+    relative_humidity_percent: float | None = Field(..., alias='relativeHumidityPercent', ge=0.0, le=100.0)
+    wind_speed_metres_per_second: float | None = Field(..., alias='windSpeedMetresPerSecond', ge=0.0)
+    seeing_arcseconds: float | None = Field(..., alias='seeingArcseconds', description='Only from a source with an astronomy seeing forecast.', ge=0.0)
+
+
+class ViewingConditions(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    date: date_aliased = Field(..., description="The observatory's local date on which tonight begins.")
+    items: list[ViewingConditionsHour] = Field(..., description="Tonight's bookable hours in order. Empty when the night offers none.")
+
+
 class DeviceHealth(StrEnum):
     ok = 'OK'
     degraded = 'DEGRADED'

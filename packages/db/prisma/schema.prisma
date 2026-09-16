@@ -450,6 +450,7 @@ model Observatory {
   agentMessages       AgentMessage[]
   weatherState        WeatherState?
   networkNode         ObservatoryNetworkNode?
+  viewingForecast     ViewingForecastHour[]
 }
 
 /// Contract: SafetyEnvelopeConfig. The numbers that stop the telescope destroying
@@ -516,6 +517,37 @@ model WeatherState {
   setByUserId   String?       @db.Uuid
   updatedAt     DateTime      @updatedAt
   observatory   Observatory   @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
+}
+
+/// Contract: ForecastSource (DV-110).
+enum ForecastSource {
+  METEOBLUE
+  OPEN_METEO
+}
+
+/// DV-110. One forecast hour at one observatory, as the latest successful fetch
+/// left it. Advisory only: nothing here sets or clears WeatherState.holdActive.
+///
+/// A fetch overwrites the hours it covers; a failed fetch writes nothing, so its
+/// hours age past the maximum and are reported UNKNOWN rather than kept as clear.
+model ViewingForecastHour {
+  id                              String         @id @default(uuid()) @db.Uuid
+  observatoryId                   String         @db.Uuid
+  /// The instant the hour begins, on the hour.
+  at                              DateTime
+  source                          ForecastSource
+  fetchedAt                       DateTime
+  cloudCoverPercent               Float?
+  cloudCoverLowPercent            Float?
+  cloudCoverMidPercent            Float?
+  cloudCoverHighPercent           Float?
+  precipitationProbabilityPercent Float?
+  relativeHumidityPercent         Float?
+  windSpeedMetresPerSecond        Float?
+  seeingArcseconds                Float?
+  observatory                     Observatory    @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
+
+  @@unique([observatoryId, at])
 }
 
 /// Every message the agent sends carries a messageId. The agent replays its queue

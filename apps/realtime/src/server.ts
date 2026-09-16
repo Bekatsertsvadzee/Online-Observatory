@@ -29,6 +29,8 @@ import { LiveStream } from "@/stream/live-stream";
 import { getEnvironment } from "@/env";
 import { dispatchPendingEmails, queueSlotReminders } from "@/notifications/email";
 import { evaluateEndedSlots, refundExpiredEntitlements } from "@/refunds/entitlements";
+import { refreshViewingConditions } from "@/conditions/forecast";
+import { openMeteoSource } from "@/conditions/open-meteo";
 
 const AGENT_PATH = "/ws/agent";
 
@@ -43,6 +45,12 @@ const EMAIL_DISPATCH_INTERVAL_SECONDS = 30;
  * Neither is urgent to the minute; both are idempotent.
  */
 const ENTITLEMENT_SWEEP_INTERVAL_SECONDS = 60;
+
+/**
+ * How often viewing conditions are fetched (DV-110). Forecast models update hourly
+ * at best, and every fetch is a call against a provider's quota.
+ */
+const CONDITIONS_REFRESH_INTERVAL_SECONDS = 60 * 60;
 
 /**
  * `ws` hands a binary message as a Buffer, an ArrayBuffer or an array of Buffers
@@ -414,6 +422,30 @@ if (process.env.NODE_ENV !== "test") {
         console.error("darkview realtime: entitlements", error);
       });
   }, ENTITLEMENT_SWEEP_INTERVAL_SECONDS * 1000);
+
+  // DV-110. Advisory only: this writes forecasts and never touches a weather hold.
+  // meteoblue goes first in this list once a key and a verified adapter exist.
+  const forecastSources = [openMeteoSource({ apiKey: environment.OPEN_METEO_API_KEY })];
+  if (!environment.OPEN_METEO_API_KEY) {
+    console.warn(
+      "darkview realtime: OPEN_METEO_API_KEY is not set; forecasts use the non-commercial endpoint",
+    );
+  }
+  const refreshConditions = () => {
+    void refreshViewingConditions(notifications, { sources: forecastSources, now: new Date() })
+      .then(({ unavailable, failures }) => {
+        for (const failure of failures) console.error(`darkview realtime: conditions ${failure}`);
+        if (unavailable > 0) {
+          console.error(`darkview realtime: no forecast for ${unavailable} observatory(ies)`);
+        }
+      })
+      .catch((error) => {
+        console.error("darkview realtime: conditions", error);
+      });
+  };
+  // Once at start as well: an hour with no stored forecast is an hour reported unknown.
+  refreshConditions();
+  setInterval(refreshConditions, CONDITIONS_REFRESH_INTERVAL_SECONDS * 1000);
 
   const webhook =
     environment.NOTIFICATION_WEBHOOK_URL && environment.NOTIFICATION_WEBHOOK_SECRET
