@@ -101,7 +101,26 @@ type BookingRow = {
   missionId: string | null;
   holdExpiresAt: Date | null;
   createdAt: Date;
+  /** Present when the caller selected it (DV-111); absent reads as no entitlement. */
+  entitlement?: {
+    outcome: string;
+    cause: string | null;
+    minutesLost: number;
+    expiresAt: Date | null;
+    rescheduledBookingId: string | null;
+  } | null;
 };
+
+/** What a booking read selects so its entitlement reaches the contract (DV-111). */
+export const BOOKING_ENTITLEMENT_SELECT = {
+  select: {
+    outcome: true,
+    cause: true,
+    minutesLost: true,
+    expiresAt: true,
+    rescheduledBookingId: true,
+  },
+} as const;
 
 type PaymentRow = {
   id: string;
@@ -123,6 +142,18 @@ export function toContractBooking(row: BookingRow): ContractBooking {
     currency: row.currency as ContractBooking["currency"],
     paymentId: row.paymentId,
     missionId: row.missionId,
+    // NONE is the database remembering the slot was judged; the customer is shown
+    // nothing for it. The check constraint guarantees cause and expiry on the rest.
+    entitlement:
+      row.entitlement && row.entitlement.outcome !== "NONE" && row.entitlement.cause && row.entitlement.expiresAt
+        ? {
+            status: row.entitlement.outcome as NonNullable<ContractBooking["entitlement"]>["status"],
+            cause: row.entitlement.cause as NonNullable<ContractBooking["entitlement"]>["cause"],
+            minutesLost: row.entitlement.minutesLost,
+            expiresAt: row.entitlement.expiresAt.toISOString(),
+            rescheduledBookingId: row.entitlement.rescheduledBookingId,
+          }
+        : null,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -165,7 +196,7 @@ function previousDate(isoDate: string): string {
  * to serialise on would move exclusivity out of the index and into the
  * application, which is exactly what DV-055 forbids.
  */
-async function expireLapsedHolds(
+export async function expireLapsedHolds(
   tx: {
     $queryRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>;
     $executeRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<number>;
@@ -452,7 +483,7 @@ async function replayByIdempotencyKey(
  * both candidate dates are generated and searched. No booked set is passed: this
  * answers "is this a real slot?", never "is it free?".
  */
-function findGeneratedSlot(
+export function findGeneratedSlot(
   slotStartAt: Date,
   observatory: BookableObservatory,
   now: Date,
@@ -528,7 +559,7 @@ function sqlState(error: unknown): string | null {
  * The transaction is rerun from the top -- lapsed holds, payment, booking, audit
  * row -- because an aborted transaction left none of them behind.
  */
-async function retryOnDeadlock<T>(attempt: () => Promise<T>): Promise<T> {
+export async function retryOnDeadlock<T>(attempt: () => Promise<T>): Promise<T> {
   for (let tries = 1; ; tries += 1) {
     try {
       return await attempt();
@@ -551,7 +582,7 @@ async function retryOnDeadlock<T>(attempt: () => Promise<T>): Promise<T> {
  * error here would answer "that slot has just been taken" to a customer whose slot
  * is free.
  */
-function isSlotConflict(error: unknown): boolean {
+export function isSlotConflict(error: unknown): boolean {
   const state = sqlState(error);
   if (state === "23P01" || state === "23505") return true;
 

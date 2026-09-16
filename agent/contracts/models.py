@@ -499,22 +499,45 @@ class BookingStatus(StrEnum):
     refunded = 'REFUNDED'
 
 
-class Booking(BaseModel):
+class BookingLossCause(StrEnum):
+    """
+    What lost the slot. A customer who did not show up is not a cause.
+    """
+    weather = 'WEATHER'
+    observatory_fault = 'OBSERVATORY_FAULT'
+
+
+class Status(StrEnum):
+    open = 'OPEN'
+    refunded = 'REFUNDED'
+    rescheduled = 'RESCHEDULED'
+
+
+class BookingEntitlement(BaseModel):
+    """
+    DV-111, maintainer rules of 2026-09-15. A slot lost to weather or to an
+    observatory fault -- internet, power or telescope -- where the customer lost
+    half the slot or more. OPEN offers a full refund or a free reschedule until
+    `expiresAt`, thirty days after the slot was evaluated; an entitlement still
+    OPEN then is refunded automatically.
+
+    """
     model_config = ConfigDict(
         extra='forbid',
     )
-    id: UUID
-    user_id: UUID = Field(..., alias='userId')
-    observatory_id: UUID = Field(..., alias='observatoryId', description='The telescope the booking is time on (ADR-015).')
-    target_id: UUID = Field(..., alias='targetId')
-    slot_start_at: AwareDatetime = Field(..., alias='slotStartAt')
-    duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
-    status: BookingStatus
-    price_minor: int = Field(..., alias='priceMinor', ge=0)
-    currency: Currency
-    payment_id: UUID | None = Field(None, alias='paymentId')
-    mission_id: UUID | None = Field(None, alias='missionId')
-    created_at: AwareDatetime = Field(..., alias='createdAt')
+    status: Status
+    cause: BookingLossCause
+    minutes_lost: int = Field(..., alias='minutesLost', ge=0)
+    expires_at: AwareDatetime = Field(..., alias='expiresAt')
+    rescheduled_booking_id: UUID | None = Field(..., alias='rescheduledBookingId', description='The replacement booking, once RESCHEDULED.')
+
+
+class RescheduleBookingRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    slot_start_at: AwareDatetime = Field(..., alias='slotStartAt', description="A slot `GET /slots` offers on the booking's telescope, of the booking's length.")
+    target_id: UUID | None = Field(None, alias='targetId', description="Defaults to the original booking's target.")
 
 
 class CreateBookingRequest(BaseModel):
@@ -568,22 +591,6 @@ class PaymentIntent(BaseModel):
     status: PaymentStatus
     redirect_url: AnyUrl | None = Field(None, alias='redirectUrl')
     expires_at: AwareDatetime | None = Field(None, alias='expiresAt')
-
-
-class BookingWithPaymentIntent(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    booking: Booking
-    payment_intent: PaymentIntent = Field(..., alias='paymentIntent')
-
-
-class BookingPage(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    items: list[Booking]
-    page: PageMeta
 
 
 class PaymentWebhookEnvelope(BaseModel):
@@ -1926,6 +1933,41 @@ class SlotList(BaseModel):
     observatory_id: UUID = Field(..., alias='observatoryId')
     date: date_aliased
     items: list[Slot]
+
+
+class Booking(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: UUID
+    user_id: UUID = Field(..., alias='userId')
+    observatory_id: UUID = Field(..., alias='observatoryId', description='The telescope the booking is time on (ADR-015).')
+    target_id: UUID = Field(..., alias='targetId')
+    slot_start_at: AwareDatetime = Field(..., alias='slotStartAt')
+    duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
+    status: BookingStatus
+    price_minor: int = Field(..., alias='priceMinor', ge=0)
+    currency: Currency
+    payment_id: UUID | None = Field(None, alias='paymentId')
+    mission_id: UUID | None = Field(None, alias='missionId')
+    entitlement: BookingEntitlement | None = Field(None, description='DV-111. Null until the slot has ended and been evaluated, and when nothing\nwas lost on our side or less than half the slot was lost.\n')
+    created_at: AwareDatetime = Field(..., alias='createdAt')
+
+
+class BookingWithPaymentIntent(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    booking: Booking
+    payment_intent: PaymentIntent = Field(..., alias='paymentIntent')
+
+
+class BookingPage(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    items: list[Booking]
+    page: PageMeta
 
 
 class MissionSession(BaseModel):

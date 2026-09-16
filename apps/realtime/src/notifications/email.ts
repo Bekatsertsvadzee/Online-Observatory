@@ -96,11 +96,27 @@ async function describe(
       status: true,
       slotStartAt: true,
       durationMinutes: true,
+      priceMinor: true,
+      currency: true,
       target: { select: { nameEn: true, nameKa: true } },
       observatory: { select: { nameEn: true, nameKa: true, timezone: true } },
+      entitlement: {
+        select: { outcome: true, cause: true, minutesLost: true, expiresAt: true },
+      },
     },
   });
-  if (!booking || booking.status !== "CONFIRMED") return null;
+  if (!booking) return null;
+
+  // What the booking has to be for this email still to be true. A refund email for
+  // a booking that is somehow not refunded, or an offer that was already taken,
+  // is not sent.
+  const stillTrue =
+    kind === "BOOKING_REFUNDED"
+      ? booking.status === "REFUNDED"
+      : kind === "ENTITLEMENT_AVAILABLE"
+        ? booking.entitlement?.outcome === "OPEN"
+        : booking.status === "CONFIRMED";
+  if (!stillTrue) return null;
 
   return {
     bookingId: booking.id,
@@ -108,6 +124,18 @@ async function describe(
     durationMinutes: booking.durationMinutes,
     target: booking.target,
     observatory: booking.observatory,
+    ...(kind === "ENTITLEMENT_AVAILABLE" && booking.entitlement
+      ? {
+          entitlement: {
+            cause: booking.entitlement.cause,
+            minutesLost: booking.entitlement.minutesLost,
+            expiresAt: booking.entitlement.expiresAt?.toISOString() ?? null,
+          },
+        }
+      : {}),
+    ...(kind === "BOOKING_REFUNDED"
+      ? { refund: { priceMinor: booking.priceMinor, currency: booking.currency } }
+      : {}),
   };
 }
 

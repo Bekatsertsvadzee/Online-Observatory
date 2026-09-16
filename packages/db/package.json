@@ -12,6 +12,7 @@
     "./phase1-catalogue": "./prisma/phase1-catalogue.ts",
     "./capture": "./capture.ts",
     "./notifications": "./notifications.ts",
+    "./refunds": "./refunds.ts",
     "./rate-limit": "./rate-limit.ts"
   },
   "scripts": {

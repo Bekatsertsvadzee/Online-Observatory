@@ -569,6 +569,72 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /bookings/{bookingId}/refund:
+    post:
+      operationId: refundBooking
+      tags: [booking]
+      summary: Take the refund a lost slot entitles the customer to.
+      description: |
+        DV-111. Available while the booking's `entitlement.status` is OPEN: its slot
+        was lost to weather or to an observatory fault and the customer lost half of
+        it or more. The whole amount originally paid is returned -- for a booking that
+        was itself a free reschedule, the payment it was rescheduled from. 409 with no
+        open entitlement. 503 when the payment's provider has no refund integration
+        yet; the entitlement stays open.
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      responses:
+        "200":
+          description: The refunded booking.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /bookings/{bookingId}/reschedule:
+    post:
+      operationId: rescheduleBooking
+      tags: [booking]
+      summary: Book a free replacement slot with the entitlement a lost slot gave.
+      description: |
+        DV-111. Available while the booking's `entitlement.status` is OPEN and before
+        `entitlement.expiresAt`. The new booking is on the same telescope, for the same
+        length, at no charge, and is confirmed at once. It must be a slot `GET /slots`
+        offers. The target may change; one the slot length cannot deliver is refused.
+        409 with no open entitlement or when the slot is taken; 422 for an instant that
+        is not an offered slot.
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RescheduleBookingRequest"
+      responses:
+        "201":
+          description: The new, confirmed booking.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
   /payments/webhook:
     post:
       operationId: receivePaymentWebhook
@@ -2644,9 +2710,62 @@ components:
         missionId:
           type: [string, "null"]
           format: uuid
+        entitlement:
+          description: |
+            DV-111. Null until the slot has ended and been evaluated, and when nothing
+            was lost on our side or less than half the slot was lost.
+          oneOf:
+            - $ref: "#/components/schemas/BookingEntitlement"
+            - type: "null"
         createdAt:
           type: string
           format: date-time
+
+    BookingLossCause:
+      type: string
+      description: What lost the slot. A customer who did not show up is not a cause.
+      enum: [WEATHER, OBSERVATORY_FAULT]
+
+    BookingEntitlement:
+      type: object
+      description: |
+        DV-111, maintainer rules of 2026-09-15. A slot lost to weather or to an
+        observatory fault -- internet, power or telescope -- where the customer lost
+        half the slot or more. OPEN offers a full refund or a free reschedule until
+        `expiresAt`, thirty days after the slot was evaluated; an entitlement still
+        OPEN then is refunded automatically.
+      additionalProperties: false
+      required: [status, cause, minutesLost, expiresAt, rescheduledBookingId]
+      properties:
+        status:
+          type: string
+          enum: [OPEN, REFUNDED, RESCHEDULED]
+        cause:
+          $ref: "#/components/schemas/BookingLossCause"
+        minutesLost:
+          type: integer
+          minimum: 0
+        expiresAt:
+          type: string
+          format: date-time
+        rescheduledBookingId:
+          type: [string, "null"]
+          format: uuid
+          description: The replacement booking, once RESCHEDULED.
+
+    RescheduleBookingRequest:
+      type: object
+      additionalProperties: false
+      required: [slotStartAt]
+      properties:
+        slotStartAt:
+          type: string
+          format: date-time
+          description: A slot `GET /slots` offers on the booking's telescope, of the booking's length.
+        targetId:
+          type: string
+          format: uuid
+          description: Defaults to the original booking's target.
 
     CreateBookingRequest:
       type: object

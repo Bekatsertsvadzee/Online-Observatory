@@ -42,6 +42,10 @@ export type AuditAction =
   // BOOKING
   | "BOOKING_RESERVED"
   | "BOOKING_SLOT_RELEASED"
+  // DV-111: an ended slot entitled its customer to a refund or reschedule, and
+  // the customer used it to book another slot.
+  | "BOOKING_ENTITLEMENT_GRANTED"
+  | "BOOKING_RESCHEDULED"
   // PAYMENT -- written by the webhook path (DV-056). A refusal is recorded
   // because a callback that failed its signature and left nothing behind is
   // indistinguishable from one that never arrived.
@@ -49,6 +53,8 @@ export type AuditAction =
   | "PAYMENT_CAPTURED_WITHOUT_SLOT"
   | "PAYMENT_FAILED"
   | "PAYMENT_WEBHOOK_REFUSED"
+  // DV-111: money returned against an entitlement.
+  | "PAYMENT_REFUNDED"
   // PAYMENT -- the Observer Pack sale (DV-102). A seat is a different sale from a
   // booking: it has no slot to release, so a capture that arrives after the hold
   // lapsed has its own row, and it is the one DV-111 refunds from.
