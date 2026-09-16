@@ -31,6 +31,12 @@ const serverEnvironmentSchema = z.object({
   REALTIME_INTERNAL_URL: z.url().optional(),
   REALTIME_INTERNAL_SECRET: z.string().min(32).optional(),
   /**
+   * Derives gift voucher codes from voucher ids (DV-112). The same value on the
+   * realtime service, which writes the code into the email. Optional here: unset,
+   * `POST /vouchers` answers 503 and redemption of existing codes is unaffected.
+   */
+  VOUCHER_CODE_SECRET: z.string().min(32).optional(),
+  /**
    * How old a stored forecast hour may be before it is reported UNKNOWN (DV-110).
    * The realtime service refreshes hourly, so the default tolerates two missed
    * fetches. Unknown is never reported as clear, so a smaller value only shows

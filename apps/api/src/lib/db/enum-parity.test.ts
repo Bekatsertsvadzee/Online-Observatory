@@ -56,6 +56,9 @@ const DATABASE_ONLY = new Set([
   // DV-111: NONE is the database remembering a slot was evaluated. The contract's
   // BookingEntitlement.status carries the three values a customer is shown.
   "BookingEntitlementOutcome",
+  // DV-112: EXPIRED is derived from expiresAt and never stored, so the contract's
+  // GiftVoucherStatus has one value the database does not.
+  "GiftVoucherStatus",
   "EquipmentStatus",
   "MissionJoinPolicy",
   "MissionParticipantStatus",

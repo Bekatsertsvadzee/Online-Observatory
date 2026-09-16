@@ -280,6 +280,7 @@ enum PaymentStatus {
 enum PaymentPurpose {
   BOOKING
   OBSERVER_PACK
+  GIFT_VOUCHER
 }
 
 /// Contract: ObserverPackStatus.
@@ -366,6 +367,8 @@ model User {
   observerPacks       ObserverPack[]
   emailNotifications  EmailNotification[]
   bookingEntitlements BookingEntitlement[]
+  giftVouchersBought  GiftVoucher[]            @relation("GiftVoucherBuyer")
+  giftVouchersRedeemed GiftVoucher[]           @relation("GiftVoucherRedeemer")
 }
 
 model Account {
@@ -915,6 +918,8 @@ model Booking {
   entitlement     BookingEntitlement? @relation("BookingEntitlement")
   /// DV-111. Set on a free reschedule: the entitlement this booking was made from.
   rescheduledFrom BookingEntitlement? @relation("RescheduledTo")
+  /// DV-112. The gift voucher that paid for this booking, when one did.
+  redeemedVoucher GiftVoucher?
 
   @@unique([userId, idempotencyKey])
   @@index([observatoryId, slotStartAt])
@@ -951,6 +956,7 @@ model Payment {
   user          User            @relation(fields: [userId], references: [id], onDelete: Restrict)
   booking       Booking?
   observerPack  ObserverPack?
+  giftVoucher   GiftVoucher?
 
   @@unique([provider, providerRef])
   @@index([userId, createdAt])
@@ -1255,6 +1261,8 @@ enum EmailNotificationKind {
   CAPTURE_READY
   ENTITLEMENT_AVAILABLE
   BOOKING_REFUNDED
+  GIFT_VOUCHER_ISSUED
+  GIFT_VOUCHER_RESTORED
 }
 
 /// Contract: BookingLossCause (DV-111).
@@ -1296,6 +1304,50 @@ model BookingEntitlement {
   user                 User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([outcome, expiresAt])
+}
+
+/// DV-112. EXPIRED is not stored: the contract reports an ACTIVE voucher past
+/// expiresAt as EXPIRED, so nothing has to sweep the table for time to pass.
+enum GiftVoucherStatus {
+  PENDING_PAYMENT
+  ACTIVE
+  REDEEMED
+  CANCELLED
+}
+
+/// DV-112. A gift voucher: one observation of `durationMinutes`, paid for once.
+///
+/// The code is never stored. It is derived from the id with VOUCHER_CODE_SECRET,
+/// so the email can be written when the outbox is delivered; `codeHash` is what a
+/// redemption looks up. Not exchangeable for cash: a refund of the booking it paid
+/// for restores it (DV-111).
+model GiftVoucher {
+  id                String            @id @default(uuid()) @db.Uuid
+  buyerUserId       String            @db.Uuid
+  paymentId         String            @unique @db.Uuid
+  codeHash          String            @unique
+  codeLast4         String
+  durationMinutes   Int
+  priceMinor        Int
+  currency          Currency          @default(GEL)
+  status            GiftVoucherStatus @default(PENDING_PAYMENT)
+  recipientEmail    String?
+  recipientName     String?
+  message           String?
+  /// Set when the payment settles: twelve months later.
+  expiresAt         DateTime?
+  redeemedAt        DateTime?
+  redeemedByUserId  String?           @db.Uuid
+  redeemedBookingId String?           @unique @db.Uuid
+  isDemo            Boolean           @default(false)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  buyer             User              @relation("GiftVoucherBuyer", fields: [buyerUserId], references: [id], onDelete: Restrict)
+  redeemedBy        User?             @relation("GiftVoucherRedeemer", fields: [redeemedByUserId], references: [id], onDelete: SetNull)
+  payment           Payment           @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  redeemedBooking   Booking?          @relation(fields: [redeemedBookingId], references: [id], onDelete: SetNull)
+
+  @@index([buyerUserId, createdAt])
 }
 
 /// SKIPPED: not sent because it no longer applies. FAILED: ran out of attempts.

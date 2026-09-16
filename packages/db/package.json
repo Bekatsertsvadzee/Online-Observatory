@@ -13,6 +13,7 @@
     "./capture": "./capture.ts",
     "./notifications": "./notifications.ts",
     "./refunds": "./refunds.ts",
+    "./vouchers": "./vouchers.ts",
     "./rate-limit": "./rate-limit.ts"
   },
   "scripts": {

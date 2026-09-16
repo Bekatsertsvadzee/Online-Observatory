@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 
 import type { PrismaClient } from "@darkview/db";
 import { queueEmail } from "@darkview/db/notifications";
+import { deriveVoucherCode, voucherCodeLast4 } from "@darkview/db/vouchers";
 
 /**
  * DV-064: delivering the email outbox, and queueing slot reminders.
@@ -64,7 +65,87 @@ export async function queueSlotReminders(database: PrismaClient, now: Date): Pro
  * Both names are sent and the mail service picks by locale, so the template --
  * not this code -- owns the wording in Georgian and English.
  */
+type Recipient = { email: string; name: string | null };
+
+/** Thrown when an email cannot be written yet; the delivery is retried, never skipped. */
+class NotWritableYet extends Error {}
+
+/**
+ * What the email says and, when it is not the account holder, who it goes to.
+ * Null when it no longer applies.
+ */
 async function describe(
+  database: PrismaClient,
+  kind: string,
+  payload: Record<string, unknown>,
+  voucherCodeSecret: string | undefined,
+): Promise<{ data: Record<string, unknown>; recipient: Recipient | null } | null> {
+  if (kind === "GIFT_VOUCHER_ISSUED" || kind === "GIFT_VOUCHER_RESTORED") {
+    return describeGiftVoucher(database, kind, String(payload.voucherId), voucherCodeSecret);
+  }
+  const data = await describeData(database, kind, payload);
+  return data ? { data, recipient: null } : null;
+}
+
+/**
+ * DV-112. The issued email is the only place a code is ever written: it is derived
+ * here, at delivery, and never stored. It goes to the named recipient when the buyer
+ * gave one. Neither email is sent for a voucher that is no longer usable.
+ */
+async function describeGiftVoucher(
+  database: PrismaClient,
+  kind: "GIFT_VOUCHER_ISSUED" | "GIFT_VOUCHER_RESTORED",
+  voucherId: string,
+  voucherCodeSecret: string | undefined,
+): Promise<{ data: Record<string, unknown>; recipient: Recipient | null } | null> {
+  const voucher = await database.giftVoucher.findUnique({
+    where: { id: voucherId },
+    select: {
+      id: true,
+      status: true,
+      durationMinutes: true,
+      expiresAt: true,
+      recipientEmail: true,
+      recipientName: true,
+      message: true,
+      codeLast4: true,
+      buyer: { select: { name: true } },
+    },
+  });
+  if (!voucher || voucher.status !== "ACTIVE") return null;
+
+  const common = {
+    voucherId: voucher.id,
+    durationMinutes: voucher.durationMinutes,
+    expiresAt: voucher.expiresAt?.toISOString() ?? null,
+  };
+  if (kind === "GIFT_VOUCHER_RESTORED") {
+    return { data: { ...common, codeLast4: voucher.codeLast4 }, recipient: null };
+  }
+
+  if (!voucherCodeSecret) throw new NotWritableYet("VOUCHER_CODE_SECRET is not set");
+  const code = deriveVoucherCode(voucherCodeSecret, voucher.id);
+  // The secret this process holds must be the one the code was ordered under, or
+  // the email would carry a code that redeems nothing.
+  if (voucherCodeLast4(code) !== voucher.codeLast4) {
+    throw new NotWritableYet("VOUCHER_CODE_SECRET does not match the one the voucher was ordered under");
+  }
+
+  return {
+    data: {
+      ...common,
+      code,
+      message: voucher.message,
+      recipientName: voucher.recipientName,
+      buyerName: voucher.buyer.name,
+    },
+    recipient: voucher.recipientEmail
+      ? { email: voucher.recipientEmail, name: voucher.recipientName }
+      : null,
+  };
+}
+
+async function describeData(
   database: PrismaClient,
   kind: string,
   payload: Record<string, unknown>,
@@ -144,6 +225,8 @@ export async function dispatchPendingEmails(input: {
   webhook: EmailWebhook;
   now: Date;
   fetchImpl?: typeof fetch;
+  /** DV-112. Required to write a gift voucher email; without it one is retried. */
+  voucherCodeSecret?: string;
 }): Promise<DispatchSummary> {
   const { database, webhook, now } = input;
   const fetchImpl = input.fetchImpl ?? fetch;
@@ -175,10 +258,30 @@ export async function dispatchPendingEmails(input: {
     if (count === 0) continue;
     const attempt = row.attempts + 1;
 
-    const data = row.user.emailVerifiedAt
-      ? await describe(database, row.kind, row.payload as Record<string, unknown>)
-      : null;
-    if (!data) {
+    let described: Awaited<ReturnType<typeof describe>>;
+    try {
+      described = row.user.emailVerifiedAt
+        ? await describe(
+            database,
+            row.kind,
+            row.payload as Record<string, unknown>,
+            input.voucherCodeSecret,
+          )
+        : null;
+    } catch (error) {
+      if (!(error instanceof NotWritableYet)) throw error;
+      const exhausted = attempt >= MAX_ATTEMPTS;
+      await database.emailNotification.update({
+        where: { id: row.id },
+        data: exhausted
+          ? { status: "FAILED", lastError: error.message }
+          : { nextAttemptAt: new Date(now.getTime() + retryDelayMs(attempt)), lastError: error.message },
+      });
+      if (exhausted) summary.failed += 1;
+      else summary.retrying += 1;
+      continue;
+    }
+    if (!described) {
       await database.emailNotification.update({
         where: { id: row.id },
         data: { status: "SKIPPED" },
@@ -191,8 +294,8 @@ export async function dispatchPendingEmails(input: {
       notificationId: row.id,
       kind: row.kind,
       locale: row.user.locale,
-      recipient: { email: row.user.email, name: row.user.name },
-      data,
+      recipient: described.recipient ?? { email: row.user.email, name: row.user.name },
+      data: described.data,
     });
 
     try {

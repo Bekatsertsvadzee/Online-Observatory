@@ -14,7 +14,11 @@ vi.mock("next/headers", () => ({
   headers: async () =>
     new Headers(requestHeaders.origin ? { origin: requestHeaders.origin } : {}),
 }));
-vi.mock("@/lib/security/rate-limit", () => ({ meterRequest, BOOKING_POLICY: {} }));
+vi.mock("@/lib/security/rate-limit", () => ({
+  meterRequest,
+  BOOKING_POLICY: { name: "booking" },
+  VOUCHER_REDEMPTION_POLICY: { name: "voucher-redemption" },
+}));
 vi.mock("@/lib/validation/env", () => ({
   getServerEnvironment: () => ({ APP_URL: "https://darkview.test" }),
 }));
@@ -260,5 +264,54 @@ describe("POST /bookings", () => {
       expect.objectContaining({ request: validBody }),
     );
     expect(body.booking.priceMinor).toBe(reserved.booking.priceMinor);
+  });
+
+  it("meters a voucher redemption attempt on its own, stricter policy (DV-112)", async () => {
+    getCurrentSession.mockResolvedValueOnce(session);
+    reserveSlot.mockResolvedValueOnce({ ok: true, replayed: false, body: reserved });
+
+    await POST(request({ body: { ...validBody, voucherCode: "ABCD-EFGH-JKMN-PQRS" } }));
+
+    expect(meterRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "voucher-redemption", policy: { name: "voucher-redemption" } }),
+    );
+  });
+
+  it("refuses a redemption the voucher meter says no to, without reserving anything", async () => {
+    getCurrentSession.mockResolvedValueOnce(session);
+    meterRequest
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        Response.json({ code: "RATE_LIMITED", message: "Too many requests." }, { status: 429 }),
+      );
+
+    const response = await POST(request({ body: { ...validBody, voucherCode: "ABCD-EFGH-JKMN-PQRS" } }));
+
+    expect(response.status).toBe(429);
+    expect(reserveSlot).not.toHaveBeenCalled();
+  });
+
+  it("does not spend the voucher allowance on a booking with no code", async () => {
+    getCurrentSession.mockResolvedValueOnce(session);
+    reserveSlot.mockResolvedValueOnce({ ok: true, replayed: false, body: reserved });
+
+    await POST(request({ body: validBody }));
+
+    expect(meterRequest).toHaveBeenCalledTimes(1);
+    expect(meterRequest).toHaveBeenCalledWith(expect.objectContaining({ scope: "booking" }));
+  });
+
+  it("returns a voucher-paid booking with no payment intent, in a body the contract accepts", async () => {
+    getCurrentSession.mockResolvedValueOnce(session);
+    const paidByVoucher = {
+      booking: { ...reserved.booking, status: "CONFIRMED" as const, priceMinor: 0, paymentId: null },
+      paymentIntent: null,
+    };
+    reserveSlot.mockResolvedValueOnce({ ok: true, replayed: false, body: paidByVoucher });
+
+    const response = await POST(request({ body: { ...validBody, voucherCode: "ABCD-EFGH-JKMN-PQRS" } }));
+
+    expect(response.status).toBe(201);
+    expect(zBookingWithPaymentIntent.parse(await response.json())).toEqual(paidByVoucher);
   });
 });

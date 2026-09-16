@@ -1,6 +1,7 @@
 import { recordAuditEvent } from "./audit";
 import type { Prisma } from "./generated/prisma/client.ts";
 import { queueEmail } from "./notifications";
+import { RESTORED_VOUCHER_MIN_DAYS } from "./vouchers";
 
 /**
  * Refund a booking that holds an open entitlement (DV-111).
@@ -19,6 +20,9 @@ import { queueEmail } from "./notifications";
  * PROVIDER_REFUND_UNAVAILABLE and the entitlement stays open: marking money
  * returned that was never returned would write a fiction into the payment tables.
  *
+ * **A voucher is restored, never paid out** (DV-112). When the chain ends at a
+ * booking a gift voucher paid for, the voucher becomes usable again instead.
+ *
  * Pass the transaction client. The entitlement, the payment, the booking, the
  * audit row and the email share one fate.
  */
@@ -27,7 +31,9 @@ export type RefundRefusal =
   | "NOTHING_TO_REFUND"
   | "PROVIDER_REFUND_UNAVAILABLE";
 
-export type RefundResult = { ok: true; paymentId: string } | { ok: false; reason: RefundRefusal };
+export type RefundResult =
+  | { ok: true; paymentId: string | null; voucherId: string | null }
+  | { ok: false; reason: RefundRefusal };
 
 /** A reschedule of a reschedule of ... is legal; a loop is not, and this bounds the walk. */
 const MAX_RESCHEDULE_CHAIN = 12;
@@ -54,11 +60,15 @@ export async function refundEntitledBooking(
     currency: string;
   };
 
+  type VoucherSummary = { id: string; expiresAt: Date | null };
+
   let payment = null as PaymentSummary | null;
+  let voucher = null as VoucherSummary | null;
   let current: string | null = bookingId;
   for (let step = 0; current && step < MAX_RESCHEDULE_CHAIN; step += 1) {
     const booking: {
       payment: PaymentSummary | null;
+      redeemedVoucher: VoucherSummary | null;
       rescheduledFrom: { bookingId: string } | null;
     } = await tx.booking.findUniqueOrThrow({
       where: { id: current },
@@ -66,6 +76,7 @@ export async function refundEntitledBooking(
         payment: {
           select: { id: true, provider: true, status: true, amountMinor: true, currency: true },
         },
+        redeemedVoucher: { select: { id: true, expiresAt: true } },
         rescheduledFrom: { select: { bookingId: true } },
       },
     });
@@ -73,8 +84,14 @@ export async function refundEntitledBooking(
       payment = booking.payment;
       break;
     }
+    if (booking.redeemedVoucher) {
+      voucher = booking.redeemedVoucher;
+      break;
+    }
     current = booking.rescheduledFrom?.bookingId ?? null;
   }
+
+  if (voucher) return restoreVoucher(tx, { entitlementId: entitlement.id, userId: entitlement.userId, bookingId, voucher, actorUserId, automatic, now });
 
   if (!payment || payment.status !== "CAPTURED") {
     return { ok: false, reason: "NOTHING_TO_REFUND" };
@@ -123,5 +140,62 @@ export async function refundEntitledBooking(
     payload: { bookingId },
   });
 
-  return { ok: true, paymentId: payment.id };
+  return { ok: true, paymentId: payment.id, voucherId: null };
+}
+
+async function restoreVoucher(
+  tx: Prisma.TransactionClient,
+  input: {
+    entitlementId: string;
+    userId: string;
+    bookingId: string;
+    voucher: { id: string; expiresAt: Date | null };
+    actorUserId: string | null;
+    automatic: boolean;
+    now: Date;
+  },
+): Promise<RefundResult> {
+  const { entitlementId, userId, bookingId, voucher, actorUserId, automatic, now } = input;
+
+  const { count } = await tx.bookingEntitlement.updateMany({
+    where: { id: entitlementId, outcome: "OPEN" },
+    data: { outcome: "REFUNDED", resolvedAt: now },
+  });
+  if (count === 0) return { ok: false, reason: "NO_OPEN_ENTITLEMENT" };
+
+  const floor = new Date(now.getTime() + RESTORED_VOUCHER_MIN_DAYS * 86_400_000);
+  const expiresAt = voucher.expiresAt && voucher.expiresAt > floor ? voucher.expiresAt : floor;
+
+  await tx.giftVoucher.update({
+    where: { id: voucher.id },
+    data: {
+      status: "ACTIVE",
+      expiresAt,
+      redeemedAt: null,
+      redeemedByUserId: null,
+      redeemedBookingId: null,
+    },
+  });
+  await tx.booking.update({ where: { id: bookingId }, data: { status: "REFUNDED" } });
+
+  await recordAuditEvent(
+    {
+      category: "BOOKING",
+      action: "GIFT_VOUCHER_RESTORED",
+      actorUserId,
+      entityType: "GiftVoucher",
+      entityId: voucher.id,
+      detail: { bookingId, expiresAt: expiresAt.toISOString(), automatic },
+    },
+    tx,
+  );
+
+  await queueEmail(tx, {
+    userId,
+    kind: "GIFT_VOUCHER_RESTORED",
+    dedupeKey: `gift-voucher-restored:${voucher.id}:${bookingId}`,
+    payload: { voucherId: voucher.id, bookingId },
+  });
+
+  return { ok: true, paymentId: null, voucherId: voucher.id };
 }

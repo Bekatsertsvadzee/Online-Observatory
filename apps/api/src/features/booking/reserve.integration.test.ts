@@ -276,13 +276,13 @@ describe("reserving a slot", () => {
 
     expect(result.body.booking.status).toBe("PENDING_PAYMENT");
     expect(result.body.booking.slotStartAt).toBe(slotStartAt.toISOString());
-    expect(result.body.paymentIntent.status).toBe("PENDING");
-    expect(result.body.paymentIntent.provider).toBe("SANDBOX");
+    expect(result.body.paymentIntent?.status).toBe("PENDING");
+    expect(result.body.paymentIntent?.provider).toBe("SANDBOX");
 
     // Price comes from the generator, never from the request body.
     expect(result.body.booking.priceMinor).toBe(PROVISIONAL_SLOT_PRICE_MINOR);
 
-    expect(result.body.paymentIntent.expiresAt).toBe(
+    expect(result.body.paymentIntent?.expiresAt).toBe(
       new Date(NOW.getTime() + PAYMENT_HOLD_MINUTES * 60_000).toISOString(),
     );
   });
@@ -1311,7 +1311,7 @@ describe("retrying a booking", () => {
 
     expect(second.replayed).toBe(true);
     expect(second.body.booking.id).toBe(first.body.booking.id);
-    expect(second.body.paymentIntent.paymentId).toBe(first.body.paymentIntent.paymentId);
+    expect(second.body.paymentIntent!.paymentId).toBe(first.body.paymentIntent!.paymentId);
 
     expect(await database.booking.count()).toBe(1);
     expect(await database.payment.count()).toBe(1);

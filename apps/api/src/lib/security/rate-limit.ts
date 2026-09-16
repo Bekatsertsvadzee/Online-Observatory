@@ -70,6 +70,29 @@ export const COMMAND_POLICY: RateLimitPolicy = {
 };
 
 /**
+ * Gift voucher redemption attempts, per account (DV-112).
+ *
+ * A code is 80 bits, so guessing is not the threat this answers; a leaked list of
+ * partial codes or a typo loop is. Counted only on bookings that carry a code, and
+ * on top of BOOKING_POLICY, which every booking already spends.
+ */
+export const VOUCHER_REDEMPTION_POLICY: RateLimitPolicy = {
+  limit: 5,
+  windowMs: 60 * 60 * 1000,
+  blockMs: 60 * 60 * 1000,
+};
+
+/**
+ * Gift voucher purchases, per account (DV-112). Each opens a payment row; nothing
+ * scarce is held, so this protects the database rather than inventory.
+ */
+export const VOUCHER_PURCHASE_POLICY: RateLimitPolicy = {
+  limit: 10,
+  windowMs: 60 * 60 * 1000,
+  blockMs: 60 * 60 * 1000,
+};
+
+/**
  * Observer seat churn, per account.
  *
  * ADR-007 caps a mission at five seats. Taking and releasing in a loop is how

@@ -363,7 +363,8 @@ describe("a customer's booking, from sign-in to their Collection", () => {
       now: RESERVED_AT,
     });
     if (!reserved.ok) throw new Error(`reservation refused: ${reserved.message}`);
-    const { booking, paymentIntent } = reserved.body;
+    const { booking } = reserved.body;
+    const paymentIntent = reserved.body.paymentIntent!;
 
     // ---- settle ----
 

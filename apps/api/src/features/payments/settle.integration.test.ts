@@ -90,7 +90,8 @@ async function reserve(options: { userId?: string; slotStartAt?: Date; now?: Dat
     now: options.now ?? NOW,
   });
   if (!result.ok) throw new Error(`fixture reservation failed: ${result.message}`);
-  return result.body;
+  // A cash reservation always opens a payment intent; only a voucher leaves it null.
+  return { booking: result.body.booking, paymentIntent: result.body.paymentIntent! };
 }
 
 function captured(paymentId: string, overrides: Partial<Parameters<typeof settlePayment>[0]["outcome"]> = {}) {

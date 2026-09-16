@@ -80,7 +80,8 @@ async function entitledBooking(
     now: NOW,
   });
   if (!reserved.ok) throw new Error(`fixture reservation failed: ${reserved.message}`);
-  const { booking, paymentIntent } = reserved.body;
+  const { booking } = reserved.body;
+  const paymentIntent = reserved.body.paymentIntent!;
   await settlePayment({
     provider: "SANDBOX",
     outcome: {

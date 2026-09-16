@@ -790,6 +790,10 @@ export type CreateBookingRequest = {
     slotStartAt: string;
     durationMinutes: number;
     locale?: Locale;
+    /**
+     * A gift voucher code (DV-112). Case and separators are ignored.
+     */
+    voucherCode?: string;
 };
 
 export type CancelBookingRequest = {
@@ -836,7 +840,75 @@ export type PaymentIntent = {
 
 export type BookingWithPaymentIntent = {
     booking: Booking;
+    /**
+     * Null when a gift voucher paid for the booking (DV-112).
+     */
+    paymentIntent: PaymentIntent | null;
+};
+
+/**
+ * DV-112. PENDING_PAYMENT until the payment settles; CANCELLED when it fails.
+ * EXPIRED is an ACTIVE voucher past `expiresAt`.
+ *
+ */
+export const GiftVoucherStatus = {
+    PENDING_PAYMENT: 'PENDING_PAYMENT',
+    ACTIVE: 'ACTIVE',
+    REDEEMED: 'REDEEMED',
+    EXPIRED: 'EXPIRED',
+    CANCELLED: 'CANCELLED'
+} as const;
+
+/**
+ * DV-112. PENDING_PAYMENT until the payment settles; CANCELLED when it fails.
+ * EXPIRED is an ACTIVE voucher past `expiresAt`.
+ *
+ */
+export type GiftVoucherStatus = typeof GiftVoucherStatus[keyof typeof GiftVoucherStatus];
+
+export type GiftVoucher = {
+    id: string;
+    status: GiftVoucherStatus;
+    durationMinutes: number;
+    priceMinor: number;
+    currency: Currency;
+    /**
+     * The code's last four characters. Null until the payment settles.
+     */
+    codeLast4: string | null;
+    recipientEmail: string | null;
+    recipientName: string | null;
+    /**
+     * Twelve months from payment. Null until the payment settles.
+     */
+    expiresAt: string | null;
+    redeemedBookingId: string | null;
+    createdAt: string;
+};
+
+export type GiftVoucherList = {
+    items: Array<GiftVoucher>;
+};
+
+export type GiftVoucherWithPaymentIntent = {
+    voucher: GiftVoucher;
     paymentIntent: PaymentIntent;
+};
+
+export type CreateGiftVoucherRequest = {
+    /**
+     * The length of the observation the voucher pays for. Must be a length slots are sold at.
+     */
+    durationMinutes: number;
+    /**
+     * Where the code is emailed. The buyer when omitted.
+     */
+    recipientEmail?: string;
+    recipientName?: string;
+    /**
+     * A personal note included in the email.
+     */
+    message?: string;
 };
 
 export type BookingPage = {
@@ -2813,6 +2885,64 @@ export type CreateBookingResponses = {
 };
 
 export type CreateBookingResponse = CreateBookingResponses[keyof CreateBookingResponses];
+
+export type ListMyGiftVouchersData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/vouchers';
+};
+
+export type ListMyGiftVouchersErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+};
+
+export type ListMyGiftVouchersError = ListMyGiftVouchersErrors[keyof ListMyGiftVouchersErrors];
+
+export type ListMyGiftVouchersResponses = {
+    /**
+     * The buyer's vouchers, newest first.
+     */
+    200: GiftVoucherList;
+};
+
+export type ListMyGiftVouchersResponse = ListMyGiftVouchersResponses[keyof ListMyGiftVouchersResponses];
+
+export type PurchaseGiftVoucherData = {
+    body: CreateGiftVoucherRequest;
+    path?: never;
+    query?: never;
+    url: '/vouchers';
+};
+
+export type PurchaseGiftVoucherErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+    /**
+     * A dependency this request needs is not configured or not reachable.
+     */
+    503: ApiError;
+};
+
+export type PurchaseGiftVoucherError = PurchaseGiftVoucherErrors[keyof PurchaseGiftVoucherErrors];
+
+export type PurchaseGiftVoucherResponses = {
+    /**
+     * Voucher created, awaiting payment.
+     */
+    201: GiftVoucherWithPaymentIntent;
+};
+
+export type PurchaseGiftVoucherResponse = PurchaseGiftVoucherResponses[keyof PurchaseGiftVoucherResponses];
 
 export type GetBookingData = {
     body?: never;
