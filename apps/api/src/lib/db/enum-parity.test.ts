@@ -21,6 +21,7 @@ const SHARED_ENUMS = [
   "Currency",
   "ForecastSource",
   "ImagingProfile",
+  "LoyaltyEntryKind",
   "Locale",
   "MissionEventSource",
   "MissionFailureReason",

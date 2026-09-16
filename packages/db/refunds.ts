@@ -1,5 +1,6 @@
 import { recordAuditEvent } from "./audit";
 import type { Prisma } from "./generated/prisma/client.ts";
+import { reverseLoyaltyForRefund } from "./loyalty";
 import { queueEmail } from "./notifications";
 import { RESTORED_VOUCHER_MIN_DAYS } from "./vouchers";
 
@@ -54,6 +55,7 @@ export async function refundEntitledBooking(
 
   type PaymentSummary = {
     id: string;
+    userId: string;
     provider: string;
     status: string;
     amountMinor: number;
@@ -74,7 +76,14 @@ export async function refundEntitledBooking(
       where: { id: current },
       select: {
         payment: {
-          select: { id: true, provider: true, status: true, amountMinor: true, currency: true },
+          select: {
+            id: true,
+            userId: true,
+            provider: true,
+            status: true,
+            amountMinor: true,
+            currency: true,
+          },
         },
         redeemedVoucher: { select: { id: true, expiresAt: true } },
         rescheduledFrom: { select: { bookingId: true } },
@@ -113,6 +122,15 @@ export async function refundEntitledBooking(
     data: { status: "REFUNDED", refundedAt: now },
   });
   await tx.booking.update({ where: { id: bookingId }, data: { status: "REFUNDED" } });
+
+  // DV-093: what the refunded payment earned is taken back, and what its booking
+  // spent in points is given back. The paid booking is the one at the root of a
+  // reschedule chain, where the points were spent.
+  const paidBooking = await tx.booking.findFirst({
+    where: { paymentId: payment.id },
+    select: { id: true, userId: true, loyaltyPointsRedeemed: true },
+  });
+  await reverseLoyaltyForRefund(tx, payment, paidBooking);
 
   await recordAuditEvent(
     {

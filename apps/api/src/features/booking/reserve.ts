@@ -9,6 +9,13 @@ import type {
 } from "@darkview/contracts";
 import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import {
+  ensureLoyaltyAccount,
+  postLoyaltyEntry,
+  readLoyaltyScheme,
+  releaseRedeemedPoints,
+  tierFor,
+} from "@darkview/db/loyalty";
 import { queueEmail } from "@darkview/db/notifications";
 import { hashVoucherCode, normaliseVoucherCode } from "@darkview/db/vouchers";
 
@@ -103,6 +110,8 @@ type BookingRow = {
   missionId: string | null;
   holdExpiresAt: Date | null;
   createdAt: Date;
+  tierDiscountMinor?: number;
+  loyaltyPointsRedeemed?: number;
   /** Present when the caller selected it (DV-111); absent reads as no entitlement. */
   entitlement?: {
     outcome: string;
@@ -157,6 +166,8 @@ export function toContractBooking(row: BookingRow): ContractBooking {
     currency: row.currency as ContractBooking["currency"],
     paymentId: row.paymentId,
     missionId: row.missionId,
+    tierDiscountMinor: row.tierDiscountMinor ?? 0,
+    loyaltyPointsRedeemed: row.loyaltyPointsRedeemed ?? 0,
     // NONE is the database remembering the slot was judged; the customer is shown
     // nothing for it. The check constraint guarantees cause and expiry on the rest.
     entitlement:
@@ -212,20 +223,19 @@ function previousDate(isoDate: string): string {
  * application, which is exactly what DV-055 forbids.
  */
 export async function expireLapsedHolds(
-  tx: {
-    $queryRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>;
-    $executeRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<number>;
-  },
+  tx: Prisma.TransactionClient,
   observatoryId: string,
   now: Date,
 ): Promise<void> {
-  const lapsed = (await tx.$queryRaw`
-    SELECT "id" FROM "Booking"
+  const lapsed = await tx.$queryRaw<
+    { id: string; userId: string; loyaltyPointsRedeemed: number }[]
+  >`
+    SELECT "id", "userId", "loyaltyPointsRedeemed" FROM "Booking"
     WHERE "observatoryId" = ${observatoryId}::uuid
       AND "status" = 'PENDING_PAYMENT'
       AND "holdExpiresAt" <= ${now}
     FOR UPDATE
-  `) as { id: string }[];
+  `;
 
   if (lapsed.length === 0) return;
 
@@ -234,6 +244,9 @@ export async function expireLapsedHolds(
     SET "status" = 'EXPIRED', "updatedAt" = ${now}
     WHERE "id" = ANY(${lapsed.map((row) => row.id)}::uuid[])
   `;
+
+  // DV-095: a hold that lapsed spent its points on nothing.
+  for (const booking of lapsed) await releaseRedeemedPoints(tx, booking);
 }
 
 /**
@@ -368,6 +381,16 @@ export async function reserveSlot(input: {
       break;
   }
 
+  // One price reduction per booking (maintainer decision of 2026-09-16).
+  if (request.voucherCode !== undefined && request.loyaltyPoints !== undefined) {
+    return {
+      ok: false,
+      status: 422,
+      code: "VALIDATION_FAILED",
+      message: "A booking uses a voucher or loyalty points, not both.",
+    };
+  }
+
   if (request.voucherCode !== undefined) {
     return reserveWithVoucher({
       userId,
@@ -384,21 +407,53 @@ export async function reserveSlot(input: {
 
   const holdExpiresAt = new Date(now.getTime() + PAYMENT_HOLD_MINUTES * 60_000);
 
+  // DV-095. The tier discount first, then points on what is left, never below the
+  // scheme's minimum payable. Read here to answer early; the points themselves are
+  // claimed inside the transaction, where a concurrent spend cannot also have them.
+  const { scheme, tiers } = await readLoyaltyScheme(database);
+  const account = await database.loyaltyAccount.findUnique({
+    where: { userId },
+    select: { tierPoints: true, balance: true },
+  });
+  const tier = tierFor(tiers, account?.tierPoints ?? 0);
+  const tierDiscountMinor = Math.floor((slot.priceMinor * tier.discountPercent) / 100);
+  const discountedMinor = slot.priceMinor - tierDiscountMinor;
+  const loyaltyPointsRedeemed = request.loyaltyPoints ?? 0;
+  const pointsValueMinor = Math.floor((loyaltyPointsRedeemed * 100) / scheme.pointsPerGelRedeemed);
+  if (loyaltyPointsRedeemed > 0) {
+    const maximumValueMinor = Math.max(discountedMinor - scheme.minimumPayableMinor, 0);
+    if (pointsValueMinor > maximumValueMinor) {
+      const maximumPoints =
+        Math.floor((maximumValueMinor * scheme.pointsPerGelRedeemed) / 100 / 100) * 100;
+      return {
+        ok: false,
+        status: 422,
+        code: "VALIDATION_FAILED",
+        message: `At most ${maximumPoints} points can be spent on this booking.`,
+      };
+    }
+    if ((account?.balance ?? 0) < loyaltyPointsRedeemed) {
+      return {
+        ok: false,
+        status: 422,
+        code: "VALIDATION_FAILED",
+        message: "Not enough loyalty points.",
+      };
+    }
+  }
+  const amountMinor = discountedMinor - pointsValueMinor;
+
   try {
     const created = await retryOnDeadlock(() =>
       database.$transaction(async (tx) => {
-        await expireLapsedHolds(
-          tx as unknown as Parameters<typeof expireLapsedHolds>[0],
-          observatory.id,
-          now,
-        );
+        await expireLapsedHolds(tx, observatory.id, now);
 
         const payment = await tx.payment.create({
           data: {
             userId,
             provider: PHASE_1_PROVIDER,
             status: "PENDING",
-            amountMinor: slot.priceMinor,
+            amountMinor,
             currency: slot.currency,
             isDemo: observatory.isDemo,
           },
@@ -419,12 +474,29 @@ export async function reserveSlot(input: {
             durationMinutes: slot.durationMinutes,
             status: "PENDING_PAYMENT",
             holdExpiresAt,
-            priceMinor: slot.priceMinor,
+            priceMinor: amountMinor,
             currency: slot.currency,
+            tierDiscountMinor,
+            loyaltyPointsRedeemed,
             idempotencyKey,
             isDemo: observatory.isDemo,
           },
         });
+
+        if (loyaltyPointsRedeemed > 0) {
+          const spent = await postLoyaltyEntry(tx, {
+            userId,
+            kind: "REDEEMED",
+            points: -loyaltyPointsRedeemed,
+            sourceRef: `booking:${booking.id}`,
+            bookingId: booking.id,
+            actorUserId: userId,
+            refuseNegativeBalance: true,
+          });
+          if (!spent.posted) throw new PointsUnavailable();
+        } else {
+          await ensureLoyaltyAccount(tx, userId);
+        }
 
         await recordAuditEvent(
           {
@@ -438,7 +510,10 @@ export async function reserveSlot(input: {
               observatoryId: observatory.id,
               slotStartAt: slotStartAt.toISOString(),
               durationMinutes: slot.durationMinutes,
-              priceMinor: slot.priceMinor,
+              priceMinor: amountMinor,
+              listPriceMinor: slot.priceMinor,
+              tierDiscountMinor,
+              loyaltyPointsRedeemed,
               currency: slot.currency,
               holdExpiresAt: holdExpiresAt.toISOString(),
               paymentId: payment.id,
@@ -461,6 +536,14 @@ export async function reserveSlot(input: {
       },
     };
   } catch (error) {
+    if (error instanceof PointsUnavailable) {
+      return {
+        ok: false,
+        status: 422,
+        code: "VALIDATION_FAILED",
+        message: "Not enough loyalty points.",
+      };
+    }
     if (!isSlotConflict(error)) throw error;
 
     // Either constraint can be the one that fired. Rather than parse a constraint
@@ -481,6 +564,9 @@ export async function reserveSlot(input: {
     };
   }
 }
+
+/** Thrown inside the transaction when the points were spent first, so the booking rolls back. */
+class PointsUnavailable extends Error {}
 
 /** Thrown inside the transaction when the voucher was not ours to spend, so the booking rolls back. */
 class VoucherUnusable extends Error {}
@@ -542,11 +628,7 @@ async function reserveWithVoucher(input: {
   try {
     const booking = await retryOnDeadlock(() =>
       database.$transaction(async (tx) => {
-        await expireLapsedHolds(
-          tx as unknown as Parameters<typeof expireLapsedHolds>[0],
-          observatory.id,
-          now,
-        );
+        await expireLapsedHolds(tx, observatory.id, now);
 
         const { mode } = await tx.observatory.findUniqueOrThrow({
           where: { id: observatory.id },
@@ -834,8 +916,15 @@ export function isSlotConflict(error: unknown): boolean {
  * here rather than inside `releaseSlotForFailedPayment`.
  */
 export async function releaseHeldSlot(
-  tx: Pick<Prisma.TransactionClient, "booking" | "payment" | "auditLog">,
-  booking: { id: string; status: string; missionId: string | null; paymentId: string | null },
+  tx: Prisma.TransactionClient,
+  booking: {
+    id: string;
+    userId: string;
+    status: string;
+    missionId: string | null;
+    paymentId: string | null;
+    loyaltyPointsRedeemed: number;
+  },
   reason: string,
 ): Promise<{ released: boolean }> {
   if (booking.status !== "PENDING_PAYMENT") return { released: false };
@@ -857,6 +946,9 @@ export async function releaseHeldSlot(
     where: { id: booking.id },
     data: { status: "CANCELLED" },
   });
+
+  // DV-095: points spent on a booking that will not happen come back.
+  await releaseRedeemedPoints(tx, booking);
 
   // A slot leaving the held set is what makes it purchasable again. When two
   // customers dispute who was entitled to a half hour, this row is the answer.
@@ -884,7 +976,14 @@ export async function releaseSlotForFailedPayment(input: {
   return database.$transaction(async (tx) => {
     const booking = await tx.booking.findUnique({
       where: { id: input.bookingId },
-      select: { id: true, status: true, missionId: true, paymentId: true },
+      select: {
+        id: true,
+        userId: true,
+        status: true,
+        missionId: true,
+        paymentId: true,
+        loyaltyPointsRedeemed: true,
+      },
     });
 
     if (!booking) return { released: false };

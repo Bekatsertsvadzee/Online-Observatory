@@ -3,6 +3,7 @@ import "server-only";
 import type { ErrorCode, PaymentProvider } from "@darkview/contracts";
 import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { earnOnSettledPayment, rewardReferralOnFirstPaidBooking } from "@darkview/db/loyalty";
 import { queueEmail } from "@darkview/db/notifications";
 
 import { releaseHeldSlot } from "@/features/booking/reserve";
@@ -315,6 +316,11 @@ export async function settlePayment(input: {
       tx,
     );
 
+    // DV-093 and DV-096: a settled, delivered booking earns, and a referred
+    // customer's first one rewards both sides.
+    await earnOnSettledPayment(tx, payment, booking.id);
+    await rewardReferralOnFirstPaidBooking(tx, payment.userId);
+
     return { ok: true, applied: true, missionId: mission.id };
   });
 }
@@ -345,6 +351,7 @@ async function settleObserverPackPayment(
   payment: {
     id: string;
     userId: string;
+    amountMinor: number;
     isDemo: boolean;
     provider: PaymentProvider;
     observerPack: { id: string; missionId: string } | null;
@@ -448,6 +455,8 @@ async function settleObserverPackPayment(
 
     return { ok: true, applied: true, missionId };
   }
+
+  await earnOnSettledPayment(tx, payment, null);
 
   await recordAuditEvent(
     {

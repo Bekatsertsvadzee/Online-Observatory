@@ -279,8 +279,11 @@ describe("reserving a slot", () => {
     expect(result.body.paymentIntent?.status).toBe("PENDING");
     expect(result.body.paymentIntent?.provider).toBe("SANDBOX");
 
-    // Price comes from the generator, never from the request body.
-    expect(result.body.booking.priceMinor).toBe(PROVISIONAL_SLOT_PRICE_MINOR);
+    // Price comes from the generator, never from the request body, less the
+    // customer's loyalty tier discount: every account starts at Member, 10% (DV-095).
+    const memberDiscount = Math.floor(PROVISIONAL_SLOT_PRICE_MINOR / 10);
+    expect(result.body.booking.tierDiscountMinor).toBe(memberDiscount);
+    expect(result.body.booking.priceMinor).toBe(PROVISIONAL_SLOT_PRICE_MINOR - memberDiscount);
 
     expect(result.body.paymentIntent?.expiresAt).toBe(
       new Date(NOW.getTime() + PAYMENT_HOLD_MINUTES * 60_000).toISOString(),

@@ -72,7 +72,8 @@ export const zRegisterRequest = z.strictObject({
     displayName: z.string().min(2).max(80),
     email: z.email().max(254),
     password: z.string().min(12).max(128),
-    locale: zLocale
+    locale: zLocale,
+    referralCode: z.string().min(6).max(16).optional()
 });
 
 export const zSignInRequest = z.strictObject({
@@ -517,6 +518,8 @@ export const zBooking = z.strictObject({
     currency: zCurrency,
     paymentId: z.uuid().nullish(),
     missionId: z.uuid().nullish(),
+    tierDiscountMinor: z.int().gte(0).optional(),
+    loyaltyPointsRedeemed: z.int().gte(0).optional(),
     entitlement: zBookingEntitlement.nullish(),
     createdAt: z.iso.datetime()
 });
@@ -532,7 +535,8 @@ export const zCreateBookingRequest = z.strictObject({
     slotStartAt: z.iso.datetime(),
     durationMinutes: z.int().gt(0),
     locale: zLocale.optional(),
-    voucherCode: z.string().min(8).max(64).optional()
+    voucherCode: z.string().min(8).max(64).optional(),
+    loyaltyPoints: z.int().gte(100).optional()
 });
 
 export const zCancelBookingRequest = z.strictObject({
@@ -571,6 +575,61 @@ export const zPaymentIntent = z.strictObject({
 export const zBookingWithPaymentIntent = z.strictObject({
     booking: zBooking,
     paymentIntent: zPaymentIntent.nullable()
+});
+
+export const zLoyaltyTier = z.strictObject({
+    code: z.string(),
+    nameEn: z.string(),
+    nameKa: z.string(),
+    thresholdPoints: z.int().gte(0),
+    discountPercent: z.int().gte(0).lte(100)
+});
+
+export const zLoyaltyScheme = z.strictObject({
+    pointsPerGel: z.int().gte(0),
+    pointsPerGelRedeemed: z.int().gt(0),
+    welcomeBonusPoints: z.int().gte(0),
+    referralBonusPoints: z.int().gte(0),
+    minimumPayableMinor: z.int().gte(0),
+    progressMarkers: z.array(z.int().gte(0)),
+    tiers: z.array(zLoyaltyTier)
+});
+
+export const zLoyaltyEntryKind = z.enum([
+    'WELCOME_BONUS',
+    'REFERRAL_BONUS',
+    'PURCHASE_EARNED',
+    'PURCHASE_REVERSED',
+    'REDEEMED',
+    'REDEMPTION_RELEASED',
+    'ADMIN_ADJUSTMENT'
+]);
+
+export const zLoyaltyLedgerEntry = z.strictObject({
+    id: z.uuid(),
+    kind: zLoyaltyEntryKind,
+    points: z.int(),
+    tierPoints: z.int(),
+    bookingId: z.uuid().nullish(),
+    reason: z.string().nullish(),
+    createdAt: z.iso.datetime()
+});
+
+export const zLoyaltyAccount = z.strictObject({
+    userId: z.uuid(),
+    balance: z.int(),
+    tierPoints: z.int(),
+    tier: zLoyaltyTier,
+    nextTier: zLoyaltyTier.nullable(),
+    referralCode: z.string(),
+    recentEntries: z.array(zLoyaltyLedgerEntry)
+});
+
+export const zLoyaltyAdjustmentRequest = z.strictObject({
+    adjustmentId: z.uuid(),
+    userId: z.uuid(),
+    points: z.int(),
+    reason: z.string().min(3).max(500)
 });
 
 /**
@@ -1342,7 +1401,8 @@ export const zAuditCategory = z.enum([
     'SAFETY',
     'OBSERVATORY_MODE',
     'OPERATOR_OVERRIDE',
-    'AGENT_LINK'
+    'AGENT_LINK',
+    'LOYALTY'
 ]);
 
 /**
@@ -1943,6 +2003,16 @@ export const zCreateBookingHeaders = z.object({
 export const zCreateBookingResponse = zBookingWithPaymentIntent;
 
 /**
+ * The loyalty scheme.
+ */
+export const zGetLoyaltySchemeResponse = zLoyaltyScheme;
+
+/**
+ * The loyalty account.
+ */
+export const zGetMyLoyaltyResponse = zLoyaltyAccount;
+
+/**
  * The buyer's vouchers, newest first.
  */
 export const zListMyGiftVouchersResponse = zGiftVoucherList;
@@ -2201,6 +2271,13 @@ export const zAdminListMissionsQuery = z.object({
  * Mission page.
  */
 export const zAdminListMissionsResponse = zMissionPage;
+
+export const zAdminAdjustLoyaltyPointsBody = zLoyaltyAdjustmentRequest;
+
+/**
+ * The customer's account after the adjustment.
+ */
+export const zAdminAdjustLoyaltyPointsResponse = zLoyaltyAccount;
 
 export const zAdminCancelMissionBody = zAdminCancelMissionRequest;
 
