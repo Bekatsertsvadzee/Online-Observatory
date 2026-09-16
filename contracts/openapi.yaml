@@ -307,6 +307,37 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /observatories/{observatoryId}/conditions:
+    get:
+      operationId: getObservatoryConditions
+      tags: [observatory]
+      summary: Tonight's viewing forecast at one bookable observatory.
+      description: |
+        DV-110. An hourly forecast for tonight's bookable hours: the night that has not
+        yet reached dawn, narrowed to the hours the observatory offers. Read from
+        forecasts the realtime service fetched and stored; never fetched on request.
+
+        **Advisory only.** Conditions never set or clear a weather hold. The operator's
+        hold, reported by `GET /observatories/{observatoryId}/state`, stays authoritative.
+
+        An hour with no stored forecast, or one older than the configured maximum age,
+        is UNKNOWN with every value null. Unknown is never reported as clear.
+
+        ADR-019: answered for an observatory `GET /observatories` lists. An id that does
+        not exist and one that is not bookable are one 404.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/ObservatoryId"
+      responses:
+        "200":
+          description: Tonight's viewing conditions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ViewingConditions"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /observatories:
     get:
       operationId: listBookableObservatories
@@ -2221,6 +2252,100 @@ components:
         updatedAt:
           type: string
           format: date-time
+
+    ForecastSource:
+      type: string
+      description: The forecast provider that produced a stored hour (DV-110).
+      enum: [METEOBLUE, OPEN_METEO]
+
+    ViewingConditionsStatus:
+      type: string
+      description: UNKNOWN when no forecast is stored for the hour or the stored one is too old.
+      enum: [KNOWN, UNKNOWN]
+
+    ViewingConditionsHour:
+      type: object
+      description: |
+        One forecast hour. Every value is null when `status` is UNKNOWN, and any value
+        the source does not provide is null when KNOWN. Cloud layers are as the source
+        defines them, which differ between providers; `source` says which applies.
+      additionalProperties: false
+      required:
+        - at
+        - status
+        - source
+        - fetchedAt
+        - cloudCoverPercent
+        - cloudCoverLowPercent
+        - cloudCoverMidPercent
+        - cloudCoverHighPercent
+        - precipitationProbabilityPercent
+        - relativeHumidityPercent
+        - windSpeedMetresPerSecond
+        - seeingArcseconds
+      properties:
+        at:
+          type: string
+          format: date-time
+          description: The instant the forecast hour begins, on the hour.
+        status:
+          $ref: "#/components/schemas/ViewingConditionsStatus"
+        source:
+          oneOf:
+            - $ref: "#/components/schemas/ForecastSource"
+            - type: "null"
+        fetchedAt:
+          type: [string, "null"]
+          format: date-time
+        cloudCoverPercent:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+        cloudCoverLowPercent:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+        cloudCoverMidPercent:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+        cloudCoverHighPercent:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+        precipitationProbabilityPercent:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+        relativeHumidityPercent:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+        windSpeedMetresPerSecond:
+          type: [number, "null"]
+          minimum: 0
+        seeingArcseconds:
+          type: [number, "null"]
+          minimum: 0
+          description: Only from a source with an astronomy seeing forecast.
+
+    ViewingConditions:
+      type: object
+      additionalProperties: false
+      required: [observatoryId, date, items]
+      properties:
+        observatoryId:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date
+          description: The observatory's local date on which tonight begins.
+        items:
+          type: array
+          description: Tonight's bookable hours in order. Empty when the night offers none.
+          items:
+            $ref: "#/components/schemas/ViewingConditionsHour"
 
     DeviceHealth:
       type: string

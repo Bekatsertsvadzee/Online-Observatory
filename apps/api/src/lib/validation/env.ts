@@ -30,6 +30,13 @@ const serverEnvironmentSchema = z.object({
    */
   REALTIME_INTERNAL_URL: z.url().optional(),
   REALTIME_INTERNAL_SECRET: z.string().min(32).optional(),
+  /**
+   * How old a stored forecast hour may be before it is reported UNKNOWN (DV-110).
+   * The realtime service refreshes hourly, so the default tolerates two missed
+   * fetches. Unknown is never reported as clear, so a smaller value only shows
+   * unknown sooner.
+   */
+  VIEWING_CONDITIONS_MAX_AGE_MINUTES: z.coerce.number().int().min(60).max(1440).default(180),
 });
 
 export type ServerEnvironment = z.infer<typeof serverEnvironmentSchema>;

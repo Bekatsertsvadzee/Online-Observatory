@@ -267,6 +267,43 @@ export const zWeatherState = z.strictObject({
     updatedAt: z.iso.datetime()
 });
 
+/**
+ * The forecast provider that produced a stored hour (DV-110).
+ */
+export const zForecastSource = z.enum(['METEOBLUE', 'OPEN_METEO']);
+
+/**
+ * UNKNOWN when no forecast is stored for the hour or the stored one is too old.
+ */
+export const zViewingConditionsStatus = z.enum(['KNOWN', 'UNKNOWN']);
+
+/**
+ * One forecast hour. Every value is null when `status` is UNKNOWN, and any value
+ * the source does not provide is null when KNOWN. Cloud layers are as the source
+ * defines them, which differ between providers; `source` says which applies.
+ *
+ */
+export const zViewingConditionsHour = z.strictObject({
+    at: z.iso.datetime(),
+    status: zViewingConditionsStatus,
+    source: zForecastSource.nullable(),
+    fetchedAt: z.iso.datetime().nullable(),
+    cloudCoverPercent: z.number().gte(0).lte(100).nullable(),
+    cloudCoverLowPercent: z.number().gte(0).lte(100).nullable(),
+    cloudCoverMidPercent: z.number().gte(0).lte(100).nullable(),
+    cloudCoverHighPercent: z.number().gte(0).lte(100).nullable(),
+    precipitationProbabilityPercent: z.number().gte(0).lte(100).nullable(),
+    relativeHumidityPercent: z.number().gte(0).lte(100).nullable(),
+    windSpeedMetresPerSecond: z.number().gte(0).nullable(),
+    seeingArcseconds: z.number().gte(0).nullable()
+});
+
+export const zViewingConditions = z.strictObject({
+    observatoryId: z.uuid(),
+    date: z.iso.date(),
+    items: z.array(zViewingConditionsHour)
+});
+
 export const zDeviceHealth = z.enum([
     'OK',
     'DEGRADED',
@@ -1786,6 +1823,15 @@ export const zGetObservatoryStatusPath = z.object({
  * Public observatory status.
  */
 export const zGetObservatoryStatusResponse = zPublicObservatoryStatus;
+
+export const zGetObservatoryConditionsPath = z.object({
+    observatoryId: z.uuid()
+});
+
+/**
+ * Tonight's viewing conditions.
+ */
+export const zGetObservatoryConditionsResponse = zViewingConditions;
 
 /**
  * Every bookable observatory.

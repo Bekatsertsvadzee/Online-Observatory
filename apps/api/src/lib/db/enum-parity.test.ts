@@ -19,6 +19,7 @@ const SHARED_ENUMS = [
   "CaptureVisibility",
   "CommandType",
   "Currency",
+  "ForecastSource",
   "ImagingProfile",
   "Locale",
   "MissionEventSource",

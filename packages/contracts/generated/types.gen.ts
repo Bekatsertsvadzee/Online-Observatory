@@ -372,6 +372,65 @@ export type WeatherState = {
     updatedAt: string;
 };
 
+/**
+ * The forecast provider that produced a stored hour (DV-110).
+ */
+export const ForecastSource = { METEOBLUE: 'METEOBLUE', OPEN_METEO: 'OPEN_METEO' } as const;
+
+/**
+ * The forecast provider that produced a stored hour (DV-110).
+ */
+export type ForecastSource = typeof ForecastSource[keyof typeof ForecastSource];
+
+/**
+ * UNKNOWN when no forecast is stored for the hour or the stored one is too old.
+ */
+export const ViewingConditionsStatus = { KNOWN: 'KNOWN', UNKNOWN: 'UNKNOWN' } as const;
+
+/**
+ * UNKNOWN when no forecast is stored for the hour or the stored one is too old.
+ */
+export type ViewingConditionsStatus = typeof ViewingConditionsStatus[keyof typeof ViewingConditionsStatus];
+
+/**
+ * One forecast hour. Every value is null when `status` is UNKNOWN, and any value
+ * the source does not provide is null when KNOWN. Cloud layers are as the source
+ * defines them, which differ between providers; `source` says which applies.
+ *
+ */
+export type ViewingConditionsHour = {
+    /**
+     * The instant the forecast hour begins, on the hour.
+     */
+    at: string;
+    status: ViewingConditionsStatus;
+    source: ForecastSource | null;
+    fetchedAt: string | null;
+    cloudCoverPercent: number | null;
+    cloudCoverLowPercent: number | null;
+    cloudCoverMidPercent: number | null;
+    cloudCoverHighPercent: number | null;
+    precipitationProbabilityPercent: number | null;
+    relativeHumidityPercent: number | null;
+    windSpeedMetresPerSecond: number | null;
+    /**
+     * Only from a source with an astronomy seeing forecast.
+     */
+    seeingArcseconds: number | null;
+};
+
+export type ViewingConditions = {
+    observatoryId: string;
+    /**
+     * The observatory's local date on which tonight begins.
+     */
+    date: string;
+    /**
+     * Tonight's bookable hours in order. Empty when the night offers none.
+     */
+    items: Array<ViewingConditionsHour>;
+};
+
 export const DeviceHealth = {
     OK: 'OK',
     DEGRADED: 'DEGRADED',
@@ -2502,6 +2561,36 @@ export type GetObservatoryStatusResponses = {
 };
 
 export type GetObservatoryStatusResponse = GetObservatoryStatusResponses[keyof GetObservatoryStatusResponses];
+
+export type GetObservatoryConditionsData = {
+    body?: never;
+    path: {
+        /**
+         * An `id` from `GET /observatories`, or for an operator any observatory.
+         */
+        observatoryId: string;
+    };
+    query?: never;
+    url: '/observatories/{observatoryId}/conditions';
+};
+
+export type GetObservatoryConditionsErrors = {
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+};
+
+export type GetObservatoryConditionsError = GetObservatoryConditionsErrors[keyof GetObservatoryConditionsErrors];
+
+export type GetObservatoryConditionsResponses = {
+    /**
+     * Tonight's viewing conditions.
+     */
+    200: ViewingConditions;
+};
+
+export type GetObservatoryConditionsResponse = GetObservatoryConditionsResponses[keyof GetObservatoryConditionsResponses];
 
 export type ListBookableObservatoriesData = {
     body?: never;
