@@ -531,7 +531,8 @@ export const zCreateBookingRequest = z.strictObject({
     targetId: z.uuid(),
     slotStartAt: z.iso.datetime(),
     durationMinutes: z.int().gt(0),
-    locale: zLocale.optional()
+    locale: zLocale.optional(),
+    voucherCode: z.string().min(8).max(64).optional()
 });
 
 export const zCancelBookingRequest = z.strictObject({
@@ -569,7 +570,50 @@ export const zPaymentIntent = z.strictObject({
 
 export const zBookingWithPaymentIntent = z.strictObject({
     booking: zBooking,
+    paymentIntent: zPaymentIntent.nullable()
+});
+
+/**
+ * DV-112. PENDING_PAYMENT until the payment settles; CANCELLED when it fails.
+ * EXPIRED is an ACTIVE voucher past `expiresAt`.
+ *
+ */
+export const zGiftVoucherStatus = z.enum([
+    'PENDING_PAYMENT',
+    'ACTIVE',
+    'REDEEMED',
+    'EXPIRED',
+    'CANCELLED'
+]);
+
+export const zGiftVoucher = z.strictObject({
+    id: z.uuid(),
+    status: zGiftVoucherStatus,
+    durationMinutes: z.int().gt(0),
+    priceMinor: z.int().gte(0),
+    currency: zCurrency,
+    codeLast4: z.string().nullable(),
+    recipientEmail: z.email().nullable(),
+    recipientName: z.string().nullable(),
+    expiresAt: z.iso.datetime().nullable(),
+    redeemedBookingId: z.uuid().nullable(),
+    createdAt: z.iso.datetime()
+});
+
+export const zGiftVoucherList = z.strictObject({
+    items: z.array(zGiftVoucher)
+});
+
+export const zGiftVoucherWithPaymentIntent = z.strictObject({
+    voucher: zGiftVoucher,
     paymentIntent: zPaymentIntent
+});
+
+export const zCreateGiftVoucherRequest = z.strictObject({
+    durationMinutes: z.int().gt(0),
+    recipientEmail: z.email().max(254).optional(),
+    recipientName: z.string().min(1).max(100).optional(),
+    message: z.string().min(1).max(500).optional()
 });
 
 export const zBookingPage = z.strictObject({
@@ -1897,6 +1941,18 @@ export const zCreateBookingHeaders = z.object({
  * Booking reserved, awaiting payment.
  */
 export const zCreateBookingResponse = zBookingWithPaymentIntent;
+
+/**
+ * The buyer's vouchers, newest first.
+ */
+export const zListMyGiftVouchersResponse = zGiftVoucherList;
+
+export const zPurchaseGiftVoucherBody = zCreateGiftVoucherRequest;
+
+/**
+ * Voucher created, awaiting payment.
+ */
+export const zPurchaseGiftVoucherResponse = zGiftVoucherWithPaymentIntent;
 
 export const zGetBookingPath = z.object({
     bookingId: z.uuid()

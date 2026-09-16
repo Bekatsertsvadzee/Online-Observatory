@@ -8,6 +8,7 @@ import { queueEmail } from "@darkview/db/notifications";
 import { releaseHeldSlot } from "@/features/booking/reserve";
 import { TERMINAL_MISSION_STATES } from "@/features/missions/session";
 import type { PaymentOutcome } from "@/features/payments/provider";
+import { settleGiftVoucherPayment } from "@/features/vouchers/vouchers";
 import { getDatabase } from "@/lib/db/client";
 
 export type SettlementFailure = {
@@ -142,6 +143,9 @@ export async function settlePayment(input: {
     // been answered -- and they do not care what was bought.
     if (payment.purpose === "OBSERVER_PACK") {
       return settleObserverPackPayment(tx, payment, outcome, now);
+    }
+    if (payment.purpose === "GIFT_VOUCHER") {
+      return settleGiftVoucherPayment(tx, payment, outcome, now);
     }
 
     // Locked after the read that found it, so read again: a reservation sweeping

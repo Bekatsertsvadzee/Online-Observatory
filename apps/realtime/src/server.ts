@@ -453,7 +453,12 @@ if (process.env.NODE_ENV !== "test") {
       : null;
   if (webhook) {
     setInterval(() => {
-      void dispatchPendingEmails({ database: notifications, webhook, now: new Date() })
+      void dispatchPendingEmails({
+        database: notifications,
+        webhook,
+        now: new Date(),
+        voucherCodeSecret: environment.VOUCHER_CODE_SECRET,
+      })
         .then((summary) => {
           if (summary.failed > 0) {
             console.error(`darkview realtime: ${summary.failed} email(s) gave up after every retry`);

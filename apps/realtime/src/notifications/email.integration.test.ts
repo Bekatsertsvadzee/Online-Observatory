@@ -4,6 +4,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { PrismaClient } from "@darkview/db";
+import { deriveVoucherCode, hashVoucherCode, voucherCodeLast4 } from "@darkview/db/vouchers";
 
 import { createPrismaStore, type RealtimeStore } from "@/link/prisma-store";
 import {
@@ -329,5 +330,125 @@ describe("a capture reaching the Collection", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ kind: "CAPTURE_READY", userId });
     expect(rows[0].payload).toEqual({ captureId: outcome.capture.id });
+  });
+});
+
+describe("gift voucher emails (DV-112)", () => {
+  const VOUCHER_SECRET = "voucher-code-secret-for-integration-000000";
+
+  async function voucher(options: { recipientEmail?: string; status?: "ACTIVE" | "REDEEMED" } = {}) {
+    const payment = await database.payment.create({
+      data: {
+        userId,
+        purpose: "GIFT_VOUCHER",
+        provider: "SANDBOX",
+        status: "CAPTURED",
+        amountMinor: 4500,
+        capturedAt: NOW,
+      },
+    });
+    const id = randomUUID();
+    const code = deriveVoucherCode(VOUCHER_SECRET, id);
+    await database.giftVoucher.create({
+      data: {
+        id,
+        buyerUserId: userId,
+        paymentId: payment.id,
+        codeHash: hashVoucherCode(code),
+        codeLast4: voucherCodeLast4(code),
+        durationMinutes: 30,
+        priceMinor: 4500,
+        status: options.status ?? "ACTIVE",
+        expiresAt: new Date("2027-12-15T18:00:00.000Z"),
+        recipientEmail: options.recipientEmail ?? null,
+        recipientName: options.recipientEmail ? "Friend" : null,
+        message: "Clear skies",
+      },
+    });
+    await database.emailNotification.create({
+      data: {
+        userId,
+        kind: "GIFT_VOUCHER_ISSUED",
+        dedupeKey: `gift-voucher-issued:${id}`,
+        payload: { voucherId: id },
+      },
+    });
+    return { id, code };
+  }
+
+  it("sends the code to the named recipient, and stores it nowhere", async () => {
+    const { code } = await voucher({ recipientEmail: "friend@example.test" });
+    const mail = mailService();
+
+    const summary = await dispatchPendingEmails({
+      database,
+      webhook: WEBHOOK,
+      now: NOW,
+      fetchImpl: mail.fetchImpl,
+      voucherCodeSecret: VOUCHER_SECRET,
+    });
+
+    expect(summary.sent).toBe(1);
+    const body = JSON.parse(mail.sent[0].body);
+    expect(body.recipient).toEqual({ email: "friend@example.test", name: "Friend" });
+    expect(body.data).toMatchObject({
+      code,
+      durationMinutes: 30,
+      message: "Clear skies",
+      buyerName: "Nino",
+      expiresAt: "2027-12-15T18:00:00.000Z",
+    });
+    expect(JSON.stringify(await outbox())).not.toContain(code);
+  });
+
+  it("sends the code to the buyer when no recipient was named", async () => {
+    await voucher();
+    const mail = mailService();
+
+    await dispatchPendingEmails({
+      database,
+      webhook: WEBHOOK,
+      now: NOW,
+      fetchImpl: mail.fetchImpl,
+      voucherCodeSecret: VOUCHER_SECRET,
+    });
+
+    const buyer = await database.user.findUniqueOrThrow({ where: { id: userId } });
+    expect(JSON.parse(mail.sent[0].body).recipient).toEqual({ email: buyer.email, name: "Nino" });
+  });
+
+  it("retries rather than skips when the secret is missing or is not the one the code was ordered under", async () => {
+    await voucher();
+    const mail = mailService();
+
+    const missing = await dispatchPendingEmails({ database, webhook: WEBHOOK, now: NOW, fetchImpl: mail.fetchImpl });
+    const wrong = await dispatchPendingEmails({
+      database,
+      webhook: WEBHOOK,
+      now: new Date(NOW.getTime() + 60 * 60_000),
+      fetchImpl: mail.fetchImpl,
+      voucherCodeSecret: "a-different-secret-that-derives-other-codes",
+    });
+
+    expect(missing.retrying).toBe(1);
+    expect(wrong.retrying).toBe(1);
+    expect(mail.sent).toHaveLength(0);
+    expect((await outbox())[0]).toMatchObject({ status: "PENDING", attempts: 2 });
+  });
+
+  it("does not send a code for a voucher already spent", async () => {
+    await voucher({ status: "REDEEMED" });
+    const mail = mailService();
+
+    const summary = await dispatchPendingEmails({
+      database,
+      webhook: WEBHOOK,
+      now: NOW,
+      fetchImpl: mail.fetchImpl,
+      voucherCodeSecret: VOUCHER_SECRET,
+    });
+
+    expect(summary.skipped).toBe(1);
+    expect(mail.sent).toHaveLength(0);
   });
 });

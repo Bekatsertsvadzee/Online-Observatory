@@ -3,7 +3,11 @@ import { zCreateBookingBody, zIdempotencyKey } from "@darkview/contracts/zod";
 import { reserveSlot } from "@/features/booking/reserve";
 import { requireApiMutation } from "@/lib/auth/api-guard";
 import { apiError } from "@/lib/http/api-error";
-import { BOOKING_POLICY, meterRequest } from "@/lib/security/rate-limit";
+import {
+  BOOKING_POLICY,
+  meterRequest,
+  VOUCHER_REDEMPTION_POLICY,
+} from "@/lib/security/rate-limit";
 
 /**
  * POST /bookings -- reserve a slot and open a payment intent.
@@ -47,6 +51,19 @@ export async function POST(request: Request) {
         message: issue.message,
       })),
     });
+  }
+
+  // DV-112: a code is metered as an attempt whether or not it turns out to be
+  // valid, so a typo loop and a probe spend the same allowance.
+  if (body.data.voucherCode !== undefined) {
+    const redemptionLimited = await meterRequest({
+      policy: VOUCHER_REDEMPTION_POLICY,
+      scope: "voucher-redemption",
+      identity: guard.session.user.id,
+      category: "BOOKING",
+      actorUserId: guard.session.user.id,
+    });
+    if (redemptionLimited) return redemptionLimited;
   }
 
   // Absent is fine -- the key is optional in the contract. Present but malformed

@@ -598,6 +598,7 @@ class CreateBookingRequest(BaseModel):
     slot_start_at: AwareDatetime = Field(..., alias='slotStartAt')
     duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
     locale: Locale | None = None
+    voucher_code: str | None = Field(None, alias='voucherCode', description='A gift voucher code (DV-112). Case and separators are ignored.', max_length=64, min_length=8)
 
 
 class CancelBookingRequest(BaseModel):
@@ -640,6 +641,61 @@ class PaymentIntent(BaseModel):
     status: PaymentStatus
     redirect_url: AnyUrl | None = Field(None, alias='redirectUrl')
     expires_at: AwareDatetime | None = Field(None, alias='expiresAt')
+
+
+class GiftVoucherStatus(StrEnum):
+    """
+    DV-112. PENDING_PAYMENT until the payment settles; CANCELLED when it fails.
+    EXPIRED is an ACTIVE voucher past `expiresAt`.
+
+    """
+    pending_payment = 'PENDING_PAYMENT'
+    active = 'ACTIVE'
+    redeemed = 'REDEEMED'
+    expired = 'EXPIRED'
+    cancelled = 'CANCELLED'
+
+
+class GiftVoucher(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: UUID
+    status: GiftVoucherStatus
+    duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
+    price_minor: int = Field(..., alias='priceMinor', ge=0)
+    currency: Currency
+    code_last4: str | None = Field(..., alias='codeLast4', description="The code's last four characters. Null until the payment settles.")
+    recipient_email: EmailStr | None = Field(..., alias='recipientEmail')
+    recipient_name: str | None = Field(..., alias='recipientName')
+    expires_at: AwareDatetime | None = Field(..., alias='expiresAt', description='Twelve months from payment. Null until the payment settles.')
+    redeemed_booking_id: UUID | None = Field(..., alias='redeemedBookingId')
+    created_at: AwareDatetime = Field(..., alias='createdAt')
+
+
+class GiftVoucherList(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    items: list[GiftVoucher]
+
+
+class GiftVoucherWithPaymentIntent(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    voucher: GiftVoucher
+    payment_intent: PaymentIntent = Field(..., alias='paymentIntent')
+
+
+class CreateGiftVoucherRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    duration_minutes: int = Field(..., alias='durationMinutes', description='The length of the observation the voucher pays for. Must be a length slots are sold at.', gt=0)
+    recipient_email: EmailStr | None = Field(None, alias='recipientEmail', description='Where the code is emailed. The buyer when omitted.', max_length=254)
+    recipient_name: str | None = Field(None, alias='recipientName', max_length=100, min_length=1)
+    message: str | None = Field(None, description='A personal note included in the email.', max_length=500, min_length=1)
 
 
 class PaymentWebhookEnvelope(BaseModel):
@@ -2008,7 +2064,7 @@ class BookingWithPaymentIntent(BaseModel):
         extra='forbid',
     )
     booking: Booking
-    payment_intent: PaymentIntent = Field(..., alias='paymentIntent')
+    payment_intent: PaymentIntent | None = Field(..., alias='paymentIntent', description='Null when a gift voucher paid for the booking (DV-112).')
 
 
 class BookingPage(BaseModel):

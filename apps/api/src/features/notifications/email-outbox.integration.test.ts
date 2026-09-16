@@ -72,7 +72,7 @@ async function reserve() {
     now: NOW,
   });
   if (!result.ok) throw new Error(`fixture reservation failed: ${result.message}`);
-  return result.body;
+  return { booking: result.body.booking, paymentIntent: result.body.paymentIntent! };
 }
 
 function outcome(paymentId: string, amountMinor: number, result: "CAPTURED" | "FAILED" = "CAPTURED") {

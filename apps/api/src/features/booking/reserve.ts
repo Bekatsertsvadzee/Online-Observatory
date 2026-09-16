@@ -9,6 +9,8 @@ import type {
 } from "@darkview/contracts";
 import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { queueEmail } from "@darkview/db/notifications";
+import { hashVoucherCode, normaliseVoucherCode } from "@darkview/db/vouchers";
 
 import {
   findBookableObservatory,
@@ -366,6 +368,20 @@ export async function reserveSlot(input: {
       break;
   }
 
+  if (request.voucherCode !== undefined) {
+    return reserveWithVoucher({
+      userId,
+      voucherCode: request.voucherCode,
+      observatory,
+      targetId: target.id,
+      slotStartAt,
+      durationMinutes: slot.durationMinutes,
+      currency: slot.currency,
+      idempotencyKey,
+      now,
+    });
+  }
+
   const holdExpiresAt = new Date(now.getTime() + PAYMENT_HOLD_MINUTES * 60_000);
 
   try {
@@ -466,6 +482,192 @@ export async function reserveSlot(input: {
   }
 }
 
+/** Thrown inside the transaction when the voucher was not ours to spend, so the booking rolls back. */
+class VoucherUnusable extends Error {}
+
+const VOUCHER_UNUSABLE: ReserveSlotFailure = {
+  ok: false,
+  status: 422,
+  code: "VALIDATION_FAILED",
+  message: "That voucher code cannot be used.",
+};
+
+/**
+ * A booking a gift voucher pays for (DV-112): confirmed at once, at no charge, with
+ * its mission scheduled, and no payment.
+ *
+ * The voucher is claimed by a conditional update inside the reservation's
+ * transaction, after the booking row exists. A slot conflict rolls the claim back
+ * with the booking, so a failed reservation spends nothing; two redemptions racing
+ * on one code both reach the update, and only one of them finds it ACTIVE.
+ *
+ * Unknown, spent, unpaid and expired codes are one answer. A code for another
+ * length says which length, because only somebody holding a valid code gets that far.
+ */
+async function reserveWithVoucher(input: {
+  userId: string;
+  voucherCode: string;
+  observatory: BookableObservatory;
+  targetId: string;
+  slotStartAt: Date;
+  durationMinutes: number;
+  currency: string;
+  idempotencyKey: string | null;
+  now: Date;
+}): Promise<ReserveSlotResult> {
+  const { userId, observatory, targetId, slotStartAt, durationMinutes, idempotencyKey, now } =
+    input;
+  const database = getDatabase();
+
+  const code = normaliseVoucherCode(input.voucherCode);
+  if (!code) return VOUCHER_UNUSABLE;
+  const codeHash = hashVoucherCode(code);
+
+  const voucher = await database.giftVoucher.findUnique({
+    where: { codeHash },
+    select: { id: true, status: true, expiresAt: true, durationMinutes: true },
+  });
+  if (!voucher || voucher.status !== "ACTIVE" || !voucher.expiresAt || voucher.expiresAt <= now) {
+    return VOUCHER_UNUSABLE;
+  }
+  if (voucher.durationMinutes !== durationMinutes) {
+    return {
+      ok: false,
+      status: 422,
+      code: "VALIDATION_FAILED",
+      message: `This voucher is for a ${voucher.durationMinutes}-minute observation.`,
+    };
+  }
+
+  try {
+    const booking = await retryOnDeadlock(() =>
+      database.$transaction(async (tx) => {
+        await expireLapsedHolds(
+          tx as unknown as Parameters<typeof expireLapsedHolds>[0],
+          observatory.id,
+          now,
+        );
+
+        const { mode } = await tx.observatory.findUniqueOrThrow({
+          where: { id: observatory.id },
+          select: { mode: true },
+        });
+
+        const created = await tx.booking.create({
+          data: {
+            userId,
+            targetId,
+            observatoryId: observatory.id,
+            telescopeId: observatory.telescopeId,
+            slotStartAt,
+            durationMinutes,
+            status: "CONFIRMED",
+            priceMinor: 0,
+            currency: input.currency as Prisma.BookingCreateInput["currency"],
+            idempotencyKey,
+            isDemo: observatory.isDemo,
+          },
+        });
+
+        const { count } = await tx.giftVoucher.updateMany({
+          where: {
+            id: voucher.id,
+            codeHash,
+            status: "ACTIVE",
+            durationMinutes,
+            expiresAt: { gt: now },
+          },
+          data: {
+            status: "REDEEMED",
+            redeemedAt: now,
+            redeemedByUserId: userId,
+            redeemedBookingId: created.id,
+          },
+        });
+        if (count === 0) throw new VoucherUnusable();
+
+        // ADR-004, as settlement does it: a booked mission is born SCHEDULED.
+        const mission = await tx.mission.create({
+          data: {
+            userId,
+            targetId,
+            observatoryId: observatory.id,
+            telescopeId: observatory.telescopeId,
+            state: "SCHEDULED",
+            mode,
+            isDemo: observatory.isDemo,
+            requestedAt: now,
+            scheduledFor: slotStartAt,
+          },
+        });
+        await tx.missionEvent.create({
+          data: {
+            missionId: mission.id,
+            state: "SCHEDULED",
+            source: "CLOUD",
+            message: "Paid by gift voucher; mission scheduled for the booked slot.",
+            occurredAt: now,
+            simulated: mode === "SIMULATED",
+            isDemo: observatory.isDemo,
+          },
+        });
+        const confirmed = await tx.booking.update({
+          where: { id: created.id },
+          data: { missionId: mission.id },
+        });
+
+        await recordAuditEvent(
+          {
+            category: "BOOKING",
+            action: "GIFT_VOUCHER_REDEEMED",
+            actorUserId: userId,
+            missionId: mission.id,
+            entityType: "GiftVoucher",
+            entityId: voucher.id,
+            detail: {
+              bookingId: created.id,
+              observatoryId: observatory.id,
+              targetId,
+              slotStartAt: slotStartAt.toISOString(),
+              durationMinutes,
+            },
+            isDemo: observatory.isDemo,
+          },
+          tx,
+        );
+        await queueEmail(tx, {
+          userId,
+          kind: "BOOKING_CONFIRMED",
+          dedupeKey: `booking-confirmed:${created.id}`,
+          payload: { bookingId: created.id },
+        });
+
+        return confirmed;
+      }),
+    );
+
+    return {
+      ok: true,
+      replayed: false,
+      body: { booking: toContractBooking(booking as BookingRow), paymentIntent: null },
+    };
+  } catch (error) {
+    if (error instanceof VoucherUnusable) return VOUCHER_UNUSABLE;
+    if (!isSlotConflict(error)) throw error;
+
+    if (idempotencyKey) {
+      const existing = await replayByIdempotencyKey(userId, idempotencyKey);
+      if (existing) return existing;
+    }
+    return {
+      ok: false,
+      status: 409,
+      code: "SLOT_UNAVAILABLE",
+      message: "That slot has just been taken.",
+    };
+  }
+}
+
 async function replayByIdempotencyKey(
   userId: string,
   idempotencyKey: string,
@@ -474,8 +676,16 @@ async function replayByIdempotencyKey(
 
   const booking = await database.booking.findUnique({
     where: { userId_idempotencyKey: { userId, idempotencyKey } },
-    include: { payment: true },
+    include: { payment: true, redeemedVoucher: { select: { id: true } } },
   });
+
+  if (booking && !booking.payment && booking.redeemedVoucher) {
+    return {
+      ok: true,
+      replayed: true,
+      body: { booking: toContractBooking(booking as BookingRow), paymentIntent: null },
+    };
+  }
 
   if (!booking || !booking.payment) return null;
 

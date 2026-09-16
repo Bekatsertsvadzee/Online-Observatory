@@ -533,6 +533,13 @@ paths:
 
         Send `Idempotency-Key` when retrying. Without it a retry after a timeout can
         reserve a second slot and open a second payment intent.
+
+        **With `voucherCode`** (DV-112) the booking is paid by the voucher: it is
+        CONFIRMED at once at no charge, its mission is scheduled, and `paymentIntent` is
+        null. The voucher is spent in the same transaction as the reservation, so a
+        reservation that fails spends nothing and a voucher is never spent twice. A code
+        that is unknown, spent, expired or unpaid, or for a different length, is 422.
+        Redemption attempts are rate-limited per account.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -556,6 +563,58 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
+
+  /vouchers:
+    get:
+      operationId: listMyGiftVouchers
+      tags: [booking]
+      summary: The gift vouchers the signed-in user bought.
+      description: |
+        DV-112. Never includes a code: codes are stored hashed and reach only the
+        email sent when the payment settles. `codeLast4` lets a buyer tell vouchers apart.
+      responses:
+        "200":
+          description: The buyer's vouchers, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GiftVoucherList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: purchaseGiftVoucher
+      tags: [booking]
+      summary: Buy a gift voucher for one observation of a given length.
+      description: |
+        DV-112. Opens a payment intent through the same provider path as a booking. When
+        the payment settles the voucher becomes ACTIVE for twelve months and its code is
+        emailed to `recipientEmail`, or to the buyer when none is given.
+
+        A voucher pays for exactly one booking of `durationMinutes`, redeemed with
+        `voucherCode` on `POST /bookings`. It is not exchangeable for cash: a refunded
+        booking a voucher paid for restores the voucher instead (DV-111).
+
+        422 for a length no slot is sold at. 503 when vouchers are not configured on
+        this deployment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGiftVoucherRequest"
+      responses:
+        "201":
+          description: Voucher created, awaiting payment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GiftVoucherWithPaymentIntent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /bookings/{bookingId}:
     get:
@@ -2915,6 +2974,11 @@ components:
           exclusiveMinimum: 0
         locale:
           $ref: "#/components/schemas/Locale"
+        voucherCode:
+          type: string
+          minLength: 8
+          maxLength: 64
+          description: A gift voucher code (DV-112). Case and separators are ignored.
 
     CancelBookingRequest:
       type: object
@@ -2965,7 +3029,109 @@ components:
         booking:
           $ref: "#/components/schemas/Booking"
         paymentIntent:
+          description: Null when a gift voucher paid for the booking (DV-112).
+          oneOf:
+            - $ref: "#/components/schemas/PaymentIntent"
+            - type: "null"
+
+    GiftVoucherStatus:
+      type: string
+      description: |
+        DV-112. PENDING_PAYMENT until the payment settles; CANCELLED when it fails.
+        EXPIRED is an ACTIVE voucher past `expiresAt`.
+      enum: [PENDING_PAYMENT, ACTIVE, REDEEMED, EXPIRED, CANCELLED]
+
+    GiftVoucher:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - status
+        - durationMinutes
+        - priceMinor
+        - currency
+        - codeLast4
+        - recipientEmail
+        - recipientName
+        - expiresAt
+        - redeemedBookingId
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/GiftVoucherStatus"
+        durationMinutes:
+          type: integer
+          exclusiveMinimum: 0
+        priceMinor:
+          type: integer
+          minimum: 0
+        currency:
+          $ref: "#/components/schemas/Currency"
+        codeLast4:
+          type: [string, "null"]
+          description: The code's last four characters. Null until the payment settles.
+        recipientEmail:
+          type: [string, "null"]
+          format: email
+        recipientName:
+          type: [string, "null"]
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+          description: Twelve months from payment. Null until the payment settles.
+        redeemedBookingId:
+          type: [string, "null"]
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+
+    GiftVoucherList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/GiftVoucher"
+
+    GiftVoucherWithPaymentIntent:
+      type: object
+      additionalProperties: false
+      required: [voucher, paymentIntent]
+      properties:
+        voucher:
+          $ref: "#/components/schemas/GiftVoucher"
+        paymentIntent:
           $ref: "#/components/schemas/PaymentIntent"
+
+    CreateGiftVoucherRequest:
+      type: object
+      additionalProperties: false
+      required: [durationMinutes]
+      properties:
+        durationMinutes:
+          type: integer
+          exclusiveMinimum: 0
+          description: The length of the observation the voucher pays for. Must be a length slots are sold at.
+        recipientEmail:
+          type: string
+          format: email
+          maxLength: 254
+          description: Where the code is emailed. The buyer when omitted.
+        recipientName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        message:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: A personal note included in the email.
 
     BookingPage:
       type: object

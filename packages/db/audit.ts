@@ -46,6 +46,13 @@ export type AuditAction =
   // the customer used it to book another slot.
   | "BOOKING_ENTITLEMENT_GRANTED"
   | "BOOKING_RESCHEDULED"
+  // DV-112: a gift voucher ordered, paid for, spent on a booking, or given back
+  // when that booking was refunded. Never the code.
+  | "GIFT_VOUCHER_ORDERED"
+  | "GIFT_VOUCHER_ISSUED"
+  | "GIFT_VOUCHER_PAYMENT_FAILED"
+  | "GIFT_VOUCHER_REDEEMED"
+  | "GIFT_VOUCHER_RESTORED"
   // PAYMENT -- written by the webhook path (DV-056). A refusal is recorded
   // because a callback that failed its signature and left nothing behind is
   // indistinguishable from one that never arrived.

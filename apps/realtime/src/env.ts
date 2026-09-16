@@ -39,6 +39,12 @@ const schema = z.object({
    * keyless endpoint, which Open-Meteo licenses for non-commercial use only.
    */
   OPEN_METEO_API_KEY: z.string().min(1).optional(),
+  /**
+   * Derives gift voucher codes (DV-112), the same value the API holds. Required: the
+   * issued email is the only place a code is written, and a service that cannot
+   * write it must not start and quietly retry those emails until they fail.
+   */
+  VOUCHER_CODE_SECRET: z.string().min(32),
 }).refine(
   (environment) =>
     Boolean(environment.NOTIFICATION_WEBHOOK_URL) ===
