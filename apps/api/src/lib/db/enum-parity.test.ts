@@ -13,6 +13,7 @@ import * as db from "@darkview/db/enums";
  */
 const SHARED_ENUMS = [
   "AuditCategory",
+  "BookingLossCause",
   "BookingStatus",
   "CaptureAssetKind",
   "CaptureVisibility",
@@ -51,6 +52,9 @@ const DATABASE_ONLY = new Set([
   // client is told either value.
   "EmailNotificationKind",
   "EmailNotificationStatus",
+  // DV-111: NONE is the database remembering a slot was evaluated. The contract's
+  // BookingEntitlement.status carries the three values a customer is shown.
+  "BookingEntitlementOutcome",
   "EquipmentStatus",
   "MissionJoinPolicy",
   "MissionParticipantStatus",

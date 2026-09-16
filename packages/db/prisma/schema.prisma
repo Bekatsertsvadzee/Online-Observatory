@@ -365,6 +365,7 @@ model User {
   networkNodes        ObservatoryNetworkNode[] @relation("NetworkNodeOwner")
   observerPacks       ObserverPack[]
   emailNotifications  EmailNotification[]
+  bookingEntitlements BookingEntitlement[]
 }
 
 model Account {
@@ -878,6 +879,10 @@ model Booking {
   mission         Mission?      @relation(fields: [missionId], references: [id], onDelete: SetNull)
   payment         Payment?      @relation(fields: [paymentId], references: [id], onDelete: SetNull)
   privateSession  PrivateSession?
+  /// DV-111. What this booking's slot entitles the customer to, once it has ended.
+  entitlement     BookingEntitlement? @relation("BookingEntitlement")
+  /// DV-111. Set on a free reschedule: the entitlement this booking was made from.
+  rescheduledFrom BookingEntitlement? @relation("RescheduledTo")
 
   @@unique([userId, idempotencyKey])
   @@index([observatoryId, slotStartAt])
@@ -1216,6 +1221,49 @@ enum EmailNotificationKind {
   SLOT_REMINDER
   WEATHER_HOLD
   CAPTURE_READY
+  ENTITLEMENT_AVAILABLE
+  BOOKING_REFUNDED
+}
+
+/// Contract: BookingLossCause (DV-111).
+enum BookingLossCause {
+  WEATHER
+  OBSERVATORY_FAULT
+}
+
+/// DV-111. NONE: the slot was evaluated and nothing was lost on our side, or less
+/// than half of it -- recorded so the slot is never evaluated twice.
+enum BookingEntitlementOutcome {
+  NONE
+  OPEN
+  REFUNDED
+  RESCHEDULED
+}
+
+/// DV-111. The result of evaluating one ended slot, written once.
+///
+/// Maintainer rules, 2026-09-15: a slot lost to weather or to our fault, where the
+/// customer lost half the slot or more, entitles them to choose a full refund or a
+/// free reschedule; a reschedule must be used within 30 days, after which the
+/// entitlement becomes a refund.
+model BookingEntitlement {
+  id                   String                    @id @default(uuid()) @db.Uuid
+  bookingId            String                    @unique @db.Uuid
+  userId               String                    @db.Uuid
+  outcome              BookingEntitlementOutcome
+  cause                BookingLossCause?
+  minutesLost          Int
+  evaluatedAt          DateTime
+  expiresAt            DateTime?
+  resolvedAt           DateTime?
+  rescheduledBookingId String?                   @unique @db.Uuid
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+  booking              Booking                   @relation("BookingEntitlement", fields: [bookingId], references: [id], onDelete: Cascade)
+  rescheduledBooking   Booking?                  @relation("RescheduledTo", fields: [rescheduledBookingId], references: [id], onDelete: SetNull)
+  user                 User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([outcome, expiresAt])
 }
 
 /// SKIPPED: not sent because it no longer applies. FAILED: ran out of attempts.

@@ -28,6 +28,7 @@ import { handleStreamRequest } from "@/stream/http";
 import { LiveStream } from "@/stream/live-stream";
 import { getEnvironment } from "@/env";
 import { dispatchPendingEmails, queueSlotReminders } from "@/notifications/email";
+import { evaluateEndedSlots, refundExpiredEntitlements } from "@/refunds/entitlements";
 
 const AGENT_PATH = "/ws/agent";
 
@@ -36,6 +37,12 @@ const REMINDER_SWEEP_INTERVAL_SECONDS = 60;
 
 /** How often the email outbox is delivered (DV-064). */
 const EMAIL_DISPATCH_INTERVAL_SECONDS = 30;
+
+/**
+ * How often ended slots are judged and thirty-day entitlements refunded (DV-111).
+ * Neither is urgent to the minute; both are idempotent.
+ */
+const ENTITLEMENT_SWEEP_INTERVAL_SECONDS = 60;
 
 /**
  * `ws` hands a binary message as a Buffer, an ArrayBuffer or an array of Buffers
@@ -390,6 +397,23 @@ if (process.env.NODE_ENV !== "test") {
       console.error("darkview realtime: slot reminders", error);
     });
   }, REMINDER_SWEEP_INTERVAL_SECONDS * 1000);
+
+  // DV-111, sharing the notifications client: both write to the email outbox.
+  setInterval(() => {
+    const now = new Date();
+    void evaluateEndedSlots(notifications, now)
+      .then(() => refundExpiredEntitlements(notifications, now))
+      .then(({ unrefundable }) => {
+        if (unrefundable > 0) {
+          console.error(
+            `darkview realtime: ${unrefundable} expired entitlement(s) are on a provider with no refund integration`,
+          );
+        }
+      })
+      .catch((error) => {
+        console.error("darkview realtime: entitlements", error);
+      });
+  }, ENTITLEMENT_SWEEP_INTERVAL_SECONDS * 1000);
 
   const webhook =
     environment.NOTIFICATION_WEBHOOK_URL && environment.NOTIFICATION_WEBHOOK_SECRET

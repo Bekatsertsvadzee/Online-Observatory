@@ -3,7 +3,11 @@ import "server-only";
 import type { Booking, ErrorCode } from "@darkview/contracts";
 
 import { getDatabase } from "@/lib/db/client";
-import { releaseHeldSlot, toContractBooking } from "@/features/booking/reserve";
+import {
+  BOOKING_ENTITLEMENT_SELECT,
+  releaseHeldSlot,
+  toContractBooking,
+} from "@/features/booking/reserve";
 
 type Refusal = { ok: false; status: 404 | 409; code: ErrorCode; message: string };
 
@@ -16,6 +20,7 @@ export async function getMyBooking(input: {
 }): Promise<Booking | null> {
   const row = await getDatabase().booking.findFirst({
     where: { id: input.bookingId, userId: input.userId },
+    include: { entitlement: BOOKING_ENTITLEMENT_SELECT },
   });
   return row ? toContractBooking(row) : null;
 }

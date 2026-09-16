@@ -443,6 +443,31 @@ export const zBookingStatus = z.enum([
     'REFUNDED'
 ]);
 
+/**
+ * What lost the slot. A customer who did not show up is not a cause.
+ */
+export const zBookingLossCause = z.enum(['WEATHER', 'OBSERVATORY_FAULT']);
+
+/**
+ * DV-111, maintainer rules of 2026-09-15. A slot lost to weather or to an
+ * observatory fault -- internet, power or telescope -- where the customer lost
+ * half the slot or more. OPEN offers a full refund or a free reschedule until
+ * `expiresAt`, thirty days after the slot was evaluated; an entitlement still
+ * OPEN then is refunded automatically.
+ *
+ */
+export const zBookingEntitlement = z.strictObject({
+    status: z.enum([
+        'OPEN',
+        'REFUNDED',
+        'RESCHEDULED'
+    ]),
+    cause: zBookingLossCause,
+    minutesLost: z.int().gte(0),
+    expiresAt: z.iso.datetime(),
+    rescheduledBookingId: z.uuid().nullable()
+});
+
 export const zBooking = z.strictObject({
     id: z.uuid(),
     userId: z.uuid(),
@@ -455,7 +480,13 @@ export const zBooking = z.strictObject({
     currency: zCurrency,
     paymentId: z.uuid().nullish(),
     missionId: z.uuid().nullish(),
+    entitlement: zBookingEntitlement.nullish(),
     createdAt: z.iso.datetime()
+});
+
+export const zRescheduleBookingRequest = z.strictObject({
+    slotStartAt: z.iso.datetime(),
+    targetId: z.uuid().optional()
 });
 
 export const zCreateBookingRequest = z.strictObject({
@@ -1840,6 +1871,26 @@ export const zCancelBookingPath = z.object({
  * The cancelled booking.
  */
 export const zCancelBookingResponse = zBooking;
+
+export const zRefundBookingPath = z.object({
+    bookingId: z.uuid()
+});
+
+/**
+ * The refunded booking.
+ */
+export const zRefundBookingResponse = zBooking;
+
+export const zRescheduleBookingBody = zRescheduleBookingRequest;
+
+export const zRescheduleBookingPath = z.object({
+    bookingId: z.uuid()
+});
+
+/**
+ * The new, confirmed booking.
+ */
+export const zRescheduleBookingResponse = zBooking;
 
 export const zReceivePaymentWebhookBody = zPaymentWebhookEnvelope;
 

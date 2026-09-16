@@ -673,7 +673,53 @@ export type Booking = {
     currency: Currency;
     paymentId?: string | null;
     missionId?: string | null;
+    /**
+     * DV-111. Null until the slot has ended and been evaluated, and when nothing
+     * was lost on our side or less than half the slot was lost.
+     *
+     */
+    entitlement?: BookingEntitlement | null;
     createdAt: string;
+};
+
+/**
+ * What lost the slot. A customer who did not show up is not a cause.
+ */
+export const BookingLossCause = { WEATHER: 'WEATHER', OBSERVATORY_FAULT: 'OBSERVATORY_FAULT' } as const;
+
+/**
+ * What lost the slot. A customer who did not show up is not a cause.
+ */
+export type BookingLossCause = typeof BookingLossCause[keyof typeof BookingLossCause];
+
+/**
+ * DV-111, maintainer rules of 2026-09-15. A slot lost to weather or to an
+ * observatory fault -- internet, power or telescope -- where the customer lost
+ * half the slot or more. OPEN offers a full refund or a free reschedule until
+ * `expiresAt`, thirty days after the slot was evaluated; an entitlement still
+ * OPEN then is refunded automatically.
+ *
+ */
+export type BookingEntitlement = {
+    status: 'OPEN' | 'REFUNDED' | 'RESCHEDULED';
+    cause: BookingLossCause;
+    minutesLost: number;
+    expiresAt: string;
+    /**
+     * The replacement booking, once RESCHEDULED.
+     */
+    rescheduledBookingId: string | null;
+};
+
+export type RescheduleBookingRequest = {
+    /**
+     * A slot `GET /slots` offers on the booking's telescope, of the booking's length.
+     */
+    slotStartAt: string;
+    /**
+     * Defaults to the original booking's target.
+     */
+    targetId?: string;
 };
 
 export type CreateBookingRequest = {
@@ -2744,6 +2790,84 @@ export type CancelBookingResponses = {
 };
 
 export type CancelBookingResponse = CancelBookingResponses[keyof CancelBookingResponses];
+
+export type RefundBookingData = {
+    body?: never;
+    path: {
+        bookingId: string;
+    };
+    query?: never;
+    url: '/bookings/{bookingId}/refund';
+};
+
+export type RefundBookingErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * A dependency this request needs is not configured or not reachable.
+     */
+    503: ApiError;
+};
+
+export type RefundBookingError = RefundBookingErrors[keyof RefundBookingErrors];
+
+export type RefundBookingResponses = {
+    /**
+     * The refunded booking.
+     */
+    200: Booking;
+};
+
+export type RefundBookingResponse = RefundBookingResponses[keyof RefundBookingResponses];
+
+export type RescheduleBookingData = {
+    body: RescheduleBookingRequest;
+    path: {
+        bookingId: string;
+    };
+    query?: never;
+    url: '/bookings/{bookingId}/reschedule';
+};
+
+export type RescheduleBookingErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type RescheduleBookingError = RescheduleBookingErrors[keyof RescheduleBookingErrors];
+
+export type RescheduleBookingResponses = {
+    /**
+     * The new, confirmed booking.
+     */
+    201: Booking;
+};
+
+export type RescheduleBookingResponse = RescheduleBookingResponses[keyof RescheduleBookingResponses];
 
 export type ReceivePaymentWebhookData = {
     body: PaymentWebhookEnvelope;
