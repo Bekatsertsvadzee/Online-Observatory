@@ -13,6 +13,10 @@ import numpy as np
 
 from contracts.models import ObservatoryMode
 
+#: Spelled out here rather than imported: `frame` deliberately imports nothing
+#: from the rest of the agent, and `capture.colour` imports this module.
+_BAYER_PATTERNS = ("RGGB", "BGGR", "GRBG", "GBRG")
+
 
 @dataclass(frozen=True)
 class Frame:
@@ -32,6 +36,13 @@ class Frame:
     captured_at: datetime
     mode: ObservatoryMode
     stacked_frames: int | None = None
+    bayer_pattern: str | None = None
+    """The sensor's colour filter pattern, or None for a genuinely mono frame.
+
+    Carried with the data rather than looked up from configuration, for the same
+    reason `mode` is: a frame that travelled without it could be rendered as a
+    grey checkerboard, or worse, stacked with its colours swapped (ADR-021).
+    """
 
     def __post_init__(self) -> None:
         if self.pixels.ndim != 2:
@@ -44,6 +55,11 @@ class Frame:
             raise ValueError("gain must not be negative")
         if self.captured_at.tzinfo is None:
             raise ValueError("capturedAt must be timezone-aware")
+        if self.bayer_pattern is not None and self.bayer_pattern not in _BAYER_PATTERNS:
+            raise ValueError(
+                f"{self.bayer_pattern!r} is not a Bayer pattern; "
+                f"expected one of {', '.join(sorted(_BAYER_PATTERNS))} or None"
+            )
 
     @property
     def height_px(self) -> int:
@@ -52,6 +68,11 @@ class Frame:
     @property
     def width_px(self) -> int:
         return int(self.pixels.shape[1])
+
+    @property
+    def is_mosaic(self) -> bool:
+        """Whether this frame is raw colour-filtered data rather than an image."""
+        return self.bayer_pattern is not None
 
     @property
     def is_simulated(self) -> bool:

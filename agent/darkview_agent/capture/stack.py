@@ -153,6 +153,11 @@ def align_shift(reference: np.ndarray, moving: np.ndarray) -> tuple[int, int]:
     return dy, dx
 
 
+def _to_even(offset: int) -> int:
+    """The even offset nearest zero. Under-corrects by a pixel rather than over."""
+    return 2 * int(offset / 2)
+
+
 def shift_image(pixels: np.ndarray, dy: int, dx: int) -> np.ndarray:
     """Translate by whole pixels, filling what moves in with the frame's median.
 
@@ -253,6 +258,12 @@ class LiveStack:
             return self._refuse(frame, REJECT_BACKGROUND)
 
         dy, dx = align_shift(self._reference, frame.pixels)
+        if frame.is_mosaic:
+            # The colour pattern repeats every two pixels, so an odd correction
+            # lands red on green and the stack averages the channels into each
+            # other -- degrading as it "improves" (ADR-021). The residual is under
+            # one pixel, which is smaller than the seeing disc.
+            dy, dx = _to_even(dy), _to_even(dx)
         limit_y = self._reference.shape[0] * self._max_shift_fraction
         limit_x = self._reference.shape[1] * self._max_shift_fraction
         if abs(dy) > limit_y or abs(dx) > limit_x:

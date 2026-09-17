@@ -16,6 +16,10 @@ from typing import Any
 from darkview_agent.devices.base import DeviceError
 from darkview_agent.devices.zwo import ExposureState, SensorInfo
 
+#: zwoasi's ASI_BAYER_* values, in order. The two-letter name is the top row of
+#: the 2x2; the bottom row is the other two colours, which is why RG means RGGB.
+_BAYER_PATTERNS = ("RGGB", "BGGR", "GRBG", "GBRG")
+
 #: zwoasi's ASI_EXP_* values, in order.
 _EXPOSURE_STATES = (
     ExposureState.IDLE,
@@ -64,6 +68,11 @@ class ZwoasiCamera:
             height_px=int(properties["MaxHeight"]),
             bit_depth=int(properties["BitDepth"]),
             is_color=bool(properties["IsColorCam"]),
+            bayer_pattern=(
+                _BAYER_PATTERNS[int(properties["BayerPattern"])]
+                if properties["IsColorCam"]
+                else None
+            ),
             gain_min=int(controls["Gain"]["MinValue"]),
             gain_max=int(controls["Gain"]["MaxValue"]),
             exposure_min_us=int(controls["Exposure"]["MinValue"]),

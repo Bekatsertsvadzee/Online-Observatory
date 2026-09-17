@@ -33,6 +33,7 @@ from dataclasses import dataclass
 
 from PIL import Image
 
+from darkview_agent.capture import colour
 from darkview_agent.capture.overlay import Caption
 from darkview_agent.capture.overlay import apply as apply_caption
 from darkview_agent.devices.frame import Frame
@@ -129,7 +130,11 @@ def render(
     re-stretched: it previews the image the customer will open, not a different
     rendering of the stack.
     """
-    stretched = Image.fromarray(stretch_to_8bit(frame.pixels, settings or StreamSettings()))
+    # Debayered first for a colour frame, exactly as the live view does it, so the
+    # picture a customer keeps is the picture they watched (ADR-021).
+    stretched = Image.fromarray(
+        stretch_to_8bit(colour.to_display(frame), settings or StreamSettings())
+    )
     full = _fit(stretched, image_max_edge_px)
 
     unmarked = full.convert("RGB")
