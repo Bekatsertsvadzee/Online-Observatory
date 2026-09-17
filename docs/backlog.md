@@ -967,13 +967,13 @@ refuses to start until the camera exists.
 heartbeat-loss fallback, so a stuck ASTAP cannot pass for a dead link, but a slow solve
 still delays the heartbeat. Moving the solve off the pass is a runner change.
 
-**Found while wiring it, not fixed here: `CENTERING` does not use the solve.**
-`MissionRunner._do_centering` re-slews to the requested RA/Dec, which is where the
-mount was already sent, and `_do_verifying` measures the offset in declination only. On
-`SimSolver` this converges because the simulated error shrinks on its own. On a real
-mount the same command lands in the same wrong place three times and the mission fails
-with `CENTERING_ITERATIONS_EXHAUSTED`. The correction has to apply the solved offset --
-in both axes -- to the commanded position. It needs its own issue before DV-036.
+**Found while wiring it, and fixed by #108: `CENTERING` did not use the solve.**
+`MissionRunner._do_centering` re-slewed to the requested RA/Dec, which is where the
+mount was already sent, and `_do_verifying` measured the offset in declination only. It
+passed on `SimSolver` only because the simulated error shrank on its own. The runner now
+measures the great-circle separation, sends the mount as far the other way as it missed,
+and checks the corrected position against the envelope before slewing; `SimSolver`
+models a pointing error that stays with the mount.
 
 ## What DV-040 wired, and what it deferred
 
@@ -1004,7 +1004,7 @@ performs tells the customer the telescope did something it did not do.
 | Command | Owed to | What is missing |
 | --- | --- | --- |
 | `CAPTURE` | DV-033, DV-061 | The live stack, the upload and somewhere to keep the result |
-| `FOCUS` | DV-031 | The focuser driver and the autofocus routine |
+| `FOCUS` | DV-031 | **Performed while OBSERVING**, on the simulator; the real focuser driver is still missing — no document names the focus motor |
 | `SET_PROFILE` | DV-033 | The table mapping an imaging profile to exposure, gain and ROI |
 
 `CAPTURE` is a `ClientCommandType`. Until DV-033 lands, the Capture control has nothing

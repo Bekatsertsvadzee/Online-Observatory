@@ -34,6 +34,7 @@ from darkview_agent.capture.stack import LiveStack, integration_seconds
 from darkview_agent.clock import Clock, SystemClock, wire_timestamp
 from darkview_agent.devices.base import DeviceError
 from darkview_agent.devices.frame import Frame
+from darkview_agent.focus.autofocus import Autofocus, FocusMove, FocusResult
 from darkview_agent.mission.solver import PlateSolver, SolveResult, separation_degrees
 from darkview_agent.runtime import Devices
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
@@ -174,6 +175,8 @@ class _Progress:
     solve_attempts: int = 0
     #: The solve CENTERING corrects from.
     solved: SolveResult | None = None
+    #: A FOCUS in progress. OBSERVING holds while it runs.
+    focus: Autofocus | FocusMove | None = None
     frames_captured: int = 0
     exposure_started: bool = False
     #: The watchdog has aborted the exposure and the link is not yet back. No
@@ -603,6 +606,37 @@ class MissionRunner:
         )
         return True
 
+    def request_focus(self, position: int | None) -> str | None:
+        """Autofocus, or move the focuser to `position`. Returns why not, or None.
+
+        Only while OBSERVING. It is the one state where the camera is free and the
+        mount is on a field of stars; before it the plate solver owns the camera,
+        after it the capture run does, and a focus change halfway through a stack
+        would average sharp frames with soft ones.
+        """
+        progress = self._progress
+        if progress is None or self._state is not MissionState.observing:
+            return f"focus is only changed while observing; the mission is {self._state.value}"
+        if progress.focus is not None:
+            return "a focus change is already in progress"
+
+        if position is None:
+            progress.focus = Autofocus(
+                self._devices.focuser,
+                self._devices.camera,
+                exposure_milliseconds=progress.request.exposure_milliseconds,
+                gain=progress.request.gain,
+                show=self._show,
+            )
+        else:
+            progress.focus = FocusMove(self._devices.focuser, position)
+        logger.info(
+            "focus requested for mission %s: %s",
+            progress.request.mission_id,
+            "autofocus" if position is None else f"move to {position}",
+        )
+        return None
+
     def _do_observing(self, at_time: datetime) -> None:
         """Hold on the target with the live view running, until Capture or timeout.
 
@@ -611,6 +645,18 @@ class MissionRunner:
         observatory finishing; this is the part the customer is here for.
         """
         progress = self._require_progress()
+
+        # A capture requested mid-focus waits for it; so does the timeout.
+        if progress.focus is not None:
+            outcome = progress.focus.pump()
+            if not outcome:
+                return
+            if isinstance(outcome, FocusResult):
+                logger.info("focus finished: %s", outcome.detail)
+            progress.focus = None
+            # The stack so far was built at the old focus.
+            self._stack.reset()
+            progress.stacked = None
 
         if progress.capture_command_id is not None:
             self._transition(MissionState.capturing, at_time)
@@ -749,6 +795,15 @@ class MissionRunner:
         progress = self._progress
         if progress is None:
             return
+        if progress.focus is not None:
+            try:
+                if isinstance(progress.focus, Autofocus):
+                    progress.focus.cancel()
+                else:
+                    self._devices.focuser.halt()
+            except Exception as error:
+                logger.error("could not stop the focuser (%s): %s", why, error)
+            progress.focus = None
         try:
             self._devices.mount.park()
             progress.parked = True

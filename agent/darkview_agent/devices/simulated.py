@@ -174,6 +174,11 @@ class SimCamera(CameraDriver):
 
     DEFAULT_WIDTH_PX = 1920
     DEFAULT_HEIGHT_PX = 1080
+    #: Where the simulated optical train is in focus, and how many focuser steps
+    #: away from it widen a star by one pixel. Simulator behaviour, not a figure
+    #: for the real C6; first light finds that one.
+    BEST_FOCUS_POSITION = 16000
+    STEPS_PER_PIXEL_OF_BLUR = 200.0
 
     def __init__(
         self,
@@ -181,9 +186,14 @@ class SimCamera(CameraDriver):
         mount: SimMount | None = None,
         width_px: int = DEFAULT_WIDTH_PX,
         height_px: int = DEFAULT_HEIGHT_PX,
+        focuser: SimFocuser | None = None,
+        best_focus_position: int = BEST_FOCUS_POSITION,
     ) -> None:
         self._clock = clock or SystemClock()
         self._mount = mount
+        # Without a focuser the field is rendered sharp, as it always was.
+        self._focuser = focuser
+        self._best_focus = best_focus_position
         self._width = width_px
         self._height = height_px
         self._connected = False
@@ -252,6 +262,12 @@ class SimCamera(CameraDriver):
             azimuth_degrees=azimuth,
             exposure_milliseconds=self._exposure_milliseconds,
             gain=self._gain,
+            defocus_px=(
+                0.0
+                if self._focuser is None
+                else abs(self._focuser.optical_position - self._best_focus)
+                / self.STEPS_PER_PIXEL_OF_BLUR
+            ),
         )
         self._exposure_start = None
 
@@ -269,16 +285,28 @@ class SimFocuser(FocuserDriver):
 
     Backlash is modelled because it is real and it matters: an autofocus routine
     that ignores direction change converges to the wrong position on hardware.
-    DV-031 needs somewhere to prove it handles that before the motor arrives.
+    The reported position is the motor's. `optical_position` is where the optics
+    actually are: after a reversal the motor turns through the slack before the
+    drawtube moves, so the two differ by the backlash until the direction reverses
+    again. Only the simulated camera reads it -- a real focuser cannot report it,
+    which is the whole problem.
     """
 
     MAX_POSITION = 30000
     STEPS_PER_SECOND = 900.0
     BACKLASH_STEPS = 45
 
-    def __init__(self, clock: Clock | None = None, position: int = 15000) -> None:
+    def __init__(
+        self,
+        clock: Clock | None = None,
+        position: int = 15000,
+        backlash_steps: int = BACKLASH_STEPS,
+    ) -> None:
         self._clock = clock or SystemClock()
         self._connected = False
+        self._backlash = backlash_steps
+        #: Motor position minus optical position once the move has finished.
+        self._slack = 0
         self._position = position
         self._target = position
         self._move_start: float | None = None
@@ -308,6 +336,12 @@ class SimFocuser(FocuserDriver):
         fraction = 0.0 if self._move_duration == 0 else elapsed / self._move_duration
         self._position = int(self._move_from + (self._target - self._move_from) * fraction)
 
+    @property
+    def optical_position(self) -> int:
+        """Where the optics are. Settled moves only; the simulated camera reads this."""
+        self._settle()
+        return self._position - self._slack
+
     def status(self) -> FocuserStatus:
         self._settle()
         return FocuserStatus(
@@ -332,6 +366,12 @@ class SimFocuser(FocuserDriver):
         # Reversing direction eats the backlash before the optics move.
         if direction != 0 and self._last_direction != 0 and direction != self._last_direction:
             distance += self.BACKLASH_STEPS
+        # Play of width `backlash`: the optics sit between `motor - backlash` and
+        # `motor`, and only move when the motor pushes them past an end. Moving
+        # outward leaves them `backlash` behind; moving inward leaves them level.
+        optical = self._position - self._slack
+        optical = max(position - self._backlash, min(optical, position))
+        self._slack = position - optical
 
         self._move_from = self._position
         self._target = position

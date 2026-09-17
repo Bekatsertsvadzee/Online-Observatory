@@ -87,7 +87,6 @@ DEFAULT_LOOP_INTERVAL_SECONDS = 0.25
 #: an ACCEPTED ack for a command nothing performs tells the cloud, the operator
 #: and the customer that the telescope did something it did not do.
 UNIMPLEMENTED_COMMANDS: dict[str, str] = {
-    "FOCUS": "FOCUS needs the focuser driver and autofocus routine (DV-031)",
     "SET_PROFILE": (
         "SET_PROFILE needs the imaging profile table that maps a profile to "
         "exposure, gain and ROI (DV-033)"
@@ -647,6 +646,8 @@ class Supervisor:
                     return self._execute_goto(envelope, payload, at_time)
                 if payload.kind == "CAPTURE":
                     return self._execute_capture(envelope, payload)
+                if payload.kind == "FOCUS":
+                    return self._execute_focus(envelope, payload)
                 if payload.kind == "NUDGE":
                     return self._execute_nudge(payload)
                 if payload.kind == "ABORT":
@@ -757,6 +758,50 @@ class Supervisor:
             command_id=str(envelope.command_id),
             detail=f"{payload.imaging_profile.value}: {settings.frames} x "
             f"{settings.exposure_milliseconds:.0f}ms at gain {settings.gain}",
+            context={"missionId": str(envelope.mission_id)},
+        )
+        return None
+
+    def _execute_focus(self, envelope: CommandEnvelope, payload) -> Refusal | None:
+        """Autofocus, or an absolute focuser position, during the observation.
+
+        With no mission there is no field of stars to focus on and no one
+        watching the result, so a FOCUS then is refused like a capture is.
+        """
+        if not self._runner.is_active:
+            return (
+                CommandRejectionReason.no_active_mission,
+                "a focus change arrived with no mission running; there is no field to focus on",
+            )
+        if self._runner.mission_id != str(envelope.mission_id):
+            return (
+                CommandRejectionReason.mission_already_active,
+                f"mission {self._runner.mission_id} is running; "
+                f"{envelope.mission_id} is not the mission on target",
+            )
+
+        absolute = payload.mode.value == "ABSOLUTE"
+        if absolute and payload.absolute_position is None:
+            return (
+                CommandRejectionReason.malformed_payload,
+                "an ABSOLUTE focus needs absolutePosition",
+            )
+        position = payload.absolute_position if absolute else None
+        max_position = self._devices.focuser.status().max_position
+        if position is not None and not 0 <= position <= max_position:
+            return (
+                CommandRejectionReason.malformed_payload,
+                f"absolutePosition {position} is outside the focuser's travel 0..{max_position}",
+            )
+
+        refusal = self._runner.request_focus(position)
+        if refusal is not None:
+            return (CommandRejectionReason.device_unavailable, refusal)
+
+        self._audit_event(
+            "FOCUS_REQUESTED",
+            command_id=str(envelope.command_id),
+            detail="autofocus" if position is None else f"move to {position}",
             context={"missionId": str(envelope.mission_id)},
         )
         return None
