@@ -21,12 +21,16 @@ from darkview_agent.devices.base import (
     NotConnectedError,
 )
 from darkview_agent.devices.simulated import SimCamera, SimFocuser, SimMount
+from tests.fake_alpaca import FakeAlpacaTelescope, alpaca_mount
 
 
 # Registries. Real implementations join these as they are written; nothing else
 # in this file changes when they do.
 def mount_implementations():
-    return [("SimMount", lambda clock: SimMount(clock=clock))]
+    return [
+        ("SimMount", lambda clock: SimMount(clock=clock)),
+        ("AlpacaMount", lambda clock: alpaca_mount(FakeAlpacaTelescope(clock))),
+    ]
 
 
 def camera_implementations():

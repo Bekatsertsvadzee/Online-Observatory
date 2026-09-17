@@ -770,10 +770,10 @@ class Supervisor:
         step is bounded and why a mount that is slewing is refused outright: the
         one case where "wherever it is now" is not a position but a range.
 
-        DV-028 has to decide what this means on the real mount. An absolute
-        alt/az slew is exactly a nudge against `SimMount`; against a tracking
-        Celestron it is a question about whether the offset is applied to the
-        target or to the axes, and it must not be answered by copying this line.
+        On a tracking mount `AlpacaMount` pauses tracking for the step and resumes
+        it from the new position, so the offset moves the target and stays moved
+        (DV-028). Whether the Celestron driver behaves that way is DV-034's to
+        confirm on the instrument.
         """
         status = self._devices.mount.status()
         if status.slewing:
