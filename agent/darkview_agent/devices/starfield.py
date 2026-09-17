@@ -40,11 +40,14 @@ def render(
     exposure_milliseconds: float,
     gain: int,
     star_count: int = 220,
+    defocus_px: float = 0.0,
 ) -> np.ndarray:
     """Render one exposure of the field at this pointing.
 
     Longer exposures and higher gain brighten stars, background and noise
-    together, the way a real sensor behaves.
+    together, the way a real sensor behaves. `defocus_px` widens every star by
+    that much in quadrature and spreads the same light over the wider disc, so an
+    out-of-focus star is bigger and fainter rather than simply bigger.
     """
     if width_px <= 0 or height_px <= 0:
         raise ValueError("frame dimensions must be positive")
@@ -66,8 +69,10 @@ def render(
     ys = rng.uniform(0, height_px, star_count)
     # Seeing varies slightly star to star, as it does on a real frame.
     sigmas = rng.uniform(1.3, 2.4, star_count)
+    blurred = np.sqrt(sigmas**2 + defocus_px**2)
+    brightnesses = brightnesses * (sigmas / blurred) ** 2
 
-    for x, y, brightness, sigma in zip(xs, ys, brightnesses, sigmas, strict=True):
+    for x, y, brightness, sigma in zip(xs, ys, brightnesses, blurred, strict=True):
         # Only render the neighbourhood of each star; a full-frame Gaussian per
         # star is needlessly slow at 220 stars.
         radius = int(np.ceil(sigma * 4))

@@ -347,7 +347,6 @@ def test_a_second_mission_is_refused_rather_than_queued():
 @pytest.mark.parametrize(
     ("command_type", "payload", "owed_to"),
     [
-        ("FOCUS", {"kind": "FOCUS", "mode": "AUTOFOCUS"}, "DV-031"),
         (
             "SET_PROFILE",
             {"kind": "SET_PROFILE", "imagingProfile": "LUNAR"},
@@ -376,6 +375,124 @@ def test_a_command_this_build_cannot_perform_is_refused_not_silently_accepted(
     assert ack["status"] == "REJECTED"
     assert ack["rejectionReason"] == "DEVICE_UNAVAILABLE"
     assert owed_to in ack["detail"]
+
+
+def _focus(agent, mode: str = "AUTOFOCUS", position: int | None = None) -> dict:
+    payload = {"kind": "FOCUS", "mode": mode, "absolutePosition": position}
+    return agent.command(
+        commands.envelope(command_type="FOCUS", payload=payload, issued_at=agent.wall.now)
+    )
+
+
+def test_an_absolute_focus_while_observing_moves_the_focuser_and_holds_the_mission():
+    """DV-031. The observation does not time out from under a focuser still moving."""
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+    agent.command(agent.goto())
+    run_to(agent, MissionState.observing)
+
+    ack = _focus(agent, "ABSOLUTE", 22000)
+    assert ack["status"] == "ACCEPTED"
+
+    # Seven thousand steps is several seconds of travel; observing_seconds is 4.
+    agent.advance(4.0)
+    assert agent.devices.focuser.status().moving is True
+    assert agent.supervisor.runner.state is MissionState.observing
+
+    run_to(agent, MissionState.capturing)
+    assert agent.devices.focuser.status().position == 22000
+
+
+def test_an_inward_absolute_focus_ends_travelling_outward():
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+    agent.command(agent.goto())
+    run_to(agent, MissionState.observing)
+    moves: list[int] = []
+    original = agent.devices.focuser.move_to
+    agent.devices.focuser.move_to = lambda position: (moves.append(position), original(position))
+
+    _focus(agent, "ABSOLUTE", 12000)
+    run_to(agent, MissionState.capturing)
+
+    assert moves[-1] == 12000
+    assert moves[-2] < 12000
+
+
+def test_autofocus_while_observing_is_accepted_and_finishes_before_capturing():
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+    agent.command(agent.goto())
+    run_to(agent, MissionState.observing)
+
+    ack = _focus(agent)
+    assert ack["status"] == "ACCEPTED"
+    assert any(event.kind == "FOCUS_REQUESTED" for event in agent.supervisor.audit.events())
+
+    run_to(agent, MissionState.capturing, budget_seconds=600.0)
+    assert agent.devices.focuser.status().moving is False
+
+
+def test_focus_with_no_mission_running_is_refused():
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+
+    ack = _focus(agent)
+
+    assert ack["rejectionReason"] == "NO_ACTIVE_MISSION"
+
+
+def test_focus_outside_observing_is_refused():
+    """Before OBSERVING the plate solver owns the camera; after it the capture run does."""
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+    agent.command(agent.goto())
+
+    ack = _focus(agent, "ABSOLUTE", 16000)
+
+    assert ack["rejectionReason"] == "DEVICE_UNAVAILABLE"
+    assert "observing" in ack["detail"]
+
+
+@pytest.mark.parametrize("position", [None, -1, 30001])
+def test_an_absolute_focus_without_a_position_in_travel_is_refused(position):
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+    agent.command(agent.goto())
+    run_to(agent, MissionState.observing)
+
+    ack = _focus(agent, "ABSOLUTE", position)
+
+    assert ack["status"] == "REJECTED"
+    assert agent.devices.focuser.status().moving is False
+
+
+def test_a_second_focus_while_one_runs_is_refused():
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+    agent.command(agent.goto())
+    run_to(agent, MissionState.observing)
+    _focus(agent, "ABSOLUTE", 22000)
+
+    ack = _focus(agent, "ABSOLUTE", 10000)
+
+    assert ack["rejectionReason"] == "DEVICE_UNAVAILABLE"
+    assert "already in progress" in ack["detail"]
+
+
+def test_abort_during_a_focus_stops_the_focuser_and_parks():
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+    agent.command(agent.goto())
+    run_to(agent, MissionState.observing)
+    _focus(agent, "ABSOLUTE", 29000)
+    agent.advance(1.0)
+    assert agent.devices.focuser.status().moving is True
+
+    agent.command(commands.abort(issued_at=agent.wall.now))
+
+    assert agent.devices.focuser.status().moving is False
+    assert agent.mount.status().parked is True
 
 
 def test_a_recentring_goto_with_no_mission_running_is_refused():

@@ -981,7 +981,7 @@ performs tells the customer the telescope did something it did not do.
 | Command | Owed to | What is missing |
 | --- | --- | --- |
 | `CAPTURE` | DV-033, DV-061 | The live stack, the upload and somewhere to keep the result |
-| `FOCUS` | DV-031 | The focuser driver and the autofocus routine |
+| `FOCUS` | DV-031 | **Performed while OBSERVING**, on the simulator; the real focuser driver is still missing — no document names the focus motor |
 | `SET_PROFILE` | DV-033 | The table mapping an imaging profile to exposure, gain and ROI |
 
 `CAPTURE` is a `ClientCommandType`. Until DV-033 lands, the Capture control has nothing
