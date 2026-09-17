@@ -67,7 +67,7 @@ from darkview_agent.mission.runner import (
     MissionRunner,
 )
 from darkview_agent.mission.solver import PlateSolver, SimSolver
-from darkview_agent.runtime import Devices
+from darkview_agent.runtime import FAULT_REASONS, Devices, faulted_device
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
 from darkview_agent.safety.envelope import SafetyEnvelope, normalise_azimuth
 from darkview_agent.safety.watchdog import Watchdog, WatchdogAction, WatchdogTrigger
@@ -657,7 +657,7 @@ class Supervisor:
             except DeviceError as error:
                 # The watchdog decides what a device fault costs; this only
                 # reports it. Its terminal sequence stops capture and parks.
-                self._watchdog.report_device_fault(str(error))
+                self._watchdog.report_device_fault(str(error), faulted_device(error))
                 self._watchdog.evaluate()
                 return (CommandRejectionReason.device_unavailable, str(error))
 
@@ -1302,6 +1302,8 @@ def _failure_reason_for(action: WatchdogAction) -> MissionFailureReason:
         return MissionFailureReason.weather_unsafe
     if action.trigger is WatchdogTrigger.operator_abort:
         return MissionFailureReason.operator_abort
+    if action.device is not None:
+        return FAULT_REASONS[action.device]
     return MissionFailureReason.mount_fault
 
 

@@ -7,8 +7,12 @@ Real drivers are unreachable without both an explicit setting and attended mode;
 
 from __future__ import annotations
 
+import functools
 import logging
+from enum import StrEnum
+from typing import Any
 
+from contracts.models import MissionFailureReason
 from darkview_agent.config import AgentConfig, ConfigurationError, DriverMode
 from darkview_agent.devices.base import CameraDriver, FocuserDriver, MountDriver
 from darkview_agent.devices.simulated import SimCamera, SimFocuser, SimMount
@@ -17,11 +21,82 @@ from darkview_agent.safety.envelope import SafetyEnvelope
 logger = logging.getLogger("darkview.agent")
 
 
+class DeviceKind(StrEnum):
+    MOUNT = "MOUNT"
+    CAMERA = "CAMERA"
+    FOCUSER = "FOCUSER"
+
+
+FAULT_REASONS = {
+    DeviceKind.MOUNT: MissionFailureReason.mount_fault,
+    DeviceKind.CAMERA: MissionFailureReason.camera_fault,
+    DeviceKind.FOCUSER: MissionFailureReason.focuser_fault,
+}
+
+
+def faulted_device(error: BaseException) -> DeviceKind | None:
+    """Which device raised this, if it came through `Devices`."""
+    kind = getattr(error, "darkview_device", None)
+    return kind if isinstance(kind, DeviceKind) else None
+
+
+def fault_reason(error: BaseException) -> MissionFailureReason:
+    """The failure reason for a device error. MOUNT_FAULT when nothing says otherwise.
+
+    An untagged error is one raised somewhere other than a driver call, and the
+    mount is the device whose fault has to be assumed: it is the one that moves.
+    """
+    kind = faulted_device(error)
+    return FAULT_REASONS[kind] if kind else MissionFailureReason.mount_fault
+
+
+class _Attributed:
+    """A driver that stamps which device it is onto anything it raises.
+
+    Wrapped here rather than raised with a device-specific exception in each
+    driver, because the fact needed is which device was being driven, and that is
+    known at the call rather than at the raise. A driver stays a driver: it has no
+    idea it is wrapped, and a new one gets this for nothing.
+    """
+
+    __slots__ = ("_driver", "_kind")
+
+    def __init__(self, driver: Any, kind: DeviceKind) -> None:
+        object.__setattr__(self, "_driver", driver)
+        object.__setattr__(self, "_kind", kind)
+
+    @property
+    def driver(self) -> Any:
+        """The driver underneath. For tests and for anything checking its type."""
+        return self._driver
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._driver, name)
+        if not callable(value):
+            return value
+
+        @functools.wraps(value)
+        def attributing(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return value(*args, **kwargs)
+            except BaseException as error:
+                # Only the innermost driver call stamps it: an error crossing two
+                # devices belongs to the one that actually raised it.
+                if getattr(error, "darkview_device", None) is None:
+                    error.darkview_device = self._kind
+                raise
+
+        return attributing
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._driver, name, value)
+
+
 class Devices:
     def __init__(self, mount: MountDriver, camera: CameraDriver, focuser: FocuserDriver) -> None:
-        self.mount = mount
-        self.camera = camera
-        self.focuser = focuser
+        self.mount: MountDriver = _Attributed(mount, DeviceKind.MOUNT)
+        self.camera: CameraDriver = _Attributed(camera, DeviceKind.CAMERA)
+        self.focuser: FocuserDriver = _Attributed(focuser, DeviceKind.FOCUSER)
 
 
 def build_devices(config: AgentConfig) -> Devices:

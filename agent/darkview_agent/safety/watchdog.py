@@ -35,7 +35,7 @@ from enum import StrEnum
 from contracts.models import SafetyEnvelopeConfig
 from darkview_agent.clock import Clock, SystemClock
 from darkview_agent.command.audit import AuditEvent, AuditLog
-from darkview_agent.runtime import Devices
+from darkview_agent.runtime import DeviceKind, Devices
 
 logger = logging.getLogger("darkview.agent.watchdog")
 
@@ -60,6 +60,8 @@ class WatchdogAction:
     """What the watchdog did on one evaluation."""
 
     trigger: WatchdogTrigger
+    #: Which device faulted, when the trigger is a device fault and it is known.
+    device: DeviceKind | None = None
     stopped_capture: bool = False
     parked: bool = False
     park_failure: str | None = None
@@ -102,6 +104,7 @@ class Watchdog:
         self._actions: list[WatchdogAction] = []
         self._pending_trigger: WatchdogTrigger | None = None
         self._pending_detail = ""
+        self._pending_device: DeviceKind | None = None
 
     # ------------------------------------------------------------------
     # What the rest of the agent tells it
@@ -150,8 +153,15 @@ class Watchdog:
             self._capture_stopped = False
             self._parked = False
 
-    def report_device_fault(self, detail: str) -> None:
-        """Criterion 3: a fault from any driver triggers the terminal sequence."""
+    def report_device_fault(self, detail: str, device: DeviceKind | None = None) -> None:
+        """Criterion 3: a fault from any driver triggers the terminal sequence.
+
+        `device` travels with it so the mission records which one failed. Without
+        it every camera and focuser fault is reported as a mount fault, and the
+        operator is sent to the wrong instrument.
+        """
+        with self._lock:
+            self._pending_device = device
         self._raise(WatchdogTrigger.device_fault, detail)
 
     def operator_abort(self, detail: str = "operator abort") -> None:
@@ -202,9 +212,13 @@ class Watchdog:
         with self._lock:
             if self._pending_trigger is not None:
                 trigger, detail = self._pending_trigger, self._pending_detail
+                device = self._pending_device
                 self._pending_trigger = None
                 self._pending_detail = ""
-                return self._act(trigger, detail, stop_capture=True, park=True)
+                self._pending_device = None
+                return self._act(
+                    trigger, detail, stop_capture=True, park=True, device=device
+                )
 
             elapsed = self.seconds_since_online()
 
@@ -228,7 +242,13 @@ class Watchdog:
             return None
 
     def _act(
-        self, trigger: WatchdogTrigger, detail: str, *, stop_capture: bool, park: bool
+        self,
+        trigger: WatchdogTrigger,
+        detail: str,
+        *,
+        stop_capture: bool,
+        park: bool,
+        device: DeviceKind | None = None,
     ) -> WatchdogAction:
         """Criterion 5: the event is written before anything is touched.
 
@@ -258,6 +278,7 @@ class Watchdog:
 
         action = WatchdogAction(
             trigger=trigger,
+            device=device,
             stopped_capture=stopped,
             parked=parked,
             park_failure=park_failure,

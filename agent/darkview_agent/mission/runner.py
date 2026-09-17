@@ -36,7 +36,7 @@ from darkview_agent.devices.base import DeviceError
 from darkview_agent.devices.frame import Frame
 from darkview_agent.focus.autofocus import Autofocus, FocusMove, FocusResult
 from darkview_agent.mission.solver import PlateSolver, SolveResult, separation_degrees
-from darkview_agent.runtime import Devices
+from darkview_agent.runtime import Devices, fault_reason
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
 from darkview_agent.safety.envelope import SafetyEnvelope
 
@@ -375,7 +375,7 @@ class MissionRunner:
         except DeviceError as error:
             self._fail(
                 MissionState.hardware_error,
-                MissionFailureReason.mount_fault,
+                fault_reason(error),
                 at_time,
                 str(error),
             )
