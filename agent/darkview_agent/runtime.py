@@ -27,8 +27,8 @@ class Devices:
 def build_devices(config: AgentConfig) -> Devices:
     """Return the device set the configuration selects.
 
-    DV-028 added `AlpacaMount`; the camera (DV-029) and focuser (DV-031) are still
-    missing, and a real mount beside a simulated camera is not a real observatory.
+    DV-028 added `AlpacaMount` and DV-029 `ZwoCamera`; the real focuser driver is
+    still missing, and real devices beside a simulated one are not a real observatory.
     Until they exist, REAL mode raises rather than silently falling back to the
     simulator — a silent fallback would let an operator believe hardware is under
     test when it is not.
@@ -37,8 +37,8 @@ def build_devices(config: AgentConfig) -> Devices:
         return Devices(mount=SimMount(), camera=SimCamera(), focuser=SimFocuser())
 
     raise ConfigurationError(
-        "Real device drivers are not all implemented yet (DV-029 camera, DV-031 "
-        "focuser). Refusing to fall back to the simulator, because an operator "
+        "Real device drivers are not all implemented yet (the focuser has no real "
+        "driver). Refusing to fall back to the simulator, because an operator "
         "in attended mode must never be shown simulated output as if it were hardware."
     )
 
