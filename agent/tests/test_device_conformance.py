@@ -22,6 +22,7 @@ from darkview_agent.devices.base import (
 )
 from darkview_agent.devices.simulated import SimCamera, SimFocuser, SimMount
 from tests.fake_alpaca import FakeAlpacaTelescope, alpaca_mount
+from tests.fake_asi import zwo_camera
 
 
 # Registries. Real implementations join these as they are written; nothing else
@@ -34,7 +35,10 @@ def mount_implementations():
 
 
 def camera_implementations():
-    return [("SimCamera", lambda clock: SimCamera(clock=clock))]
+    return [
+        ("SimCamera", lambda clock: SimCamera(clock=clock)),
+        ("ZwoCamera", zwo_camera),
+    ]
 
 
 def focuser_implementations():
