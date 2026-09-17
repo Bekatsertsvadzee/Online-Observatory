@@ -812,6 +812,12 @@ export type CreateBookingRequest = {
      * Points to spend on this booking (DV-095). Never with `voucherCode`.
      */
     loyaltyPoints?: number;
+    /**
+     * Pay for this booking with subscription minutes (ADR-022). Never with
+     * `voucherCode` or `loyaltyPoints`.
+     *
+     */
+    useSubscriptionMinutes?: boolean;
 };
 
 export type CancelBookingRequest = {
@@ -926,6 +932,80 @@ export type LoyaltyLedgerEntry = {
     bookingId?: string | null;
     reason?: string | null;
     createdAt: string;
+};
+
+/**
+ * ADR-022. The plan a subscription is on. Prices and grants live in the plan
+ * catalogue, never in this enum.
+ *
+ */
+export const SubscriptionPlan = {
+    OBSERVER: 'OBSERVER',
+    EXPLORER: 'EXPLORER',
+    ADVANCED: 'ADVANCED'
+} as const;
+
+/**
+ * ADR-022. The plan a subscription is on. Prices and grants live in the plan
+ * catalogue, never in this enum.
+ *
+ */
+export type SubscriptionPlan = typeof SubscriptionPlan[keyof typeof SubscriptionPlan];
+
+/**
+ * ADR-022. A failed renewal leaves a subscription ACTIVE while it is retried and
+ * EXPIRED when the grace period lapses; there is no separate past-due state.
+ * TRIALING is unused in Phase 1.
+ *
+ */
+export const SubscriptionStatus = {
+    TRIALING: 'TRIALING',
+    ACTIVE: 'ACTIVE',
+    PAUSED: 'PAUSED',
+    CANCELLED: 'CANCELLED',
+    EXPIRED: 'EXPIRED'
+} as const;
+
+/**
+ * ADR-022. A failed renewal leaves a subscription ACTIVE while it is retried and
+ * EXPIRED when the grace period lapses; there is no separate past-due state.
+ * TRIALING is unused in Phase 1.
+ *
+ */
+export type SubscriptionStatus = typeof SubscriptionStatus[keyof typeof SubscriptionStatus];
+
+export type SubscriptionPlanOption = {
+    plan: SubscriptionPlan;
+    nameEn: string;
+    nameKa: string;
+    /**
+     * Monthly price in the currency's minor unit.
+     */
+    priceMinor: number;
+    currency: string;
+    /**
+     * Observation minutes granted when a period is paid. Minutes rather than
+     * observations because the slot length is not settled (ADR-022 §2).
+     *
+     */
+    minutesPerPeriod: number;
+};
+
+export type Subscription = {
+    subscriptionId: string;
+    plan: SubscriptionPlan;
+    status: SubscriptionStatus;
+    currentPeriodStart: string | null;
+    /**
+     * When the next renewal is attempted, and when this period's minutes expire.
+     */
+    currentPeriodEnd: string | null;
+    cancelAtPeriodEnd: boolean;
+    /**
+     * Observation minutes a booking can spend now.
+     */
+    minuteBalance: number;
+    isDemo: boolean;
 };
 
 export type LoyaltyAccount = {
@@ -3035,6 +3115,47 @@ export type GetMyLoyaltyResponses = {
 };
 
 export type GetMyLoyaltyResponse = GetMyLoyaltyResponses[keyof GetMyLoyaltyResponses];
+
+export type ListSubscriptionPlansData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/subscription/plans';
+};
+
+export type ListSubscriptionPlansResponses = {
+    /**
+     * The available plans, cheapest first.
+     */
+    200: Array<SubscriptionPlanOption>;
+};
+
+export type ListSubscriptionPlansResponse = ListSubscriptionPlansResponses[keyof ListSubscriptionPlansResponses];
+
+export type GetMySubscriptionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/subscription';
+};
+
+export type GetMySubscriptionErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+};
+
+export type GetMySubscriptionError = GetMySubscriptionErrors[keyof GetMySubscriptionErrors];
+
+export type GetMySubscriptionResponses = {
+    /**
+     * The subscription, or null.
+     */
+    200: Subscription | null;
+};
+
+export type GetMySubscriptionResponse = GetMySubscriptionResponses[keyof GetMySubscriptionResponses];
 
 export type ListMyGiftVouchersData = {
     body?: never;

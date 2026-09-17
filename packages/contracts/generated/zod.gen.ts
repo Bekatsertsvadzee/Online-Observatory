@@ -536,7 +536,8 @@ export const zCreateBookingRequest = z.strictObject({
     durationMinutes: z.int().gt(0),
     locale: zLocale.optional(),
     voucherCode: z.string().min(8).max(64).optional(),
-    loyaltyPoints: z.int().gte(100).optional()
+    loyaltyPoints: z.int().gte(100).optional(),
+    useSubscriptionMinutes: z.boolean().optional()
 });
 
 export const zCancelBookingRequest = z.strictObject({
@@ -613,6 +614,51 @@ export const zLoyaltyLedgerEntry = z.strictObject({
     bookingId: z.uuid().nullish(),
     reason: z.string().nullish(),
     createdAt: z.iso.datetime()
+});
+
+/**
+ * ADR-022. The plan a subscription is on. Prices and grants live in the plan
+ * catalogue, never in this enum.
+ *
+ */
+export const zSubscriptionPlan = z.enum([
+    'OBSERVER',
+    'EXPLORER',
+    'ADVANCED'
+]);
+
+/**
+ * ADR-022. A failed renewal leaves a subscription ACTIVE while it is retried and
+ * EXPIRED when the grace period lapses; there is no separate past-due state.
+ * TRIALING is unused in Phase 1.
+ *
+ */
+export const zSubscriptionStatus = z.enum([
+    'TRIALING',
+    'ACTIVE',
+    'PAUSED',
+    'CANCELLED',
+    'EXPIRED'
+]);
+
+export const zSubscriptionPlanOption = z.strictObject({
+    plan: zSubscriptionPlan,
+    nameEn: z.string(),
+    nameKa: z.string(),
+    priceMinor: z.int().gt(0),
+    currency: z.string().length(3),
+    minutesPerPeriod: z.int().gt(0)
+});
+
+export const zSubscription = z.strictObject({
+    subscriptionId: z.uuid(),
+    plan: zSubscriptionPlan,
+    status: zSubscriptionStatus,
+    currentPeriodStart: z.iso.datetime().nullable(),
+    currentPeriodEnd: z.iso.datetime().nullable(),
+    cancelAtPeriodEnd: z.boolean(),
+    minuteBalance: z.int().gte(0),
+    isDemo: z.boolean()
 });
 
 export const zLoyaltyAccount = z.strictObject({
@@ -2011,6 +2057,16 @@ export const zGetLoyaltySchemeResponse = zLoyaltyScheme;
  * The loyalty account.
  */
 export const zGetMyLoyaltyResponse = zLoyaltyAccount;
+
+/**
+ * The available plans, cheapest first.
+ */
+export const zListSubscriptionPlansResponse = z.array(zSubscriptionPlanOption);
+
+/**
+ * The subscription, or null.
+ */
+export const zGetMySubscriptionResponse = zSubscription.nullable();
 
 /**
  * The buyer's vouchers, newest first.

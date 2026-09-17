@@ -601,6 +601,7 @@ class CreateBookingRequest(BaseModel):
     locale: Locale | None = None
     voucher_code: str | None = Field(None, alias='voucherCode', description='A gift voucher code (DV-112). Case and separators are ignored.', max_length=64, min_length=8)
     loyalty_points: int | None = Field(None, alias='loyaltyPoints', description='Points to spend on this booking (DV-095). Never with `voucherCode`.', ge=100, multiple_of=100)
+    use_subscription_minutes: bool | None = Field(None, alias='useSubscriptionMinutes', description='Pay for this booking with subscription minutes (ADR-022). Never with\n`voucherCode` or `loyaltyPoints`.\n')
 
 
 class CancelBookingRequest(BaseModel):
@@ -694,6 +695,57 @@ class LoyaltyLedgerEntry(BaseModel):
     booking_id: UUID | None = Field(None, alias='bookingId')
     reason: str | None = None
     created_at: AwareDatetime = Field(..., alias='createdAt')
+
+
+class SubscriptionPlan(StrEnum):
+    """
+    ADR-022. The plan a subscription is on. Prices and grants live in the plan
+    catalogue, never in this enum.
+
+    """
+    observer = 'OBSERVER'
+    explorer = 'EXPLORER'
+    advanced = 'ADVANCED'
+
+
+class SubscriptionStatus(StrEnum):
+    """
+    ADR-022. A failed renewal leaves a subscription ACTIVE while it is retried and
+    EXPIRED when the grace period lapses; there is no separate past-due state.
+    TRIALING is unused in Phase 1.
+
+    """
+    trialing = 'TRIALING'
+    active = 'ACTIVE'
+    paused = 'PAUSED'
+    cancelled = 'CANCELLED'
+    expired = 'EXPIRED'
+
+
+class SubscriptionPlanOption(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    plan: SubscriptionPlan
+    name_en: str = Field(..., alias='nameEn')
+    name_ka: str = Field(..., alias='nameKa')
+    price_minor: int = Field(..., alias='priceMinor', description="Monthly price in the currency's minor unit.", gt=0)
+    currency: str = Field(..., max_length=3, min_length=3)
+    minutes_per_period: int = Field(..., alias='minutesPerPeriod', description='Observation minutes granted when a period is paid. Minutes rather than\nobservations because the slot length is not settled (ADR-022 §2).\n', gt=0)
+
+
+class Subscription(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    subscription_id: UUID = Field(..., alias='subscriptionId')
+    plan: SubscriptionPlan
+    status: SubscriptionStatus
+    current_period_start: AwareDatetime | None = Field(..., alias='currentPeriodStart')
+    current_period_end: AwareDatetime | None = Field(..., alias='currentPeriodEnd', description="When the next renewal is attempted, and when this period's minutes expire.")
+    cancel_at_period_end: bool = Field(..., alias='cancelAtPeriodEnd')
+    minute_balance: int = Field(..., alias='minuteBalance', description='Observation minutes a booking can spend now.', ge=0)
+    is_demo: bool = Field(..., alias='isDemo')
 
 
 class LoyaltyAccount(BaseModel):
