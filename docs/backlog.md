@@ -952,6 +952,29 @@ landed, every component of the chain existed and the chain did not.
 
 Everything else hangs off that path and must not be scheduled ahead of it.
 
+## What DV-030 built, and what the runner does not yet do with it
+
+`darkview_agent/solve/astap.py` implements `PlateSolver` with the ASTAP command line:
+the frame is written as FITS to a private temporary directory, ASTAP runs as a child
+process with the commanded position as its hint, and the centre is read from the `.ini`
+it writes. Every way a solve can fail -- no solution, a failing exit, a timeout, no
+binary -- returns None, which the runner already retries and bounds. It is tested
+against a stand-in executable; no ASTAP build or star database has solved a real frame
+through it. That is DV-035's, at first light. Nothing selects it yet: `REAL` mode still
+refuses to start until the camera exists.
+
+**The solve blocks the supervisor's pass.** The timeout (10 s) sits under the 15 s
+heartbeat-loss fallback, so a stuck ASTAP cannot pass for a dead link, but a slow solve
+still delays the heartbeat. Moving the solve off the pass is a runner change.
+
+**Found while wiring it, not fixed here: `CENTERING` does not use the solve.**
+`MissionRunner._do_centering` re-slews to the requested RA/Dec, which is where the
+mount was already sent, and `_do_verifying` measures the offset in declination only. On
+`SimSolver` this converges because the simulated error shrinks on its own. On a real
+mount the same command lands in the same wrong place three times and the mission fails
+with `CENTERING_ITERATIONS_EXHAUSTED`. The correction has to apply the solved offset --
+in both axes -- to the commanded position. It needs its own issue before DV-036.
+
 ## What DV-040 wired, and what it deferred
 
 DV-026 built the mission runner and DV-057/058 built the link and the orchestrator,
