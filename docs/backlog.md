@@ -987,11 +987,13 @@ performs tells the customer the telescope did something it did not do.
 `CAPTURE` is a `ClientCommandType`. Until DV-033 lands, the Capture control has nothing
 behind it and the web UI must not offer it as though it did.
 
-**A question DV-028 must answer, not copy.** The supervisor performs a nudge as an
-absolute alt/az slew to the projected position. That is exactly a nudge against
-`SimMount`. Against a tracking Celestron it is a real question — whether the offset
-belongs on the target or on the axes — and DV-028 has to decide it from the mount's
-behaviour rather than from the line the simulator made look correct.
+**Answered by DV-028, on the specification.** The supervisor performs a nudge as an
+absolute alt/az slew to the projected position. ASCOM refuses an alt/az slew while
+`Tracking` is on, so `AlpacaMount` pauses tracking, slews, and resumes tracking from the
+new position once motion stops: the offset belongs on the target and stays there. That
+is decided from the ASCOM Alpaca specification, not from the Celestron driver, which
+nothing has yet run against — DV-034 confirms it on the instrument, including whether
+the driver reports `CanSlewAltAzAsync` at all.
 
 **Since paid by DV-027.** The audit log, the idempotency set, session ownership
 with its spent nudge allowance, and the measured safety envelope now survive a
