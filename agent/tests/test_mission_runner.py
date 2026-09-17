@@ -697,7 +697,10 @@ def test_a_failed_park_is_retried_after_the_idle_window():
 
 
 def test_a_device_fault_mid_mission_becomes_a_hardware_error():
-    """A device that fails while the mission is running ends it and parks."""
+    """A device that fails while the mission is running ends it and parks.
+
+    Issue #112: the camera's fault is recorded as the camera's, not the mount's.
+    """
 
     class FaultingCamera(SimCamera):
         def expose(self, exposure_milliseconds: float, gain: int) -> None:
@@ -716,7 +719,7 @@ def test_a_device_fault_mid_mission_becomes_a_hardware_error():
     run_to_completion(runner, clock)
 
     assert runner.state is MissionState.hardware_error
-    assert runner.failure_reason is MissionFailureReason.mount_fault
+    assert runner.failure_reason is MissionFailureReason.camera_fault
     assert runner.mount_parked is True
 
 

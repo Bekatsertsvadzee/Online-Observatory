@@ -9,9 +9,9 @@ from darkview_agent.runtime import build_devices, start
 
 def test_default_startup_selects_simulated_devices():
     devices = build_devices(load_config({}))
-    assert isinstance(devices.mount, SimMount)
-    assert isinstance(devices.camera, SimCamera)
-    assert isinstance(devices.focuser, SimFocuser)
+    assert isinstance(devices.mount.driver, SimMount)
+    assert isinstance(devices.camera.driver, SimCamera)
+    assert isinstance(devices.focuser.driver, SimFocuser)
 
 
 def test_real_mode_does_not_silently_fall_back_to_the_simulator():
