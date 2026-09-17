@@ -35,7 +35,7 @@ from darkview_agent.clock import Clock, SystemClock, wire_timestamp
 from darkview_agent.devices.base import DeviceError
 from darkview_agent.devices.frame import Frame
 from darkview_agent.focus.autofocus import Autofocus, FocusMove, FocusResult
-from darkview_agent.mission.solver import PlateSolver
+from darkview_agent.mission.solver import PlateSolver, SolveResult, separation_degrees
 from darkview_agent.runtime import Devices
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
 from darkview_agent.safety.envelope import SafetyEnvelope
@@ -166,10 +166,15 @@ class _Progress:
     """Everything the runner is keeping track of for the current mission."""
 
     request: MissionRequest
+    #: Where the mount was last sent, in RA hours and Dec degrees. The request's
+    #: position until a centring correction moves it.
+    aim: tuple[float, float]
     started_at: datetime
     state_entered_monotonic: float
     centering_iterations: int = 0
     solve_attempts: int = 0
+    #: The solve CENTERING corrects from.
+    solved: SolveResult | None = None
     #: A FOCUS in progress. OBSERVING holds while it runs.
     focus: Autofocus | FocusMove | None = None
     frames_captured: int = 0
@@ -303,6 +308,7 @@ class MissionRunner:
 
         self._progress = _Progress(
             request=request,
+            aim=(request.right_ascension_hours, request.declination_degrees),
             started_at=at_time,
             state_entered_monotonic=self._clock.monotonic(),
         )
@@ -429,10 +435,7 @@ class MissionRunner:
         self._stack.reset()
         self._devices.mount.slew_to(altitude, azimuth)
         if hasattr(self._solver, "set_commanded_position"):
-            self._solver.set_commanded_position(
-                progress.request.right_ascension_hours,
-                progress.request.declination_degrees,
-            )
+            self._solver.set_commanded_position(*progress.aim)
         self._transition(MissionState.slewing, at_time)
 
     def _do_slewing(self, at_time: datetime) -> None:
@@ -486,11 +489,18 @@ class MissionRunner:
                 )
             return
 
-        offset = abs(solved.declination_degrees - progress.request.declination_degrees)
+        request = progress.request
+        offset = separation_degrees(
+            solved.right_ascension_hours,
+            solved.declination_degrees,
+            request.right_ascension_hours,
+            request.declination_degrees,
+        )
         if offset <= CENTERING_TOLERANCE_DEGREES:
             self._transition(MissionState.observing, at_time)
             return
 
+        progress.solved = solved
         self._transition(MissionState.centering, at_time)
 
     def _do_centering(self, at_time: datetime) -> None:
@@ -508,12 +518,47 @@ class MissionRunner:
         progress.centering_iterations += 1
         progress.solve_attempts = 0
 
+        # The mount landed `solved` when sent to `aim`. Sending it to `aim` again
+        # lands it in the same wrong place; sending it as far the other way as it
+        # missed by lands it on the target.
+        request, solved = progress.request, progress.solved
+        assert solved is not None
+        aim_ra, aim_dec = progress.aim
+        corrected_ra = (
+            aim_ra + request.right_ascension_hours - solved.right_ascension_hours
+        ) % 24.0
+        corrected_dec = aim_dec + request.declination_degrees - solved.declination_degrees
+        if not -90.0 <= corrected_dec <= 90.0:
+            self._fail(
+                MissionState.failed,
+                MissionFailureReason.centering_iterations_exhausted,
+                at_time,
+                f"a correction to declination {corrected_dec:.2f} is past the pole; "
+                "the solve and the target disagree by more than centring can fix",
+            )
+            return
+
+        # A corrected position is a position nobody has checked. It is near the
+        # target, and near is not inside the envelope.
         horizontal = equatorial_to_horizontal(
-            progress.request.right_ascension_hours,
-            progress.request.declination_degrees,
-            at_time,
-            self._envelope.site,
+            corrected_ra, corrected_dec, at_time, self._envelope.site
         )
+        verdict = self._envelope.evaluate_pointing(
+            at_time,
+            horizontal.altitude_degrees,
+            horizontal.azimuth_degrees,
+            operator_override=request.operator_override,
+        )
+        if not verdict.permitted:
+            reason = (
+                MissionFailureReason.safety_envelope_unmeasured
+                if not self._envelope.is_measured
+                else MissionFailureReason.safety_refused
+            )
+            self._fail(MissionState.failed, reason, at_time, verdict.detail)
+            return
+
+        progress.aim = (corrected_ra, corrected_dec)
         self._begin_slew(horizontal.altitude_degrees, horizontal.azimuth_degrees, at_time)
 
     def request_capture(
