@@ -363,8 +363,8 @@ def test_a_mission_recovers_from_solve_failures_below_the_limit():
 def test_centering_is_bounded_to_three_iterations():
     """A mount that will not converge is stopped, not retried forever."""
     clock = ManualClock()
-    # convergence_factor 1.0: the error never shrinks, so it never centres.
-    solver = SimSolver(initial_error_degrees=1.0, convergence_factor=1.0)
+    # The error grows by as much as each correction removes, so it never centres.
+    solver = SimSolver(initial_error_degrees=1.0, error_drift_degrees=1.0)
     runner = build_runner(clock, solver=solver)
 
     runner.offer(request(), NIGHT)
@@ -377,15 +377,81 @@ def test_centering_is_bounded_to_three_iterations():
 
 def test_a_mission_that_needs_centering_still_completes():
     clock = ManualClock()
-    runner = build_runner(
-        clock, solver=SimSolver(initial_error_degrees=0.5, convergence_factor=0.05)
-    )
+    runner = build_runner(clock, solver=SimSolver(initial_error_degrees=0.5))
 
     runner.offer(request(requested_frames=1), NIGHT)
     run_to_completion(runner, clock)
 
     assert runner.state is MissionState.complete
-    assert runner.centering_iterations >= 1
+    assert runner.centering_iterations == 1
+
+
+def test_centering_sends_the_mount_as_far_the_other_way_as_it_missed():
+    """Issue #108: re-sending the requested position lands in the same wrong place."""
+    clock = ManualClock()
+    solver = SimSolver(initial_error_degrees=0.5)
+    runner = build_runner(clock, solver=solver)
+
+    runner.offer(request(requested_frames=1), NIGHT)
+    run_to_completion(runner, clock)
+
+    assert solver.commanded == pytest.approx((TARGET_RA_HOURS, TARGET_DEC_DEGREES - 0.5))
+
+
+def test_an_error_in_right_ascension_alone_is_seen_and_corrected():
+    """Issue #108: comparing declination alone called a frame off in RA centred."""
+    clock = ManualClock()
+    solver = SimSolver(initial_error_degrees=0.0, ra_error_hours=0.1)
+    runner = build_runner(clock, solver=solver)
+
+    runner.offer(request(requested_frames=1), NIGHT)
+    run_to_completion(runner, clock)
+
+    assert runner.state is MissionState.complete
+    assert runner.centering_iterations == 1
+    assert solver.commanded == pytest.approx((TARGET_RA_HOURS - 0.1, TARGET_DEC_DEGREES))
+
+
+def test_a_correction_across_zero_hours_wraps():
+    clock = ManualClock()
+    solver = SimSolver(initial_error_degrees=0.0, ra_error_hours=0.1)
+    runner = build_runner(clock, solver=solver)
+
+    runner.offer(request(requested_frames=1, ra_hours=0.05, dec_degrees=60.0), NIGHT)
+    run_to_completion(runner, clock)
+
+    assert runner.state is MissionState.complete
+    assert solver.commanded == pytest.approx((23.95, 60.0))
+
+
+def test_a_correction_outside_the_envelope_is_refused_not_slewed():
+    """The corrected position is checked like any other: near the target is not inside."""
+    clock = ManualClock()
+    # Dec 0 sits at 46 degrees; a 30 degree miss sends the correction to Dec -30,
+    # 17 degrees up and under the 20 degree floor.
+    solver = SimSolver(initial_error_degrees=30.0)
+    runner = build_runner(clock, solver=solver)
+
+    runner.offer(request(requested_frames=1), NIGHT)
+    run_to_completion(runner, clock)
+
+    assert runner.state is MissionState.failed
+    assert runner.failure_reason is MissionFailureReason.safety_refused
+    assert solver.commanded == (TARGET_RA_HOURS, TARGET_DEC_DEGREES)
+    assert runner.mount_parked is True
+
+
+def test_a_correction_past_the_pole_ends_the_mission():
+    clock = ManualClock()
+    solver = SimSolver(initial_error_degrees=-40.0)
+    runner = build_runner(clock, solver=solver)
+
+    runner.offer(request(requested_frames=1, ra_hours=0.05, dec_degrees=60.0), NIGHT)
+    run_to_completion(runner, clock)
+
+    assert runner.state is MissionState.failed
+    assert runner.failure_reason is MissionFailureReason.centering_iterations_exhausted
+    assert runner.mount_parked is True
 
 
 # --------------------------------------------------------------------------
@@ -425,7 +491,7 @@ def test_complete_parks_the_mount_and_releases_the_lock():
         (
             "centering exhausted",
             lambda clock: build_runner(
-                clock, solver=SimSolver(initial_error_degrees=1.0, convergence_factor=1.0)
+                clock, solver=SimSolver(initial_error_degrees=1.0, error_drift_degrees=1.0)
             ),
         ),
         ("unmeasured envelope", lambda clock: build_runner(clock, measured=False)),
