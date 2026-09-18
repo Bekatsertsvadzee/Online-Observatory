@@ -547,6 +547,14 @@ paths:
         reservation that fails spends nothing and a voucher is never spent twice. A code
         that is unknown, spent, expired or unpaid, or for a different length, is 422.
         Redemption attempts are rate-limited per account.
+
+        **With `useSubscriptionMinutes`** (ADR-022) the booking is paid from the
+        signed-in customer's subscription balance: `durationMinutes` minutes are taken,
+        the booking is CONFIRMED at once at no charge, its mission is scheduled, and
+        `paymentIntent` is null. The minutes are taken in the same transaction as the
+        reservation, so a reservation that fails takes nothing. Too few minutes, no
+        subscription, or a subscription that is not ACTIVE, is 422. Never together with
+        `voucherCode` or `loyaltyPoints`: a booking uses one price reduction.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -604,6 +612,47 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LoyaltyAccount"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /subscription/plans:
+    get:
+      operationId: listSubscriptionPlans
+      tags: [booking]
+      summary: The subscription plans on offer.
+      description: |
+        ADR-022. Plans are rows rather than code, so a price or a grant changes without
+        a deployment and a plan is withdrawn by clearing `isAvailable`. An empty list
+        means nothing is on sale, which is the state until prices are set.
+      responses:
+        "200":
+          description: The available plans, cheapest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SubscriptionPlanOption"
+
+  /subscription:
+    get:
+      operationId: getMySubscription
+      tags: [booking]
+      summary: The signed-in user's subscription and remaining minutes.
+      description: |
+        ADR-022. `null` when the user has never subscribed. `minuteBalance` is what a
+        booking can spend and is reported whether or not a subscription is currently
+        active, because minutes already granted survive a cancellation until they
+        expire.
+      responses:
+        "200":
+          description: The subscription, or null.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Subscription"
+                  - type: "null"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -3075,6 +3124,11 @@ components:
           minimum: 100
           multipleOf: 100
           description: Points to spend on this booking (DV-095). Never with `voucherCode`.
+        useSubscriptionMinutes:
+          type: boolean
+          description: |
+            Pay for this booking with subscription minutes (ADR-022). Never with
+            `voucherCode` or `loyaltyPoints`.
 
     CancelBookingRequest:
       type: object
@@ -3227,6 +3281,77 @@ components:
         createdAt:
           type: string
           format: date-time
+
+    SubscriptionPlan:
+      type: string
+      description: |
+        ADR-022. The plan a subscription is on. Prices and grants live in the plan
+        catalogue, never in this enum.
+      enum: [OBSERVER, EXPLORER, ADVANCED]
+
+    SubscriptionStatus:
+      type: string
+      description: |
+        ADR-022. A failed renewal leaves a subscription ACTIVE while it is retried and
+        EXPIRED when the grace period lapses; there is no separate past-due state.
+        TRIALING is unused in Phase 1.
+      enum: [TRIALING, ACTIVE, PAUSED, CANCELLED, EXPIRED]
+
+    SubscriptionPlanOption:
+      type: object
+      additionalProperties: false
+      required: [plan, nameEn, nameKa, priceMinor, currency, minutesPerPeriod]
+      properties:
+        plan:
+          $ref: "#/components/schemas/SubscriptionPlan"
+        nameEn:
+          type: string
+        nameKa:
+          type: string
+        priceMinor:
+          type: integer
+          exclusiveMinimum: 0
+          description: Monthly price in the currency's minor unit.
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+        minutesPerPeriod:
+          type: integer
+          exclusiveMinimum: 0
+          description: |
+            Observation minutes granted when a period is paid. Minutes rather than
+            observations because the slot length is not settled (ADR-022 §2).
+
+    Subscription:
+      type: object
+      additionalProperties: false
+      required:
+        [subscriptionId, plan, status, currentPeriodStart, currentPeriodEnd,
+         cancelAtPeriodEnd, minuteBalance, isDemo]
+      properties:
+        subscriptionId:
+          type: string
+          format: uuid
+        plan:
+          $ref: "#/components/schemas/SubscriptionPlan"
+        status:
+          $ref: "#/components/schemas/SubscriptionStatus"
+        currentPeriodStart:
+          type: [string, "null"]
+          format: date-time
+        currentPeriodEnd:
+          type: [string, "null"]
+          format: date-time
+          description: When the next renewal is attempted, and when this period's minutes expire.
+        cancelAtPeriodEnd:
+          type: boolean
+        minuteBalance:
+          type: integer
+          minimum: 0
+          description: Observation minutes a booking can spend now.
+        isDemo:
+          type: boolean
 
     LoyaltyAccount:
       type: object
@@ -4605,6 +4730,7 @@ components:
         - OPERATOR_OVERRIDE
         - AGENT_LINK
         - LOYALTY
+        - SUBSCRIPTION
 
     AuditEvent:
       type: object

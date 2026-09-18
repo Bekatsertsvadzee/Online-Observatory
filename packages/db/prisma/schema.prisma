@@ -208,6 +208,7 @@ enum AuditCategory {
   OPERATOR_OVERRIDE
   AGENT_LINK
   LOYALTY
+  SUBSCRIPTION
 }
 
 enum NetworkNodeKind {
@@ -282,6 +283,7 @@ enum PaymentPurpose {
   BOOKING
   OBSERVER_PACK
   GIFT_VOUCHER
+  SUBSCRIPTION
 }
 
 /// Contract: ObserverPackStatus.
@@ -356,6 +358,7 @@ model User {
   captures            Capture[]
   collections         Collection[]
   subscription        Subscription?
+  creditAccount       CreditAccount?
   creditLedger        CreditLedger[]
   privateSessions     PrivateSession[]
   observatoryCommands ObservatoryCommand[]
@@ -964,8 +967,15 @@ model Payment {
   booking       Booking?
   observerPack  ObserverPack?
   giftVoucher   GiftVoucher?
+  /// ADR-022. Set on a renewal charge. The unique below is what makes the sweep
+  /// idempotent without leader election: two passes over one period open one
+  /// payment.
+  subscriptionId String?       @db.Uuid
+  periodStart    DateTime?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
 
   @@unique([provider, providerRef])
+  @@unique([subscriptionId, periodStart])
   @@index([userId, createdAt])
   @@index([status])
 }
@@ -1090,19 +1100,73 @@ model CollectionCapture {
   @@index([captureId])
 }
 
+/// ADR-022. One subscription per customer. The price is copied from the plan
+/// catalogue when a period is charged, so a later change to the catalogue never
+/// rewrites what somebody already paid.
 model Subscription {
-  id        String             @id @default(uuid()) @db.Uuid
-  userId    String             @unique @db.Uuid
-  plan      SubscriptionPlan
-  status    SubscriptionStatus
-  startsAt  DateTime
-  endsAt    DateTime?
-  isDemo    Boolean            @default(false)
-  createdAt DateTime           @default(now())
-  updatedAt DateTime           @updatedAt
-  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                 String             @id @default(uuid()) @db.Uuid
+  userId             String             @unique @db.Uuid
+  plan               SubscriptionPlan
+  status             SubscriptionStatus
+  startsAt           DateTime
+  endsAt             DateTime?
+  priceMinor         Int
+  currency           Currency           @default(GEL)
+  /// Null until the first period is paid: a subscription grants nothing before
+  /// money arrives (ADR-022 section 6).
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  /// The customer asked to stop, but the period they paid for still runs.
+  cancelAtPeriodEnd  Boolean            @default(false)
+  pausedAt           DateTime?
+  /// The provider's handle for the saved card. Never the card itself, and never
+  /// something this platform could charge with on its own.
+  providerMandateRef String?
+  /// The most recent renewal payment. A scalar, not a relation: Payment already
+  /// points here, and a second relation between the two would need naming for no
+  /// gain.
+  lastPaymentId      String?            @db.Uuid
+  isDemo             Boolean            @default(false)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  renewalPayments    Payment[]
+
+  @@index([status, currentPeriodEnd])
 }
 
+/// ADR-022. The plan catalogue, as rows rather than code, following LoyaltyScheme:
+/// changing a price or withdrawing a plan is an UPDATE, not a deployment. Empty
+/// until the maintainer sets prices, and an empty catalogue sells nothing.
+model SubscriptionPlanConfig {
+  plan             SubscriptionPlan @id
+  nameEn           String
+  nameKa           String
+  priceMinor       Int
+  currency         Currency         @default(GEL)
+  /// Observation minutes granted when a period is paid. Minutes, not observations:
+  /// the slot length is not settled until DV-035 measures the real optical train
+  /// (ADR-022 section 2).
+  minutesPerPeriod Int
+  isAvailable      Boolean          @default(false)
+  updatedAt        DateTime         @updatedAt
+}
+
+/// ADR-022. The denormalised balance behind CreditLedger, in observation minutes.
+/// It changes only in the transaction that appends the entry, and a spend is a
+/// conditional update on it rather than a row lock, so checkout does not serialise.
+model CreditAccount {
+  userId    String   @id @db.Uuid
+  balance   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// ADR-022. Append-only, in observation minutes, enforced by a trigger. Idempotent
+/// by `idempotencyKey`, which names its source: `renewal:<subscriptionId>:<periodStart>`,
+/// `booking:<bookingId>`, `booking:<bookingId>:release`,
+/// `expiry:<subscriptionId>:<periodEnd>`, `admin:<auditEventId>`.
 model CreditLedger {
   id             String             @id @default(uuid()) @db.Uuid
   userId         String             @db.Uuid

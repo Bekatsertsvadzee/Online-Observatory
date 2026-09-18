@@ -15,6 +15,7 @@
     "./refunds": "./refunds.ts",
     "./vouchers": "./vouchers.ts",
     "./loyalty": "./loyalty.ts",
+    "./credits": "./credits.ts",
     "./rate-limit": "./rate-limit.ts"
   },
   "scripts": {
