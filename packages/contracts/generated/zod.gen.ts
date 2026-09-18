@@ -1448,7 +1448,8 @@ export const zAuditCategory = z.enum([
     'OBSERVATORY_MODE',
     'OPERATOR_OVERRIDE',
     'AGENT_LINK',
-    'LOYALTY'
+    'LOYALTY',
+    'SUBSCRIPTION'
 ]);
 
 /**

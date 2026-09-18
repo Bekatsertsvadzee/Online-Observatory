@@ -2034,7 +2034,8 @@ export const AuditCategory = {
     OBSERVATORY_MODE: 'OBSERVATORY_MODE',
     OPERATOR_OVERRIDE: 'OPERATOR_OVERRIDE',
     AGENT_LINK: 'AGENT_LINK',
-    LOYALTY: 'LOYALTY'
+    LOYALTY: 'LOYALTY',
+    SUBSCRIPTION: 'SUBSCRIPTION'
 } as const;
 
 export type AuditCategory = typeof AuditCategory[keyof typeof AuditCategory];

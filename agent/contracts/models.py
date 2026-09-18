@@ -1577,6 +1577,7 @@ class AuditCategory(StrEnum):
     operator_override = 'OPERATOR_OVERRIDE'
     agent_link = 'AGENT_LINK'
     loyalty = 'LOYALTY'
+    subscription = 'SUBSCRIPTION'
 
 
 class AuditEvent(BaseModel):

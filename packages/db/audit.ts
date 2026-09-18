@@ -48,6 +48,12 @@ export type AuditAction =
   | "LOYALTY_REDEMPTION_RELEASED"
   | "LOYALTY_ADMIN_ADJUSTMENT"
   | "LOYALTY_TIER_CHANGED"
+  // SUBSCRIPTION (ADR-022): one action per credit ledger entry. The reason names
+  // what moved the minutes; the idempotency key in the detail names the event.
+  | "CREDIT_SUBSCRIPTION_GRANT"
+  | "CREDIT_MISSION_DEBIT"
+  | "CREDIT_REFUND"
+  | "CREDIT_ADJUSTMENT"
   // BOOKING
   | "BOOKING_RESERVED"
   | "BOOKING_SLOT_RELEASED"

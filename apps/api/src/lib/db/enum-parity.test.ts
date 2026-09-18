@@ -34,6 +34,8 @@ const SHARED_ENUMS = [
   "SessionRole",
   "SlotUnavailableReason",
   "SolarSystemBody",
+  "SubscriptionPlan",
+  "SubscriptionStatus",
   "TargetPositionSource",
   "TargetType",
   "UserRole",
@@ -73,8 +75,6 @@ const DATABASE_ONLY = new Set([
   "PaymentPurpose",
   "PrivateSessionStatus",
   "ProcessingPreset",
-  "SubscriptionPlan",
-  "SubscriptionStatus",
 ]);
 
 const members = (enumObject: Record<string, string>) =>
