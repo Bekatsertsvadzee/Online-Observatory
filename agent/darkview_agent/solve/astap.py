@@ -60,8 +60,12 @@ def fits_bytes(frame: Frame) -> bytes:
         _card("EXPTIME", repr(frame.exposure_milliseconds / 1000.0)),
         _card("GAIN", str(frame.gain)),
         _card("DATE-OBS", f"'{frame.captured_at.strftime('%Y-%m-%dT%H:%M:%S.%f')}'"),
-        "END".ljust(FITS_CARD),
     ]
+    if frame.bayer_pattern is not None:
+        # Describing a colour mosaic as mono would be a claim about the data that
+        # is not true, whatever the solver then does with it (ADR-021).
+        cards.append(_card("BAYERPAT", f"'{frame.bayer_pattern}'"))
+    cards.append("END".ljust(FITS_CARD))
     header = "".join(cards).encode("ascii")
     header += b" " * (-len(header) % FITS_BLOCK)
 

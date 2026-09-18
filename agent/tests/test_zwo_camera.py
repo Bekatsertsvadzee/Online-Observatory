@@ -153,6 +153,13 @@ def test_the_frame_is_labelled_real(clock, camera):
     assert camera.read_frame().mode.value == "REAL"
 
 
+def test_the_frame_carries_the_sensor_s_colour_pattern(clock, camera):
+    """ADR-021: a frame that travelled without it could be stacked colour-swapped."""
+    camera.expose(10.0, 0)
+    clock.advance(1.0)
+    assert camera.read_frame().bayer_pattern == "RGGB"
+
+
 # --------------------------------------------------------------------------
 # The zwoasi adapter
 # --------------------------------------------------------------------------
@@ -172,6 +179,7 @@ class _FakeZwoasiCamera:
             "MaxHeight": 2160,
             "BitDepth": 12,
             "IsColorCam": True,
+            "BayerPattern": self.module.bayer_pattern,
         }
 
     def get_controls(self):
@@ -211,6 +219,7 @@ def zwoasi(monkeypatch):
     module.opened = []
     module.status = 1
     module.cameras = ["ZWO ASI120MM", "ZWO ASI585MC"]
+    module.bayer_pattern = 0  # ASI_BAYER_RG
 
     def init(path):
         module.init_calls.append(path)
@@ -231,12 +240,32 @@ def test_the_adapter_opens_the_one_named_camera_for_full_frame_raw16(zwoasi):
     assert zwoasi.init_calls == ["/opt/asi/libASICamera2.so"]
     assert zwoasi.opened[0].index == 1
     assert zwoasi.opened[0].calls == [("set_roi", {"bins": 1, "image_type": 2})]
+    assert info.bayer_pattern == "RGGB"
     assert (info.width_px, info.height_px, info.gain_max, info.exposure_min_us) == (
         3840,
         2160,
         570,
         32,
     )
+
+
+@pytest.mark.parametrize(
+    ("raw", "pattern"), [(0, "RGGB"), (1, "BGGR"), (2, "GRBG"), (3, "GBRG")]
+)
+def test_the_sensor_s_colour_pattern_comes_from_the_camera(zwoasi, raw, pattern):
+    """Read from the camera, never assumed: ADR-021 leaves the value to first light."""
+    zwoasi.bayer_pattern = raw
+    assert ZwoasiCamera("/lib.so").open().bayer_pattern == pattern
+
+
+def test_a_mono_camera_has_no_colour_pattern(zwoasi, monkeypatch):
+    original = _FakeZwoasiCamera.get_camera_property
+    monkeypatch.setattr(
+        _FakeZwoasiCamera,
+        "get_camera_property",
+        lambda self: {**original(self), "IsColorCam": False},
+    )
+    assert ZwoasiCamera("/lib.so").open().bayer_pattern is None
 
 
 def test_the_sdk_library_is_initialised_once_per_process(zwoasi):

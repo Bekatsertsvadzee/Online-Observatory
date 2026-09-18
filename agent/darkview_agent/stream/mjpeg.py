@@ -29,6 +29,7 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import Image
 
+from darkview_agent.capture import colour
 from darkview_agent.clock import Clock, SystemClock, wire_timestamp
 from darkview_agent.devices.frame import Frame
 
@@ -161,9 +162,12 @@ def encode_frame(frame: Frame, settings: StreamSettings | None = None) -> Encode
     """One exposure as JPEG bytes, stretched and scaled down."""
     resolved = settings or StreamSettings()
 
-    # No `mode=`: Pillow infers "L" from a 2-D uint8 array, and passing it is
-    # deprecated in 11 and removed in 13.
-    image = Image.fromarray(stretch_to_8bit(frame.pixels, resolved))
+    # No `mode=`: Pillow infers "L" from a 2-D uint8 array and "RGB" from an
+    # (h, w, 3) one, and passing it is deprecated in 11 and removed in 13.
+    # A colour frame is debayered first (ADR-021); a mono one is untouched. The
+    # stretch is shape-agnostic and runs across all three channels together, so
+    # the colour balance of the sky is left as the sensor saw it.
+    image = Image.fromarray(stretch_to_8bit(colour.to_display(frame), resolved))
 
     longest = max(image.width, image.height)
     if longest > resolved.max_edge_px:

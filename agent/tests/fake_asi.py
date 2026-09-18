@@ -24,6 +24,7 @@ class FakeAsiCamera:
             height_px=height_px,
             bit_depth=12,
             is_color=True,
+            bayer_pattern="RGGB",
             gain_min=0,
             gain_max=570,
             exposure_min_us=32,

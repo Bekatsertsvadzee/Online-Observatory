@@ -11,9 +11,11 @@ is DV-035's: whether a frame arrives at all, how long readout takes after the
 exposure ends, and what the 12-bit ADC's values look like in the 16-bit buffer.
 
 **Frames are raw.** RAW16, one sample per photosite, binning 1, the full sensor.
-The ASI585MC is a colour camera, so each frame is a Bayer mosaic; `Frame` carries
-it as a 2-D array exactly like a mono frame, and nothing downstream debayers it
-yet.
+The ASI585MC is a colour camera, so each frame is a Bayer mosaic, and the frame
+says so: the pattern the camera reports travels on `Frame.bayer_pattern`, the
+stack keeps the mosaic, and only the live view and the delivered image debayer
+(ADR-021). Which pattern this sensor reports, and whether it comes out the right
+way up, are first-light questions.
 
 **`capturedAt` is when the exposure started**, taken from the wall clock as the
 SDK is told to begin. That is the moment the sky in the frame belongs to; readout
@@ -53,6 +55,8 @@ class SensorInfo:
     height_px: int
     bit_depth: int
     is_color: bool
+    #: The colour filter pattern, or None for a mono sensor (ADR-021).
+    bayer_pattern: str | None
     gain_min: int
     gain_max: int
     exposure_min_us: int
@@ -185,6 +189,7 @@ class ZwoCamera(CameraDriver):
             gain=self._gain,
             captured_at=started_at,
             mode=self.mode,
+            bayer_pattern=info.bayer_pattern,
         )
 
     def abort_exposure(self) -> None:
