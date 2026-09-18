@@ -13,6 +13,11 @@
 
 ALTER TYPE "PaymentPurpose" ADD VALUE 'SUBSCRIPTION';
 
+-- Every credit ledger entry is audited, and the audit row needs a category the
+-- database will accept. The enum member is used by a later transaction, never this
+-- one, which is what ALTER TYPE ... ADD VALUE requires.
+ALTER TYPE "AuditCategory" ADD VALUE 'SUBSCRIPTION';
+
 -- Subscription gains the period, the price it was charged and the provider's handle
 -- for the saved card. NOT NULL without a default is deliberate: the table holds no
 -- rows, so this fails loudly rather than inventing a price for one that existed.
