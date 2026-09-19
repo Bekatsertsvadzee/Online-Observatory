@@ -1008,6 +1008,16 @@ export type Subscription = {
     isDemo: boolean;
 };
 
+export type SubscribeRequest = {
+    plan: SubscriptionPlan;
+    locale?: Locale;
+};
+
+export type SubscriptionWithPaymentIntent = {
+    subscription: Subscription;
+    paymentIntent: PaymentIntent;
+};
+
 export type LoyaltyAccount = {
     userId: string;
     /**
@@ -3157,6 +3167,142 @@ export type GetMySubscriptionResponses = {
 };
 
 export type GetMySubscriptionResponse = GetMySubscriptionResponses[keyof GetMySubscriptionResponses];
+
+export type SubscribeData = {
+    body: SubscribeRequest;
+    path?: never;
+    query?: never;
+    url: '/subscription';
+};
+
+export type SubscribeErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+    /**
+     * A dependency this request needs is not configured or not reachable.
+     */
+    503: ApiError;
+};
+
+export type SubscribeError = SubscribeErrors[keyof SubscribeErrors];
+
+export type SubscribeResponses = {
+    /**
+     * Subscription created, awaiting payment for its first period.
+     */
+    201: SubscriptionWithPaymentIntent;
+};
+
+export type SubscribeResponse = SubscribeResponses[keyof SubscribeResponses];
+
+export type CancelMySubscriptionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/subscription/cancel';
+};
+
+export type CancelMySubscriptionErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+};
+
+export type CancelMySubscriptionError = CancelMySubscriptionErrors[keyof CancelMySubscriptionErrors];
+
+export type CancelMySubscriptionResponses = {
+    /**
+     * The subscription as it now stands.
+     */
+    200: Subscription;
+};
+
+export type CancelMySubscriptionResponse = CancelMySubscriptionResponses[keyof CancelMySubscriptionResponses];
+
+export type PauseMySubscriptionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/subscription/pause';
+};
+
+export type PauseMySubscriptionErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+};
+
+export type PauseMySubscriptionError = PauseMySubscriptionErrors[keyof PauseMySubscriptionErrors];
+
+export type PauseMySubscriptionResponses = {
+    /**
+     * The paused subscription.
+     */
+    200: Subscription;
+};
+
+export type PauseMySubscriptionResponse = PauseMySubscriptionResponses[keyof PauseMySubscriptionResponses];
+
+export type ResumeMySubscriptionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/subscription/resume';
+};
+
+export type ResumeMySubscriptionErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+};
+
+export type ResumeMySubscriptionError = ResumeMySubscriptionErrors[keyof ResumeMySubscriptionErrors];
+
+export type ResumeMySubscriptionResponses = {
+    /**
+     * The resumed subscription.
+     */
+    200: Subscription;
+};
+
+export type ResumeMySubscriptionResponse = ResumeMySubscriptionResponses[keyof ResumeMySubscriptionResponses];
 
 export type ListMyGiftVouchersData = {
     body?: never;

@@ -142,12 +142,21 @@ PostgreSQL via Prisma, in `packages/db`. Core Phase 1 entities: users, bookings,
 targets, captures, mission_events, observatory_state, plus observers (ADR-007) and the
 loyalty ledger (ADR-008).
 
-Frozen by ADR-003 and **not** part of Phase 1: the multi-observatory network,
-subscriptions, the credit ledger, private sessions, `CaptureAccess`. The code remains; it is
-not extended and not wired into the mission path.
+Frozen by ADR-003 and **not** part of Phase 1: private sessions and `CaptureAccess`. The
+code remains; it is not extended and not wired into the mission path.
+`CreditLedgerReason.PRIVATE_SESSION_DEBIT` is unfrozen as a *name* and must never be
+written while private sessions are frozen.
 
-The loyalty points ledger is **separate** from the frozen `CreditLedger` — building loyalty
-on the frozen models would silently un-freeze subscriptions.
+**Unfrozen by ADR-022** (maintainer's decision of 2026-09-15): subscriptions and the credit
+ledger. A plan grants **observation minutes**, not observations, because the slot length is
+not settled until DV-035 measures the optical train. Minutes are granted only inside the
+settlement transaction of a captured payment, keyed to the period, and the ledger is
+append-only by trigger with a `CreditAccount` balance beside it.
+
+Three balances, three ledgers, no crossing: loyalty points (`LoyaltyLedgerEntry`, ADR-008),
+observation minutes (`CreditLedger`, ADR-022) and money (`Payment`). A subscription payment
+earns loyalty points like any other payment; spending a minute earns nothing, because no
+money moved.
 
 ## 10. Audit and evidence
 

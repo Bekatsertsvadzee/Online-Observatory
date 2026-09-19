@@ -51,6 +51,7 @@ describe("the sandbox provider", () => {
       amountMinor: 4500,
       currency: "GEL",
       failureReason: null,
+      mandateRef: null,
     });
     expect(
       sandbox.readOutcome({ ...payload, result: "FAILED", failureReason: "CARD_DECLINED" }),

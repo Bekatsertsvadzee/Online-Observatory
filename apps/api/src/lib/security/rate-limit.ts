@@ -106,6 +106,21 @@ export const OBSERVER_SEAT_POLICY: RateLimitPolicy = {
 };
 
 /**
+ * Subscription changes, per account (ADR-022).
+ *
+ * Subscribing opens a payment row; pausing, resuming and cancelling each write
+ * one row and one audit event. Nothing scarce is held, so this protects the
+ * database and the audit log from a stuck client rather than protecting
+ * inventory. The limit is generous enough that a customer changing their mind a
+ * few times in an evening never meets it.
+ */
+export const SUBSCRIPTION_POLICY: RateLimitPolicy = {
+  limit: 20,
+  windowMs: 60 * 60 * 1000,
+  blockMs: 60 * 60 * 1000,
+};
+
+/**
  * Accounts created from one address.
  *
  * `AUTHENTICATION_POLICY` meters registration by address *and* email, so a fresh

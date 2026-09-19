@@ -624,6 +624,10 @@ paths:
         ADR-022. Plans are rows rather than code, so a price or a grant changes without
         a deployment and a plan is withdrawn by clearing `isAvailable`. An empty list
         means nothing is on sale, which is the state until prices are set.
+
+        Public, like the loyalty scheme: a price list is what somebody reads before
+        they have an account.
+      security: []
       responses:
         "200":
           description: The available plans, cheapest first.
@@ -655,6 +659,127 @@ paths:
                   - type: "null"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+    post:
+      operationId: subscribe
+      tags: [booking]
+      summary: Subscribe to a monthly plan.
+      description: |
+        ADR-022. Opens a payment intent for the first period through the same provider
+        path as a booking, and saves the instrument the renewal sweep later charges.
+        The subscription grants nothing until that payment settles: there is no path
+        that grants minutes before money arrives (ADR-022 §6).
+
+        409 when the user already has a subscription that is not CANCELLED or EXPIRED;
+        a plan change is a cancellation and a new subscription, not an edit. 422 for a
+        plan that is not on sale. 503 when no plan catalogue has been configured on
+        this deployment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubscribeRequest"
+      responses:
+        "201":
+          description: Subscription created, awaiting payment for its first period.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionWithPaymentIntent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /subscription/cancel:
+    post:
+      operationId: cancelMySubscription
+      tags: [booking]
+      summary: Stop the subscription renewing.
+      description: |
+        ADR-022 §9, and the maintainer's decision of 2026-09-19: cancelling refunds
+        nothing. A period that has been paid for runs to its end, so the subscription
+        stays ACTIVE with `cancelAtPeriodEnd` set and its minutes stay spendable until
+        they expire. A subscription with no funded period is CANCELLED at once.
+
+        Idempotent: cancelling an already-cancelling subscription changes nothing and
+        answers 200. 404 when the user has never subscribed. 409 when it is already
+        CANCELLED or EXPIRED.
+      responses:
+        "200":
+          description: The subscription as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /subscription/pause:
+    post:
+      operationId: pauseMySubscription
+      tags: [booking]
+      summary: Pause charging and granting.
+      description: |
+        ADR-022 §9. A pause is the customer's own act: the sweep neither charges nor
+        grants while it holds. Minutes already granted stay spendable until the period
+        they belong to expires — pausing is not a way to bank them.
+
+        Idempotent. 404 when the user has never subscribed. 409 for a subscription
+        that is not ACTIVE.
+      responses:
+        "200":
+          description: The paused subscription.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /subscription/resume:
+    post:
+      operationId: resumeMySubscription
+      tags: [booking]
+      summary: Resume a paused subscription.
+      description: |
+        ADR-022 §9. The subscription becomes ACTIVE again and the sweep charges it at
+        the end of its current period, or on the next pass when that period has
+        already passed.
+
+        It undoes a pause and nothing else. A subscription that is already ending --
+        cancelled, or running out the last period it paid for -- is refused rather
+        than answered 200, because a 200 would read as an un-cancellation that
+        nothing performed.
+
+        Idempotent. 404 when the user has never subscribed. 409 for a subscription
+        that is not PAUSED, and for one that is ending.
+      responses:
+        "200":
+          description: The resumed subscription.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /vouchers:
     get:
@@ -3352,6 +3477,26 @@ components:
           description: Observation minutes a booking can spend now.
         isDemo:
           type: boolean
+
+    SubscribeRequest:
+      type: object
+      additionalProperties: false
+      required: [plan]
+      properties:
+        plan:
+          $ref: "#/components/schemas/SubscriptionPlan"
+        locale:
+          $ref: "#/components/schemas/Locale"
+
+    SubscriptionWithPaymentIntent:
+      type: object
+      additionalProperties: false
+      required: [subscription, paymentIntent]
+      properties:
+        subscription:
+          $ref: "#/components/schemas/Subscription"
+        paymentIntent:
+          $ref: "#/components/schemas/PaymentIntent"
 
     LoyaltyAccount:
       type: object

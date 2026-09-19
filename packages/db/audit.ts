@@ -54,6 +54,19 @@ export type AuditAction =
   | "CREDIT_MISSION_DEBIT"
   | "CREDIT_REFUND"
   | "CREDIT_ADJUSTMENT"
+  // SUBSCRIPTION (ADR-022): the subscription itself. ORDERED is the customer
+  // asking; ACTIVATED and RENEWED are the money arriving, and only those two sit
+  // beside a grant. The three customer acts each write one row, and a change that
+  // changes nothing writes none -- so the log is what happened, not what was
+  // clicked.
+  | "SUBSCRIPTION_ORDERED"
+  | "SUBSCRIPTION_ACTIVATED"
+  | "SUBSCRIPTION_RENEWED"
+  | "SUBSCRIPTION_PAYMENT_FAILED"
+  | "SUBSCRIPTION_PAUSED"
+  | "SUBSCRIPTION_RESUMED"
+  | "SUBSCRIPTION_CANCEL_SCHEDULED"
+  | "SUBSCRIPTION_CANCELLED"
   // BOOKING
   | "BOOKING_RESERVED"
   | "BOOKING_SLOT_RELEASED"
