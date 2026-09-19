@@ -192,12 +192,24 @@ async function describeData(
   // a booking that is somehow not refunded, or an offer that was already taken,
   // is not sent.
   const stillTrue =
-    kind === "BOOKING_REFUNDED"
+    kind === "BOOKING_REFUNDED" || kind === "SUBSCRIPTION_MINUTES_RETURNED"
       ? booking.status === "REFUNDED"
       : kind === "ENTITLEMENT_AVAILABLE"
         ? booking.entitlement?.outcome === "OPEN"
         : booking.status === "CONFIRMED";
   if (!stillTrue) return null;
+
+  // #123. Read from the booking that spent them, which for a refunded reschedule
+  // is the one it was made from. Minutes only: no money moved.
+  let minutesReturned: number | null = null;
+  if (kind === "SUBSCRIPTION_MINUTES_RETURNED") {
+    const paid = await database.booking.findUnique({
+      where: { id: String(payload.paidBookingId) },
+      select: { subscriptionMinutesSpent: true },
+    });
+    if (!paid || paid.subscriptionMinutesSpent <= 0) return null;
+    minutesReturned = paid.subscriptionMinutesSpent;
+  }
 
   return {
     bookingId: booking.id,
@@ -217,6 +229,7 @@ async function describeData(
     ...(kind === "BOOKING_REFUNDED"
       ? { refund: { priceMinor: booking.priceMinor, currency: booking.currency } }
       : {}),
+    ...(minutesReturned !== null ? { minutesReturned } : {}),
   };
 }
 

@@ -278,6 +278,55 @@ describe("delivering the outbox", () => {
   });
 });
 
+describe("minutes returned by a refund (#123)", () => {
+  async function refundedMinutesBooking(status: "REFUNDED" | "CONFIRMED" = "REFUNDED") {
+    const id = await booking(90);
+    await database.booking.update({
+      where: { id },
+      data: { status, priceMinor: 0, subscriptionMinutesSpent: 20 },
+    });
+    await database.emailNotification.create({
+      data: {
+        userId,
+        kind: "SUBSCRIPTION_MINUTES_RETURNED",
+        dedupeKey: `minutes-returned:${id}`,
+        payload: { bookingId: id, paidBookingId: id },
+      },
+    });
+    return id;
+  }
+
+  it("says how many minutes came back and names the slot in both languages, never a price", async () => {
+    const id = await refundedMinutesBooking();
+    const mail = mailService();
+
+    await dispatchPendingEmails({ database, webhook: WEBHOOK, now: NOW, fetchImpl: mail.fetchImpl });
+
+    const body = JSON.parse(mail.sent[0].body);
+    expect(body).toMatchObject({
+      kind: "SUBSCRIPTION_MINUTES_RETURNED",
+      locale: "ka",
+      data: {
+        bookingId: id,
+        minutesReturned: 20,
+        target: { nameEn: "M13", nameKa: "M13 ბურთისებრი გროვა" },
+        observatory: { nameEn: "Tbilisi Observatory", nameKa: "თბილისის ობსერვატორია" },
+      },
+    });
+    expect(body.data).not.toHaveProperty("refund");
+  });
+
+  it("is not sent for a booking that is not refunded", async () => {
+    await refundedMinutesBooking("CONFIRMED");
+    const mail = mailService();
+
+    const summary = await dispatchPendingEmails({ database, webhook: WEBHOOK, now: NOW, fetchImpl: mail.fetchImpl });
+
+    expect(summary.skipped).toBe(1);
+    expect(mail.sent).toEqual([]);
+  });
+});
+
 describe("a capture reaching the Collection", () => {
   it("queues a capture-ready email for the mission's owner, once", async () => {
     const mission = await database.mission.create({

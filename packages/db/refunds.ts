@@ -240,8 +240,8 @@ async function restoreVoucher(
  * The paid booking is the root of the reschedule chain, where the minutes were
  * spent, so the release is keyed on it and a chain refunds its minutes once.
  *
- * No email: the refund email states an amount of money, and none moved. The
- * customer sees the minutes back on `GET /subscription`.
+ * Its own email (#123), not BOOKING_REFUNDED: that one states an amount of money,
+ * and none moved.
  */
 async function returnMinutes(
   tx: Prisma.TransactionClient,
@@ -280,6 +280,13 @@ async function returnMinutes(
     },
     tx,
   );
+
+  await queueEmail(tx, {
+    userId: paidBooking.userId,
+    kind: "SUBSCRIPTION_MINUTES_RETURNED",
+    dedupeKey: `minutes-returned:${bookingId}`,
+    payload: { bookingId, paidBookingId: paidBooking.id },
+  });
 
   return {
     ok: true,

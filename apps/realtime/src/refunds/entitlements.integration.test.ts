@@ -385,6 +385,9 @@ describe("an entitlement nobody used for thirty days", () => {
     const audit = await database.auditLog.findFirstOrThrow({ where: { action: "PAYMENT_REFUNDED" } });
     expect(audit.metadata).toMatchObject({ bookingId, automatic: true });
     expect(await database.emailNotification.count({ where: { kind: "BOOKING_REFUNDED" } })).toBe(1);
+    expect(
+      await database.emailNotification.count({ where: { kind: "SUBSCRIPTION_MINUTES_RETURNED" } }),
+    ).toBe(0);
   });
 
   it("is left alone before it expires", async () => {
