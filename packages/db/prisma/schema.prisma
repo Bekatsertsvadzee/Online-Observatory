@@ -1341,6 +1341,8 @@ enum EmailNotificationKind {
   BOOKING_REFUNDED
   GIFT_VOUCHER_ISSUED
   GIFT_VOUCHER_RESTORED
+  /// #123: a refund gave back the subscription minutes a booking spent.
+  SUBSCRIPTION_MINUTES_RETURNED
 }
 
 /// Contract: BookingLossCause (DV-111).

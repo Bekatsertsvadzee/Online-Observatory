@@ -290,13 +290,17 @@ has ended spends nothing even before its expiry entry is written.
 
 **A refund returns minutes, never money.** `refundEntitledBooking` walks a reschedule
 chain to the booking that spent them and releases them keyed `booking:<id>:release`,
-so a chain refunds once. No email is queued: the refund email states an amount of
-money, and none moved. The release sits beside `releaseRedeemedPoints` on the lapsed-
+so a chain refunds once. Its own email tells the customer (#123), because the refund
+email states an amount of money and none moved. The release sits beside `releaseRedeemedPoints` on the lapsed-
 hold and failed-payment paths too, where a minutes booking -- never PENDING_PAYMENT --
 does not reach today.
 
-**Not here:** telling the customer by email that minutes came back (#123). Minutes
-returned after their period ended are expired at the next period end the sweep sees.
+**The minutes-returned email** (#123) is `SUBSCRIPTION_MINUTES_RETURNED`, queued in the
+refund's transaction and deduplicated per refunded booking. It carries the minutes,
+read at delivery from the booking that spent them, and the slot's names in both
+languages; the mail service's template owns the English and Georgian wording. It is
+sent only while the booking is still REFUNDED. Minutes returned after their period
+ended are expired at the next period end the sweep sees.
 
 ## What the renewal sweep built (#121)
 

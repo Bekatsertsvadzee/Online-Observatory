@@ -571,6 +571,11 @@ describe("a refunded booking a voucher paid for (DV-111)", () => {
       }),
     ).toBe(1);
     expect(
+      await database.emailNotification.count({
+        where: { kind: "SUBSCRIPTION_MINUTES_RETURNED" },
+      }),
+    ).toBe(0);
+    expect(
       await database.auditLog.count({
         where: { action: "GIFT_VOUCHER_RESTORED", entityId: voucherId },
       }),

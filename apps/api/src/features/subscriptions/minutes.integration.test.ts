@@ -427,16 +427,26 @@ describe("a refunded booking subscription minutes paid for (DV-111)", () => {
         where: { action: "BOOKING_MINUTES_RETURNED", entityId: bookingId },
       }),
     ).toBe(1);
-    // The refund email states an amount of money; none moved.
+    // The refund email states an amount of money; none moved, so it has its own (#123).
     expect(await database.emailNotification.count({ where: { kind: "BOOKING_REFUNDED" } })).toBe(
       0,
     );
+    expect(
+      await database.emailNotification.findMany({
+        where: { kind: "SUBSCRIPTION_MINUTES_RETURNED" },
+      }),
+    ).toMatchObject([
+      { userId: customerId, payload: { bookingId, paidBookingId: bookingId } },
+    ]);
 
     await expect(refund(bookingId)).resolves.toEqual({
       ok: false,
       reason: "NO_OPEN_ENTITLEMENT",
     });
     expect(await balance()).toBe(120);
+    expect(
+      await database.emailNotification.count({ where: { kind: "SUBSCRIPTION_MINUTES_RETURNED" } }),
+    ).toBe(1);
   });
 
   it("returns the minutes the original booking spent when a free reschedule is refunded", async () => {
@@ -461,6 +471,13 @@ describe("a refunded booking subscription minutes paid for (DV-111)", () => {
         where: { idempotencyKey: `booking:${original}:release` },
       }),
     ).toBe(1);
+    expect(
+      await database.emailNotification.findMany({
+        where: { kind: "SUBSCRIPTION_MINUTES_RETURNED" },
+      }),
+    ).toMatchObject([
+      { payload: { bookingId: rescheduled.booking.id, paidBookingId: original } },
+    ]);
   });
 
   it("releases a booking's minutes once however many paths reach it", async () => {
