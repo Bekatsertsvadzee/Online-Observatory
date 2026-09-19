@@ -210,7 +210,8 @@ describe("a backup restores into an empty database", () => {
   it("brings back the partial unique indexes, WHERE clauses and all", async () => {
     // The strongest thing this drill can assert about correctness. These are not
     // conventions the application maintains -- they are what stops two sessions
-    // owning one mission and a mission holding an observatory twice over. A dump
+    // owning one mission, a mission holding an observatory twice over, and two
+    // renewal sweeps charging one subscription period twice (ADR-022). A dump
     // that brought back their names without their WHERE clauses would restore a
     // database that looks right and lets both happen.
     restored = new PrismaClient({
@@ -226,6 +227,7 @@ describe("a backup restores into an empty database", () => {
     expect(partial.map((index) => index.indexname)).toEqual([
       "MissionSession_active_owner_unique",
       "Mission_active_per_observatory_unique",
+      "Payment_subscription_period_live_key",
     ]);
 
     for (const index of partial) {

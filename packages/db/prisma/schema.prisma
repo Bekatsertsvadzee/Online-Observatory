@@ -161,6 +161,8 @@ enum CreditLedgerReason {
   PRIVATE_SESSION_DEBIT
   REFUND
   ADJUSTMENT
+  /// ADR-022, amended 2026-09-19: a period's unspent minutes, taken back at its end.
+  EXPIRY
 }
 
 enum PrivateSessionStatus {
@@ -969,15 +971,18 @@ model Payment {
   booking       Booking?
   observerPack  ObserverPack?
   giftVoucher   GiftVoucher?
-  /// ADR-022. Set on a renewal charge. The unique below is what makes the sweep
-  /// idempotent without leader election: two passes over one period open one
-  /// payment.
+  /// ADR-022. Set on a renewal charge. `Payment_subscription_period_live_key`, a
+  /// partial unique index on (subscriptionId, periodStart) WHERE status <> 'FAILED',
+  /// is what makes the sweep idempotent without leader election: two passes over
+  /// one period open one live charge. A FAILED charge leaves the index, so the
+  /// retry the grace period allows can open the next one (ADR-022, amended
+  /// 2026-09-19). Raw SQL in the migration; Prisma cannot express it.
   subscriptionId String?       @db.Uuid
   periodStart    DateTime?
   subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
 
   @@unique([provider, providerRef])
-  @@unique([subscriptionId, periodStart])
+  @@index([subscriptionId, periodStart])
   @@index([userId, createdAt])
   @@index([status])
 }

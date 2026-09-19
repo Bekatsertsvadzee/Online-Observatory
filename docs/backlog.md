@@ -259,9 +259,8 @@ never the card. The sandbox reads it from its own payload and settlement stores 
 without ever clearing one, because the mandate outlives the charge that created it
 and clearing it would strand the sweep.
 
-**What still cannot happen, and is on its own branch:** the renewal sweep with
-`chargeSavedInstrument` (#121). Nothing sells in production either way -- the sandbox
-is refused there and BOG_IPAY has no adapter (ADR-022 section 11).
+**Nothing sells in production** -- the sandbox is refused there and BOG_IPAY has no
+adapter (ADR-022 section 11). The renewal sweep is below (#121).
 
 **Two pre-existing things this turned up.** `contracts/openapi.yaml` declared
 `GET /subscription/plans` under the global security scheme while listing no 401; it is
@@ -296,9 +295,38 @@ money, and none moved. The release sits beside `releaseRedeemedPoints` on the la
 hold and failed-payment paths too, where a minutes booking -- never PENDING_PAYMENT --
 does not reach today.
 
-**Not here:** telling the customer by email that minutes came back, and what happens
-to minutes returned after the period they were granted in has ended. Both wait on
-the renewal sweep (#121), which is what writes expiry.
+**Not here:** telling the customer by email that minutes came back (#123). Minutes
+returned after their period ended are expired at the next period end the sweep sees.
+
+## What the renewal sweep built (#121)
+
+ADR-022 sections 8 and 9, and its amendment of 2026-09-19. `sweepSubscriptions` runs
+every minute in the realtime service. For each subscription whose period has ended it
+expires the unspent minutes (`EXPIRY`, keyed `expiry:<subscriptionId>:<periodEnd>`),
+then cancels it if `cancelAtPeriodEnd`, leaves it alone if PAUSED, and otherwise opens
+a PENDING renewal payment and asks the charger to charge the saved card. The outcome
+arrives by webhook and the API settles it as it settles a first payment.
+
+**One live charge per period.** The unique on `(subscriptionId, periodStart)` is now
+partial, over payments that have not FAILED, so two processes open one charge and a
+failed one leaves room for the retry. Attempts at period end, +2 days and +4 days;
+`EXPIRED` at the third failure or seven days after the period ended.
+
+**A charge the provider would not take counts as an attempt,** recorded FAILED as
+`CHARGE_NOT_SUBMITTED`. A PENDING row nothing answered would otherwise block every
+later attempt until the grace period ran out.
+
+**A late resume starts a new period** at resumption, so the sweep charges at once for
+a month the customer can use.
+
+**The sandbox charger asks nobody anything.** The charge is the PENDING row; a
+developer, a test or a dev script posts its outcome to the webhook. Production opens
+no charge until a real provider's charger exists.
+
+**Known gap:** a process that dies between opening a charge and handing it to the
+provider leaves a PENDING row nothing answers, and that subscription waits out its
+seven days and expires. The sandbox charger cannot fail that way; a real provider's
+charger should make the request idempotent on the payment id so it can be resent.
 
 ## What DV-060 built, and what it did not
 

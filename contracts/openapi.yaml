@@ -761,8 +761,10 @@ paths:
       summary: Resume a paused subscription.
       description: |
         ADR-022 §9. The subscription becomes ACTIVE again and the sweep charges it at
-        the end of its current period, or on the next pass when that period has
-        already passed.
+        the end of its current period. When that period has already passed, the next
+        one starts at resumption: `currentPeriodEnd` becomes now and the sweep charges
+        on its next pass, for a month the customer can use (maintainer decision of
+        2026-09-19).
 
         It undoes a pause and nothing else. A subscription that is already ending --
         cancelled, or running out the last period it paid for -- is refused rather

@@ -29,6 +29,7 @@ import { LiveStream } from "@/stream/live-stream";
 import { getEnvironment } from "@/env";
 import { dispatchPendingEmails, queueSlotReminders } from "@/notifications/email";
 import { evaluateEndedSlots, refundExpiredEntitlements } from "@/refunds/entitlements";
+import { createSandboxCharger, sweepSubscriptions } from "@/subscriptions/renewals";
 import { refreshViewingConditions } from "@/conditions/forecast";
 import { openMeteoSource } from "@/conditions/open-meteo";
 
@@ -45,6 +46,12 @@ const EMAIL_DISPATCH_INTERVAL_SECONDS = 30;
  * Neither is urgent to the minute; both are idempotent.
  */
 const ENTITLEMENT_SWEEP_INTERVAL_SECONDS = 60;
+
+/**
+ * How often ended subscription periods are expired, cancelled or charged (ADR-022).
+ * Idempotent, and nothing about a renewal is urgent to the minute.
+ */
+const SUBSCRIPTION_SWEEP_INTERVAL_SECONDS = 60;
 
 /**
  * How often viewing conditions are fetched (DV-110). Forecast models update hourly
@@ -422,6 +429,22 @@ if (process.env.NODE_ENV !== "test") {
         console.error("darkview realtime: entitlements", error);
       });
   }, ENTITLEMENT_SWEEP_INTERVAL_SECONDS * 1000);
+
+  // ADR-022 sections 8 and 9. The sandbox is never charged in production (ADR-022
+  // section 11), so there the sweep still expires minutes and ends subscriptions
+  // but opens no charge, until a real provider's charger exists.
+  const charger = environment.NODE_ENV === "production" ? null : createSandboxCharger();
+  setInterval(() => {
+    void sweepSubscriptions(notifications, { charger, now: new Date() })
+      .then(({ unsubmitted }) => {
+        if (unsubmitted > 0) {
+          console.error(`darkview realtime: ${unsubmitted} renewal charge(s) were not accepted`);
+        }
+      })
+      .catch((error) => {
+        console.error("darkview realtime: subscriptions", error);
+      });
+  }, SUBSCRIPTION_SWEEP_INTERVAL_SECONDS * 1000);
 
   // DV-110. Advisory only: this writes forecasts and never touches a weather hold.
   // meteoblue goes first in this list once a key and a verified adapter exist.
