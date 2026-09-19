@@ -9,6 +9,7 @@ import type {
 } from "@darkview/contracts";
 import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { releaseSpentMinutes, spendBookingMinutes } from "@darkview/db/credits";
 import {
   ensureLoyaltyAccount,
   postLoyaltyEntry,
@@ -112,6 +113,7 @@ type BookingRow = {
   createdAt: Date;
   tierDiscountMinor?: number;
   loyaltyPointsRedeemed?: number;
+  subscriptionMinutesSpent?: number;
   /** Present when the caller selected it (DV-111); absent reads as no entitlement. */
   entitlement?: {
     outcome: string;
@@ -168,6 +170,7 @@ export function toContractBooking(row: BookingRow): ContractBooking {
     missionId: row.missionId,
     tierDiscountMinor: row.tierDiscountMinor ?? 0,
     loyaltyPointsRedeemed: row.loyaltyPointsRedeemed ?? 0,
+    subscriptionMinutesSpent: row.subscriptionMinutesSpent ?? 0,
     // NONE is the database remembering the slot was judged; the customer is shown
     // nothing for it. The check constraint guarantees cause and expiry on the rest.
     entitlement:
@@ -228,9 +231,9 @@ export async function expireLapsedHolds(
   now: Date,
 ): Promise<void> {
   const lapsed = await tx.$queryRaw<
-    { id: string; userId: string; loyaltyPointsRedeemed: number }[]
+    { id: string; userId: string; loyaltyPointsRedeemed: number; subscriptionMinutesSpent: number }[]
   >`
-    SELECT "id", "userId", "loyaltyPointsRedeemed" FROM "Booking"
+    SELECT "id", "userId", "loyaltyPointsRedeemed", "subscriptionMinutesSpent" FROM "Booking"
     WHERE "observatoryId" = ${observatoryId}::uuid
       AND "status" = 'PENDING_PAYMENT'
       AND "holdExpiresAt" <= ${now}
@@ -245,8 +248,11 @@ export async function expireLapsedHolds(
     WHERE "id" = ANY(${lapsed.map((row) => row.id)}::uuid[])
   `;
 
-  // DV-095: a hold that lapsed spent its points on nothing.
-  for (const booking of lapsed) await releaseRedeemedPoints(tx, booking);
+  // DV-095 and ADR-022: a hold that lapsed spent its points and minutes on nothing.
+  for (const booking of lapsed) {
+    await releaseRedeemedPoints(tx, booking);
+    await releaseSpentMinutes(tx, booking);
+  }
 }
 
 /**
@@ -381,14 +387,33 @@ export async function reserveSlot(input: {
       break;
   }
 
-  // One price reduction per booking (maintainer decision of 2026-09-16).
-  if (request.voucherCode !== undefined && request.loyaltyPoints !== undefined) {
+  // One price reduction per booking (maintainer decision of 2026-09-16, extended to
+  // subscription minutes by ADR-022 section 7).
+  const reductions = [
+    request.voucherCode !== undefined,
+    request.loyaltyPoints !== undefined,
+    request.useSubscriptionMinutes === true,
+  ].filter(Boolean).length;
+  if (reductions > 1) {
     return {
       ok: false,
       status: 422,
       code: "VALIDATION_FAILED",
-      message: "A booking uses a voucher or loyalty points, not both.",
+      message: "A booking uses one of a voucher, loyalty points or subscription minutes.",
     };
+  }
+
+  if (request.useSubscriptionMinutes === true) {
+    return reserveWithMinutes({
+      userId,
+      observatory,
+      targetId: target.id,
+      slotStartAt,
+      durationMinutes: slot.durationMinutes,
+      currency: slot.currency,
+      idempotencyKey,
+      now,
+    });
   }
 
   if (request.voucherCode !== undefined) {
@@ -630,11 +655,6 @@ async function reserveWithVoucher(input: {
       database.$transaction(async (tx) => {
         await expireLapsedHolds(tx, observatory.id, now);
 
-        const { mode } = await tx.observatory.findUniqueOrThrow({
-          where: { id: observatory.id },
-          select: { mode: true },
-        });
-
         const created = await tx.booking.create({
           data: {
             userId,
@@ -668,34 +688,11 @@ async function reserveWithVoucher(input: {
         });
         if (count === 0) throw new VoucherUnusable();
 
-        // ADR-004, as settlement does it: a booked mission is born SCHEDULED.
-        const mission = await tx.mission.create({
-          data: {
-            userId,
-            targetId,
-            observatoryId: observatory.id,
-            telescopeId: observatory.telescopeId,
-            state: "SCHEDULED",
-            mode,
-            isDemo: observatory.isDemo,
-            requestedAt: now,
-            scheduledFor: slotStartAt,
-          },
-        });
-        await tx.missionEvent.create({
-          data: {
-            missionId: mission.id,
-            state: "SCHEDULED",
-            source: "CLOUD",
-            message: "Paid by gift voucher; mission scheduled for the booked slot.",
-            occurredAt: now,
-            simulated: mode === "SIMULATED",
-            isDemo: observatory.isDemo,
-          },
-        });
-        const confirmed = await tx.booking.update({
-          where: { id: created.id },
-          data: { missionId: mission.id },
+        const confirmed = await scheduleUnpaidBooking(tx, {
+          booking: created,
+          observatory,
+          now,
+          message: "Paid by gift voucher; mission scheduled for the booked slot.",
         });
 
         await recordAuditEvent(
@@ -703,7 +700,7 @@ async function reserveWithVoucher(input: {
             category: "BOOKING",
             action: "GIFT_VOUCHER_REDEEMED",
             actorUserId: userId,
-            missionId: mission.id,
+            missionId: confirmed.missionId,
             entityType: "GiftVoucher",
             entityId: voucher.id,
             detail: {
@@ -717,12 +714,6 @@ async function reserveWithVoucher(input: {
           },
           tx,
         );
-        await queueEmail(tx, {
-          userId,
-          kind: "BOOKING_CONFIRMED",
-          dedupeKey: `booking-confirmed:${created.id}`,
-          payload: { bookingId: created.id },
-        });
 
         return confirmed;
       }),
@@ -750,6 +741,198 @@ async function reserveWithVoucher(input: {
   }
 }
 
+/**
+ * Schedule the mission of a booking that something other than a payment paid for,
+ * and tell the customer. ADR-004, as settlement does it: a booked mission is born
+ * SCHEDULED. Returns the booking with its mission.
+ */
+async function scheduleUnpaidBooking(
+  tx: Prisma.TransactionClient,
+  input: {
+    booking: { id: string; userId: string; targetId: string; slotStartAt: Date };
+    observatory: BookableObservatory;
+    now: Date;
+    message: string;
+  },
+) {
+  const { booking, observatory, now } = input;
+
+  const { mode } = await tx.observatory.findUniqueOrThrow({
+    where: { id: observatory.id },
+    select: { mode: true },
+  });
+
+  const mission = await tx.mission.create({
+    data: {
+      userId: booking.userId,
+      targetId: booking.targetId,
+      observatoryId: observatory.id,
+      telescopeId: observatory.telescopeId,
+      state: "SCHEDULED",
+      mode,
+      isDemo: observatory.isDemo,
+      requestedAt: now,
+      scheduledFor: booking.slotStartAt,
+    },
+  });
+  await tx.missionEvent.create({
+    data: {
+      missionId: mission.id,
+      state: "SCHEDULED",
+      source: "CLOUD",
+      message: input.message,
+      occurredAt: now,
+      simulated: mode === "SIMULATED",
+      isDemo: observatory.isDemo,
+    },
+  });
+  const confirmed = await tx.booking.update({
+    where: { id: booking.id },
+    data: { missionId: mission.id },
+  });
+
+  await queueEmail(tx, {
+    userId: booking.userId,
+    kind: "BOOKING_CONFIRMED",
+    dedupeKey: `booking-confirmed:${booking.id}`,
+    payload: { bookingId: booking.id },
+  });
+
+  return confirmed;
+}
+
+/** Thrown inside the transaction when the minutes could not be spent, so the booking rolls back. */
+class MinutesUnavailable extends Error {
+  constructor(readonly reason: "NO_CURRENT_PERIOD" | "INSUFFICIENT_CREDITS") {
+    super(reason);
+  }
+}
+
+/**
+ * A booking subscription minutes pay for (ADR-022 section 7): confirmed at once, at
+ * no charge, with its mission scheduled, and no payment -- the voucher mechanism,
+ * with the slot's length in minutes as the price.
+ *
+ * The minutes are claimed by a conditional update on the balance inside the
+ * reservation's transaction, after the booking row exists. A slot conflict rolls the
+ * claim back with the booking, so a lost race spends nothing; two bookings racing on
+ * one balance both reach the update, and only as many as it covers succeed.
+ *
+ * No loyalty points are earned: no money moved (ADR-022 section 3).
+ */
+async function reserveWithMinutes(input: {
+  userId: string;
+  observatory: BookableObservatory;
+  targetId: string;
+  slotStartAt: Date;
+  durationMinutes: number;
+  currency: string;
+  idempotencyKey: string | null;
+  now: Date;
+}): Promise<ReserveSlotResult> {
+  const { userId, observatory, targetId, slotStartAt, durationMinutes, idempotencyKey, now } =
+    input;
+  const database = getDatabase();
+
+  try {
+    const booking = await retryOnDeadlock(() =>
+      database.$transaction(async (tx) => {
+        await expireLapsedHolds(tx, observatory.id, now);
+
+        const created = await tx.booking.create({
+          data: {
+            userId,
+            targetId,
+            observatoryId: observatory.id,
+            telescopeId: observatory.telescopeId,
+            slotStartAt,
+            durationMinutes,
+            status: "CONFIRMED",
+            priceMinor: 0,
+            currency: input.currency as Prisma.BookingCreateInput["currency"],
+            subscriptionMinutesSpent: durationMinutes,
+            idempotencyKey,
+            isDemo: observatory.isDemo,
+          },
+        });
+
+        const spend = await spendBookingMinutes(
+          tx,
+          { id: created.id, userId, minutes: durationMinutes, isDemo: observatory.isDemo },
+          now,
+        );
+        if (!spend.spent) {
+          // The key names a booking this transaction just created, so nothing else
+          // can have written it.
+          if (spend.reason === "DUPLICATE") {
+            throw new Error(`Booking ${created.id} already spent its minutes.`);
+          }
+          throw new MinutesUnavailable(spend.reason);
+        }
+
+        const confirmed = await scheduleUnpaidBooking(tx, {
+          booking: created,
+          observatory,
+          now,
+          message: "Paid with subscription minutes; mission scheduled for the booked slot.",
+        });
+
+        await recordAuditEvent(
+          {
+            category: "BOOKING",
+            action: "BOOKING_PAID_WITH_MINUTES",
+            actorUserId: userId,
+            missionId: confirmed.missionId,
+            entityType: "Booking",
+            entityId: created.id,
+            detail: {
+              observatoryId: observatory.id,
+              targetId,
+              slotStartAt: slotStartAt.toISOString(),
+              durationMinutes,
+              subscriptionMinutesSpent: durationMinutes,
+            },
+            isDemo: observatory.isDemo,
+          },
+          tx,
+        );
+
+        return confirmed;
+      }),
+    );
+
+    return {
+      ok: true,
+      replayed: false,
+      body: { booking: toContractBooking(booking as BookingRow), paymentIntent: null },
+    };
+  } catch (error) {
+    if (error instanceof MinutesUnavailable) {
+      return {
+        ok: false,
+        status: 422,
+        code: "VALIDATION_FAILED",
+        message:
+          error.reason === "NO_CURRENT_PERIOD"
+            ? "There is no current subscription period to spend minutes from."
+            : `Not enough subscription minutes: this slot needs ${durationMinutes}.`,
+      };
+    }
+    if (!isSlotConflict(error)) throw error;
+
+    if (idempotencyKey) {
+      const existing = await replayByIdempotencyKey(userId, idempotencyKey);
+      if (existing) return existing;
+    }
+    return {
+      ok: false,
+      status: 409,
+      code: "SLOT_UNAVAILABLE",
+      message: "That slot has just been taken.",
+    };
+  }
+}
+
 async function replayByIdempotencyKey(
   userId: string,
   idempotencyKey: string,
@@ -761,7 +944,12 @@ async function replayByIdempotencyKey(
     include: { payment: true, redeemedVoucher: { select: { id: true } } },
   });
 
-  if (booking && !booking.payment && booking.redeemedVoucher) {
+  // Paid by a voucher or by minutes: confirmed, with no payment to report.
+  if (
+    booking &&
+    !booking.payment &&
+    (booking.redeemedVoucher || booking.subscriptionMinutesSpent > 0)
+  ) {
     return {
       ok: true,
       replayed: true,
@@ -924,6 +1112,7 @@ export async function releaseHeldSlot(
     missionId: string | null;
     paymentId: string | null;
     loyaltyPointsRedeemed: number;
+    subscriptionMinutesSpent: number;
   },
   reason: string,
 ): Promise<{ released: boolean }> {
@@ -947,8 +1136,10 @@ export async function releaseHeldSlot(
     data: { status: "CANCELLED" },
   });
 
-  // DV-095: points spent on a booking that will not happen come back.
+  // DV-095 and ADR-022: points and minutes spent on a booking that will not happen
+  // come back.
   await releaseRedeemedPoints(tx, booking);
+  await releaseSpentMinutes(tx, booking);
 
   // A slot leaving the held set is what makes it purchasable again. When two
   // customers dispute who was entitled to a half hour, this row is the answer.
@@ -983,6 +1174,7 @@ export async function releaseSlotForFailedPayment(input: {
         missionId: true,
         paymentId: true,
         loyaltyPointsRedeemed: true,
+        subscriptionMinutesSpent: true,
       },
     });
 

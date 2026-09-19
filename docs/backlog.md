@@ -259,10 +259,9 @@ never the card. The sandbox reads it from its own payload and settlement stores 
 without ever clearing one, because the mandate outlives the charge that created it
 and clearing it would strand the sweep.
 
-**What still cannot happen, and is on its own branches:** spending minutes at
-reservation, and the renewal sweep with `chargeSavedInstrument`. Nothing sells in
-production either way -- the sandbox is refused there and BOG_IPAY has no adapter
-(ADR-022 section 11).
+**What still cannot happen, and is on its own branch:** the renewal sweep with
+`chargeSavedInstrument` (#121). Nothing sells in production either way -- the sandbox
+is refused there and BOG_IPAY has no adapter (ADR-022 section 11).
 
 **Two pre-existing things this turned up.** `contracts/openapi.yaml` declared
 `GET /subscription/plans` under the global security scheme while listing no 401; it is
@@ -270,6 +269,36 @@ public, and now says so. And the ADR-022 migration adds `Subscription."priceMino
 NOT NULL with no default, which is correct on an empty table and fails on any
 developer database already seeded with the demo subscription row -- see the note in
 `docs/RUNBOOK.md`.
+
+## What spending minutes built (#120)
+
+ADR-022 section 7. `POST /bookings` with `useSubscriptionMinutes` books the slot at no
+charge, CONFIRMED at once with its mission scheduled and no payment -- the voucher
+mechanism, with the slot's length in minutes as the price. `Booking.subscriptionMinutesSpent`
+records what it took, and the contract's `Booking` reports it.
+
+**The spend is inside the reservation's transaction, after the booking row exists.**
+The minutes are claimed by a conditional update on `CreditAccount`, keyed
+`booking:<id>`. A slot conflict rolls the claim back with the booking, and two
+bookings racing on one balance get only as many slots as it covers.
+
+**Spendable while ACTIVE or PAUSED, inside a period that has not ended.** The
+maintainer's decision of 2026-09-19: a pause stops charging and granting, not
+spending. The contract said both things before; it now says this one. A period that
+has ended spends nothing even before its expiry entry is written.
+
+**One price reduction per booking**, now a voucher, points or minutes.
+
+**A refund returns minutes, never money.** `refundEntitledBooking` walks a reschedule
+chain to the booking that spent them and releases them keyed `booking:<id>:release`,
+so a chain refunds once. No email is queued: the refund email states an amount of
+money, and none moved. The release sits beside `releaseRedeemedPoints` on the lapsed-
+hold and failed-payment paths too, where a minutes booking -- never PENDING_PAYMENT --
+does not reach today.
+
+**Not here:** telling the customer by email that minutes came back, and what happens
+to minutes returned after the period they were granted in has ended. Both wait on
+the renewal sweep (#121), which is what writes expiry.
 
 ## What DV-060 built, and what it did not
 

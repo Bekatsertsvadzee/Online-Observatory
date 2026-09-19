@@ -458,7 +458,7 @@ describe("spending points on a booking (DV-095)", () => {
     ).resolves.toMatchObject({
       ok: false,
       status: 422,
-      message: "A booking uses a voucher or loyalty points, not both.",
+      message: "A booking uses one of a voucher, loyalty points or subscription minutes.",
     });
     expect((await account()).balance).toBe(1000);
   });
