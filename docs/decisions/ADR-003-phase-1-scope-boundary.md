@@ -7,6 +7,13 @@
   shared-observation surface (`MissionParticipant`, `MissionPresence`,
   `MissionSharingMode`, `MissionJoinPolicy`, `MissionParticipantStatus`) as Phase 1
   scope. `CaptureAccess` stays frozen. Everything else below stands.
+- **Amended:** 2026-09-17 by `ADR-022-monthly-subscriptions.md`, which unfreezes
+  the subscription and credit surface (`Subscription`, `SubscriptionPlan`,
+  `SubscriptionStatus`, `CreditLedger`, `CreditLedgerReason`, and the `User` and
+  `Mission` back-relations) as Phase 1 scope, on the maintainer's decision of
+  2026-09-15. `PrivateSession` and `PrivateSessionStatus` stay frozen, and
+  `CreditLedgerReason.PRIVATE_SESSION_DEBIT` is unfrozen as a name that nothing
+  in Phase 1 may write. Everything else below stands.
 - **Resolves:** conflict C-7 in the project backlog
 
 ## Context

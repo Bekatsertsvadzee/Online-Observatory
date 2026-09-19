@@ -40,16 +40,20 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // As above: a credit entry left behind is a foreign key no later suite can
+  // delete a user through, and the ledger refuses the DELETE that would clear it.
+  await database.$executeRawUnsafe('TRUNCATE "User" CASCADE');
   await database.$disconnect();
 });
 
 beforeEach(async () => {
-  // TRUNCATE rather than DELETE: the ledger refuses a row delete, by design.
-  await database.$executeRawUnsafe('TRUNCATE "CreditLedger" CASCADE');
-  await database.creditAccount.deleteMany();
+  // One statement, because the suites share a database and leave rows behind: a
+  // mission or a partner node still pointing at a user from another file is what
+  // a delete list has to chase. CASCADE from User reaches every table that
+  // references one, and TRUNCATE is also the only way past the ledger's
+  // append-only trigger, which refuses a DELETE by design.
+  await database.$executeRawUnsafe('TRUNCATE "User" CASCADE');
   await database.auditLog.deleteMany();
-  await database.subscription.deleteMany();
-  await database.user.deleteMany();
   const user = await database.user.create({
     data: { email: `${randomUUID()}@example.test`, name: "Customer", emailVerifiedAt: NOW },
   });

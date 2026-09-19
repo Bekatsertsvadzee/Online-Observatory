@@ -97,7 +97,12 @@ describe("every admin route is behind the operator guard", () => {
     // One file, not a segment: GET /loyalty beside it needs a session.
     //   loyalty/scheme  public by contract (security: []) -- the club's published
     //            rates and tiers, the same terms a public page prints (DV-090).
-    const publicFiles = new Set(["loyalty/scheme/route.ts"]);
+    // Two price lists. Both are read before somebody has an account, and the
+    // contract marks each `security: []`.
+    const publicFiles = new Set([
+      "loyalty/scheme/route.ts",
+      "subscription/plans/route.ts",
+    ]);
 
     const unguarded = routeFilesUnder(appDirectory)
       .filter((file) => {

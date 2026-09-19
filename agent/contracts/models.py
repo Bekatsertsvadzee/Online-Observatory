@@ -748,6 +748,22 @@ class Subscription(BaseModel):
     is_demo: bool = Field(..., alias='isDemo')
 
 
+class SubscribeRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    plan: SubscriptionPlan
+    locale: Locale | None = None
+
+
+class SubscriptionWithPaymentIntent(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    subscription: Subscription
+    payment_intent: PaymentIntent = Field(..., alias='paymentIntent')
+
+
 class LoyaltyAccount(BaseModel):
     model_config = ConfigDict(
         extra='forbid',

@@ -354,6 +354,34 @@ This is intended, and the recovery is intended too. When the agent reconnects it
 agent the session is revoked. If a mission is stuck with no agent to resume it, an operator
 must move it to a terminal state — there is no automatic timeout, deliberately.
 
+### 7.8 `prisma migrate deploy` fails on `Subscription."priceMinor"`
+
+```
+Database error code: 23502
+ERROR: column "priceMinor" of relation "Subscription" contains null values
+```
+
+The ADR-022 migration adds `priceMinor` NOT NULL with no default, deliberately: the table
+was frozen by ADR-003 and holds no rows, so a default would have invented a price for a
+subscription somebody had. That holds for a fresh database and for CI, which migrates
+before it seeds.
+
+It does **not** hold for a developer database seeded before that migration: the demo seed
+writes one `Subscription` row (`00000000-0000-4000-8000-000000000020`), and the column
+cannot be added to it. Prisma rolls the migration back and then refuses every later one
+until the failure is cleared.
+
+The database is development-only, so the recovery is to rebuild it:
+
+```
+cd packages/db
+npx prisma migrate reset          # drops, re-migrates and re-seeds
+```
+
+Do not mark the migration `--applied`: the columns it adds would be missing while the
+history claimed otherwise. There is no production database, and this migration has never
+been applied to one.
+
 ## 8. Backup and disaster recovery
 
 ### What is backed up, and what is not

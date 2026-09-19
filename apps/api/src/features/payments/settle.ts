@@ -9,6 +9,7 @@ import { queueEmail } from "@darkview/db/notifications";
 import { releaseHeldSlot } from "@/features/booking/reserve";
 import { TERMINAL_MISSION_STATES } from "@/features/missions/session";
 import type { PaymentOutcome } from "@/features/payments/provider";
+import { settleSubscriptionPayment } from "@/features/subscriptions/subscriptions";
 import { settleGiftVoucherPayment } from "@/features/vouchers/vouchers";
 import { getDatabase } from "@/lib/db/client";
 
@@ -35,11 +36,12 @@ type Locked = Pick<Prisma.TransactionClient, "$queryRaw">;
  * Apply a verified provider outcome to Darkview's own Payment record, and to
  * whatever that payment bought.
  *
- * Two things are for sale: a slot, which becomes a booking and a mission, and an
- * Observer Pack seat on somebody else's session (ADR-007). `Payment.purpose` says
- * which, and it is read rather than inferred from whichever relation is null --
- * a payment with neither attached would otherwise be settled as a booking whose
- * row had vanished.
+ * Four things are for sale: a slot, which becomes a booking and a mission; an
+ * Observer Pack seat on somebody else's session (ADR-007); a gift voucher
+ * (DV-112); and a month of a subscription, which grants observation minutes
+ * (ADR-022). `Payment.purpose` says which, and it is read rather than inferred
+ * from whichever relation is null -- a payment with none attached would
+ * otherwise be settled as a booking whose row had vanished.
  *
  * Signature verification has already happened; this trusts `outcome` to be what
  * the provider said and checks only whether what it said fits the records. The
@@ -147,6 +149,9 @@ export async function settlePayment(input: {
     }
     if (payment.purpose === "GIFT_VOUCHER") {
       return settleGiftVoucherPayment(tx, payment, outcome, now);
+    }
+    if (payment.purpose === "SUBSCRIPTION") {
+      return settleSubscriptionPayment(tx, payment, outcome, now);
     }
 
     // Locked after the read that found it, so read again: a reservation sweeping

@@ -661,6 +661,16 @@ export const zSubscription = z.strictObject({
     isDemo: z.boolean()
 });
 
+export const zSubscribeRequest = z.strictObject({
+    plan: zSubscriptionPlan,
+    locale: zLocale.optional()
+});
+
+export const zSubscriptionWithPaymentIntent = z.strictObject({
+    subscription: zSubscription,
+    paymentIntent: zPaymentIntent
+});
+
 export const zLoyaltyAccount = z.strictObject({
     userId: z.uuid(),
     balance: z.int(),
@@ -2068,6 +2078,28 @@ export const zListSubscriptionPlansResponse = z.array(zSubscriptionPlanOption);
  * The subscription, or null.
  */
 export const zGetMySubscriptionResponse = zSubscription.nullable();
+
+export const zSubscribeBody = zSubscribeRequest;
+
+/**
+ * Subscription created, awaiting payment for its first period.
+ */
+export const zSubscribeResponse = zSubscriptionWithPaymentIntent;
+
+/**
+ * The subscription as it now stands.
+ */
+export const zCancelMySubscriptionResponse = zSubscription;
+
+/**
+ * The paused subscription.
+ */
+export const zPauseMySubscriptionResponse = zSubscription;
+
+/**
+ * The resumed subscription.
+ */
+export const zResumeMySubscriptionResponse = zSubscription;
 
 /**
  * The buyer's vouchers, newest first.

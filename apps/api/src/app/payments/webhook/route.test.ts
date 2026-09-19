@@ -76,7 +76,7 @@ describe("POST /payments/webhook", () => {
     await expect(response.json()).resolves.toEqual({ received: true });
     expect(settlePayment).toHaveBeenCalledWith({
       provider: "SANDBOX",
-      outcome: { ...payload, failureReason: null },
+      outcome: { ...payload, failureReason: null, mandateRef: null },
       now: expect.any(Date),
     });
   });

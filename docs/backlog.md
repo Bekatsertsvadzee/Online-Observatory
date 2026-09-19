@@ -212,6 +212,65 @@ before DV-122 or DV-123 are worth building.
 
 **Stage 7 — freeze and prove:** DV-114, DV-037, DV-038.
 
+## What the subscription surface built, and what still cannot renew
+
+ADR-022, issue #95. The schema half landed first and nothing read it: no route, no
+booking spend, no renewal sweep. This is the surface a customer meets.
+
+The maintainer answered ADR-022's open questions on 2026-09-19, each as the record
+recommended: **unspent minutes expire at period end**, a failed renewal has **seven
+days and three attempts** before `EXPIRED`, and **cancelling refunds nothing**. Plan
+prices and public names are still undecided, which costs nothing here -- plans are
+rows, the catalogue ships empty, and an empty catalogue refuses a sale with 503.
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /subscription/plans` | The plans on sale, cheapest first. Public, like the loyalty scheme: a price list is read before somebody has an account. |
+| `GET /subscription` | The subscription and the minute balance, or null. |
+| `POST /subscription` | Creates the subscription **unfunded** and opens the payment for its first period. |
+| `POST /subscription/cancel` | `cancelAtPeriodEnd` while a paid period runs; immediate only when no period is funded. |
+| `POST /subscription/pause` · `/resume` | The customer's own stop and start. Idempotent, and a no-op writes no audit row. |
+
+**Nothing here grants a minute.** The grant is written by `settleSubscriptionPayment`
+inside the settlement transaction, on capture, keyed
+`renewal:<subscriptionId>:<periodStart>` -- so a webhook delivered twice, a sweep on
+two processes and a retried charge converge on one grant. A subscription exists before
+its money does, at ACTIVE with a **null period**, and a null period is one nothing can
+spend.
+
+**A failed first payment ends the subscription; a failed renewal does not.** Nothing
+saved a card on a first attempt, so there is no instrument a retry could reach and a
+grace period would be a wait for something that cannot arrive. The customer may
+subscribe again. A funded subscription keeps its period and stays ACTIVE while the
+sweep retries -- that is ADR-022 section 9, and the seven days belong to the renewal
+branch.
+
+**A capture never restarts what the customer stopped.** Cancelling while the bank is
+still thinking is the case: the money arrives, the minutes it bought are granted, and
+the status stays CANCELLED. A paused subscription stays paused for the same reason --
+this capture is not an act of theirs.
+
+**`resume` refuses a subscription that is ending**, rather than answering 200 while
+`cancelAtPeriodEnd` still stands. Un-cancelling is not something ADR-022 describes,
+and a 200 that quietly did not perform one is worse than a refusal.
+
+**`PaymentOutcome` gains `mandateRef`** -- the provider's handle for the saved card,
+never the card. The sandbox reads it from its own payload and settlement stores it
+without ever clearing one, because the mandate outlives the charge that created it
+and clearing it would strand the sweep.
+
+**What still cannot happen, and is on its own branches:** spending minutes at
+reservation, and the renewal sweep with `chargeSavedInstrument`. Nothing sells in
+production either way -- the sandbox is refused there and BOG_IPAY has no adapter
+(ADR-022 section 11).
+
+**Two pre-existing things this turned up.** `contracts/openapi.yaml` declared
+`GET /subscription/plans` under the global security scheme while listing no 401; it is
+public, and now says so. And the ADR-022 migration adds `Subscription."priceMinor"`
+NOT NULL with no default, which is correct on an empty table and fails on any
+developer database already seeded with the demo subscription row -- see the note in
+`docs/RUNBOOK.md`.
+
 ## What DV-060 built, and what it did not
 
 The mission client channel is live: `/ws/mission/{missionId}`, authenticated by the

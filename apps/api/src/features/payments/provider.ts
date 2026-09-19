@@ -29,6 +29,14 @@ export type PaymentOutcome = {
   amountMinor: number;
   currency: Currency;
   failureReason: string | null;
+  /**
+   * The provider's handle for the instrument this payment saved, when the payment
+   * saved one (ADR-022). Never the card. It is what the renewal sweep later asks
+   * the adapter to charge, and it is null for every payment that is not a
+   * subscription's first -- which is why it is optional rather than a null every
+   * adapter and every test fixture has to restate.
+   */
+  mandateRef?: string | null;
 };
 
 /**
@@ -72,6 +80,7 @@ const sandboxPayloadSchema = z.object({
   amountMinor: z.int().min(0),
   currency: zCurrency,
   failureReason: z.string().max(256).optional(),
+  mandateRef: z.string().min(1).max(128).optional(),
 });
 
 export type SandboxPayload = z.infer<typeof sandboxPayloadSchema>;
@@ -110,6 +119,7 @@ export function createSandboxProvider(secret: string): PaymentProviderAdapter {
         amountMinor: parsed.data.amountMinor,
         currency: parsed.data.currency,
         failureReason: parsed.data.failureReason ?? null,
+        mandateRef: parsed.data.mandateRef ?? null,
       };
     },
   };
