@@ -8,6 +8,8 @@
 - **Arises from:** issue #95, and the maintainer's decision of 2026-09-15 to
   unfreeze the subscription surface for Phase 1
 - **Amends:** ADR-003 §Subscriptions and credits
+- **Amended:** 2026-09-19, below — the open questions answered, and the renewal
+  sweep's one live charge per period
 - **Relates to:** ADR-008 (loyalty is a separate balance), ADR-015 (two slot
   lengths), DV-056 (payment settlement), DV-112 (gift vouchers)
 
@@ -253,3 +255,46 @@ and is not made worse here, but it should be its own issue.
 6. **Cancellation refunds.** Does cancelling mid-period refund anything? This
    record assumes not: the period is already funded and its credits already
    granted.
+
+## Amendment, 2026-09-19 — the answers, and one live charge per period
+
+- **Decided by:** project maintainer, in session
+- **Changes:** section 8's unique `(subscriptionId, periodStart)`; answers open
+  questions 2, 3 and 6; and settles three things this record left unsaid
+- **Arises from:** issues #120 and #121
+
+**The open questions answered** (each as this record recommended): unspent minutes
+**expire at period end**; a failed renewal has **seven days and three attempts**
+before `EXPIRED`; **cancelling refunds nothing**. Questions 1, 4 and 5 remain open.
+
+**Section 8 and section 9 could not both hold.** Section 8 made the sweep idempotent
+with a unique `(subscriptionId, periodStart)` on the renewal payment, which allows one
+payment per period. Section 9 has the sweep retry a failed renewal. Settlement
+refuses to settle a FAILED payment again, so a retry cannot reuse the failed row, and
+the unique refused a second one. The unique is now **partial, over payments that have
+not FAILED**: one live charge per period, which is what the idempotence needed, and a
+failed charge leaves room for the next attempt. The grant stays keyed
+`renewal:<subscriptionId>:<periodStart>`, so a period is granted once however many
+attempts it took.
+
+**The attempts** are at period end, two days after it and four days after it. The
+subscription becomes `EXPIRED` at the third failure, or seven days after the period
+ended if a charge is still unanswered then, whichever comes first. A funded
+subscription with no saved card to charge becomes `EXPIRED` at period end: no attempt
+could reach an instrument.
+
+**Expired minutes have their own reason,** `CreditLedgerReason.EXPIRY`, so an expiry is
+never read as an operator's `ADJUSTMENT`. The sweep writes it before it charges, so
+the next period's grant is never what expires.
+
+**Paused minutes are spendable** until their period ends: a pause stops charging and
+granting, not spending (decided while building #120). **A pause that outlasts its
+period resumes into a new one that starts at resumption,** so the customer is never
+charged for a month already gone.
+
+**`chargeSavedInstrument` lives in the realtime service,** beside the sweep that calls
+it, rather than on the API's webhook adapter, which is server-only and runs in no
+long-lived process. The two meet at the payment row. Nothing is charged in
+production until a real provider's charger exists; there the sweep still expires
+minutes and ends subscriptions.
+

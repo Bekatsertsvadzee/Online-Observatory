@@ -274,12 +274,12 @@ describe("pausing, resuming and cancelling", () => {
       await database.auditLog.count({ where: { action: "SUBSCRIPTION_PAUSED" } }),
     ).toBe(1);
 
-    expect(await resumeMySubscription({ userId })).toMatchObject({
+    expect(await resumeMySubscription({ userId, now: NOW })).toMatchObject({
       ok: true,
       body: { status: "ACTIVE" },
     });
     expect((await subscriptionRow()).pausedAt).toBeNull();
-    expect(await resumeMySubscription({ userId })).toMatchObject({ ok: true });
+    expect(await resumeMySubscription({ userId, now: NOW })).toMatchObject({ ok: true });
   });
 
   it("refuses to resume a subscription that is ending, however it is ending", async () => {
@@ -290,14 +290,14 @@ describe("pausing, resuming and cancelling", () => {
     // Still ACTIVE, and still running out the period it was paid for. A 200 here
     // would read as an un-cancellation that nothing performed.
     expect((await subscriptionRow()).status).toBe("ACTIVE");
-    expect(await resumeMySubscription({ userId })).toMatchObject({
+    expect(await resumeMySubscription({ userId, now: NOW })).toMatchObject({
       ok: false,
       status: 409,
     });
 
     const afterPeriodEnd = new Date("2027-02-01T12:00:00.000Z");
     await cancelMySubscription({ userId, now: afterPeriodEnd });
-    expect(await resumeMySubscription({ userId })).toMatchObject({
+    expect(await resumeMySubscription({ userId, now: NOW })).toMatchObject({
       ok: false,
       status: 409,
     });
@@ -337,5 +337,92 @@ describe("pausing, resuming and cancelling", () => {
       ok: false,
       status: 409,
     });
+  });
+});
+
+describe("renewing (ADR-022 sections 8 and 9, amended 2026-09-19)", () => {
+  beforeEach(() => offerPlan("OBSERVER"));
+
+  const PERIOD_END = new Date("2027-01-15T12:00:00.000Z");
+
+  /** A funded subscription, and the charge the realtime sweep opens at its period end. */
+  async function funded() {
+    const ordered = await order();
+    await settle(ordered.paymentIntent.paymentId, { mandateRef: "mandate_abc" });
+    return (await subscriptionRow()).id;
+  }
+
+  const openRenewal = (subscriptionId: string) =>
+    database.payment.create({
+      data: {
+        userId,
+        purpose: "SUBSCRIPTION",
+        provider: "SANDBOX",
+        status: "PENDING",
+        amountMinor: PRICE_MINOR,
+        subscriptionId,
+        periodStart: PERIOD_END,
+      },
+    });
+
+  it("grants the next period's minutes when the renewal captures, and keeps the saved card", async () => {
+    const subscriptionId = await funded();
+    const renewal = await openRenewal(subscriptionId);
+
+    await settle(renewal.id, {}, PERIOD_END);
+
+    expect(await subscriptionRow()).toMatchObject({
+      status: "ACTIVE",
+      currentPeriodStart: PERIOD_END,
+      currentPeriodEnd: new Date("2027-02-15T12:00:00.000Z"),
+      providerMandateRef: "mandate_abc",
+      lastPaymentId: renewal.id,
+    });
+    expect(await balance()).toBe(MINUTES * 2);
+    expect(await database.auditLog.count({ where: { action: "SUBSCRIPTION_RENEWED" } })).toBe(1);
+  });
+
+  it("grants nothing on a failed renewal, and lets the next attempt open and capture once", async () => {
+    const subscriptionId = await funded();
+    const first = await openRenewal(subscriptionId);
+    await settle(first.id, { result: "FAILED" }, PERIOD_END);
+
+    expect(await subscriptionRow()).toMatchObject({ status: "ACTIVE", currentPeriodEnd: PERIOD_END });
+    expect(await balance()).toBe(MINUTES);
+
+    const retry = await openRenewal(subscriptionId);
+    await settle(retry.id, {}, PERIOD_END);
+
+    expect(await balance()).toBe(MINUTES * 2);
+    expect(
+      await database.creditLedger.count({ where: { reason: "SUBSCRIPTION_GRANT" } }),
+    ).toBe(2);
+  });
+
+  it("refuses a second live charge for one period", async () => {
+    const subscriptionId = await funded();
+    await openRenewal(subscriptionId);
+
+    await expect(openRenewal(subscriptionId)).rejects.toThrow();
+  });
+
+  it("resumes a pause that outlasted its period into a period that starts now", async () => {
+    await funded();
+    await pauseMySubscription({ userId, now: NOW });
+    const resumedAt = new Date("2027-03-01T12:00:00.000Z");
+
+    await expect(resumeMySubscription({ userId, now: resumedAt })).resolves.toMatchObject({
+      ok: true,
+      body: { status: "ACTIVE", currentPeriodEnd: resumedAt.toISOString() },
+    });
+  });
+
+  it("leaves the period alone when a pause is lifted before it ends", async () => {
+    await funded();
+    await pauseMySubscription({ userId, now: NOW });
+
+    await resumeMySubscription({ userId, now: NOW });
+
+    expect((await subscriptionRow()).currentPeriodEnd).toEqual(PERIOD_END);
   });
 });

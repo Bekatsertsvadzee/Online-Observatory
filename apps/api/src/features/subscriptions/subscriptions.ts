@@ -30,8 +30,9 @@ import { getServerEnvironment } from "@/lib/validation/env";
  * inside the settlement transaction, on capture, so there is no path that funds an
  * account before money arrives (ADR-022 section 6).
  *
- * What is missing, deliberately, and on its own branches: spending minutes at
- * reservation, and the renewal sweep with `chargeSavedInstrument`.
+ * Minutes are spent at reservation (`features/booking/reserve.ts`), and renewed,
+ * expired and retried by the sweep in the realtime service
+ * (`apps/realtime/src/subscriptions/renewals.ts`).
  */
 
 /** As on bookings, packs and vouchers: the sandbox is never sold against in production. */
@@ -301,6 +302,12 @@ export async function pauseMySubscription(input: {
 /**
  * Resume a paused subscription. The sweep charges it at the end of its period.
  *
+ * A pause that outlasted its period resumes into a new one that starts now
+ * (maintainer decision of 2026-09-19): the period end moves to the moment of
+ * resumption, so the sweep charges at once and the month it charges for is one the
+ * customer can use. Charging from the old period end would bill for days already
+ * gone.
+ *
  * It undoes a pause and nothing else. A subscription that is already ending --
  * cancelled, or running out its last funded period -- is refused rather than
  * answered 200, because a 200 here would read as "the cancellation is off" while
@@ -309,7 +316,9 @@ export async function pauseMySubscription(input: {
  */
 export async function resumeMySubscription(input: {
   userId: string;
+  now: Date;
 }): Promise<{ ok: true; body: ContractSubscription } | Refusal> {
+  const { now } = input;
   return transition(input.userId, (row) => {
     if (row.cancelAtPeriodEnd) {
       return {
@@ -332,9 +341,10 @@ export async function resumeMySubscription(input: {
         },
       };
     }
+    const lapsed = row.currentPeriodEnd !== null && row.currentPeriodEnd <= now;
     return {
-      data: { status: "ACTIVE", pausedAt: null },
-      audit: { action: "SUBSCRIPTION_RESUMED", detail: {} },
+      data: { status: "ACTIVE", pausedAt: null, ...(lapsed ? { currentPeriodEnd: now } : {}) },
+      audit: { action: "SUBSCRIPTION_RESUMED", detail: { nextRenewalAt: lapsed ? now.toISOString() : null } },
     };
   });
 }

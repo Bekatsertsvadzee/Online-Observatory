@@ -54,6 +54,7 @@ export type AuditAction =
   | "CREDIT_MISSION_DEBIT"
   | "CREDIT_REFUND"
   | "CREDIT_ADJUSTMENT"
+  | "CREDIT_EXPIRY"
   // SUBSCRIPTION (ADR-022): the subscription itself. ORDERED is the customer
   // asking; ACTIVATED and RENEWED are the money arriving, and only those two sit
   // beside a grant. The three customer acts each write one row, and a change that
@@ -67,6 +68,10 @@ export type AuditAction =
   | "SUBSCRIPTION_RESUMED"
   | "SUBSCRIPTION_CANCEL_SCHEDULED"
   | "SUBSCRIPTION_CANCELLED"
+  // SUBSCRIPTION (ADR-022 sections 8 and 9): the renewal sweep opened a charge on the
+  // saved card, or ended a subscription whose grace period ran out.
+  | "SUBSCRIPTION_RENEWAL_CHARGED"
+  | "SUBSCRIPTION_EXPIRED"
   // BOOKING
   | "BOOKING_RESERVED"
   | "BOOKING_SLOT_RELEASED"

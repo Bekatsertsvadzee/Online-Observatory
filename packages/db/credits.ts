@@ -225,6 +225,30 @@ export async function releaseSpentMinutes(
 }
 
 /**
+ * Take back what a period left unspent, at its end (ADR-022, and the maintainer's
+ * decision of 2026-09-19: minutes do not roll over). Written by the renewal sweep
+ * before it charges the next period, so the next grant is never what expires.
+ *
+ * The whole balance goes, keyed to the period's end so a second pass writes
+ * nothing. A balance of zero writes no entry.
+ */
+export async function expireSubscriptionMinutes(
+  tx: Tx,
+  subscription: { id: string; userId: string; isDemo: boolean },
+  periodEnd: Date,
+): Promise<CreditPostResult | null> {
+  const balance = await readCreditBalance(tx, subscription.userId);
+  if (balance <= 0) return null;
+  return postCreditEntry(tx, {
+    userId: subscription.userId,
+    amount: -balance,
+    reason: "EXPIRY",
+    idempotencyKey: `expiry:${subscription.id}:${periodEnd.toISOString()}`,
+    isDemo: subscription.isDemo,
+  });
+}
+
+/**
  * Grant a period's minutes. Written inside the settlement transaction, on capture:
  * there is no path that grants before money arrives (ADR-022 section 6).
  */

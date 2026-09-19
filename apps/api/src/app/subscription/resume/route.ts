@@ -19,7 +19,7 @@ export async function POST() {
   });
   if (limited) return limited;
 
-  const result = await resumeMySubscription({ userId: guard.session.user.id });
+  const result = await resumeMySubscription({ userId: guard.session.user.id, now: new Date() });
   if (!result.ok) return apiError(result.status, result.code, result.message);
 
   return Response.json(result.body);
