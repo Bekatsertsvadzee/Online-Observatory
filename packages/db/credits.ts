@@ -163,6 +163,67 @@ export async function readCreditBalance(
   return account?.balance ?? 0;
 }
 
+export type BookingSpendResult =
+  | { spent: true }
+  | { spent: false; reason: "NO_CURRENT_PERIOD" | "INSUFFICIENT_CREDITS" | "DUPLICATE" };
+
+/**
+ * Take the minutes a booking costs (ADR-022 section 7), inside the reservation's
+ * transaction and after the booking row exists, so a slot conflict rolls the spend
+ * back with it.
+ *
+ * Minutes are spendable while the subscription is ACTIVE or PAUSED and its period
+ * has not ended: a pause stops charging and granting, not spending (maintainer
+ * decision of 2026-09-19). A period that has ended spends nothing even before its
+ * expiry entry is written, because those minutes are already gone.
+ */
+export async function spendBookingMinutes(
+  tx: Tx,
+  booking: { id: string; userId: string; minutes: number; isDemo: boolean },
+  now: Date,
+): Promise<BookingSpendResult> {
+  const subscription = await tx.subscription.findUnique({
+    where: { userId: booking.userId },
+    select: { status: true, currentPeriodEnd: true },
+  });
+  if (
+    !subscription ||
+    (subscription.status !== "ACTIVE" && subscription.status !== "PAUSED") ||
+    !subscription.currentPeriodEnd ||
+    subscription.currentPeriodEnd <= now
+  ) {
+    return { spent: false, reason: "NO_CURRENT_PERIOD" };
+  }
+
+  const result = await postCreditEntry(tx, {
+    userId: booking.userId,
+    amount: -booking.minutes,
+    reason: "MISSION_DEBIT",
+    idempotencyKey: `booking:${booking.id}`,
+    actorUserId: booking.userId,
+    isDemo: booking.isDemo,
+  });
+  return result.posted ? { spent: true } : { spent: false, reason: result.reason };
+}
+
+/**
+ * Give back the minutes a booking spent, when the booking did not happen. One entry
+ * per booking however many release paths reach it, beside `releaseRedeemedPoints`.
+ * A credit is returned as a credit, never as money.
+ */
+export async function releaseSpentMinutes(
+  tx: Tx,
+  booking: { id: string; userId: string; subscriptionMinutesSpent: number },
+): Promise<void> {
+  if (booking.subscriptionMinutesSpent <= 0) return;
+  await postCreditEntry(tx, {
+    userId: booking.userId,
+    amount: booking.subscriptionMinutesSpent,
+    reason: "REFUND",
+    idempotencyKey: `booking:${booking.id}:release`,
+  });
+}
+
 /**
  * Grant a period's minutes. Written inside the settlement transaction, on capture:
  * there is no path that grants before money arrives (ADR-022 section 6).

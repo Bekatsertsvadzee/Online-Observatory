@@ -74,6 +74,10 @@ export type AuditAction =
   // the customer used it to book another slot.
   | "BOOKING_ENTITLEMENT_GRANTED"
   | "BOOKING_RESCHEDULED"
+  // ADR-022 section 7: a booking subscription minutes paid for, and the minutes
+  // given back when it was refunded. The ledger's own CREDIT_* rows sit beside them.
+  | "BOOKING_PAID_WITH_MINUTES"
+  | "BOOKING_MINUTES_RETURNED"
   // DV-112: a gift voucher ordered, paid for, spent on a booking, or given back
   // when that booking was refunded. Never the code.
   | "GIFT_VOUCHER_ORDERED"

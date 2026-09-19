@@ -1,4 +1,5 @@
 import { recordAuditEvent } from "./audit";
+import { releaseSpentMinutes } from "./credits";
 import type { Prisma } from "./generated/prisma/client.ts";
 import { reverseLoyaltyForRefund } from "./loyalty";
 import { queueEmail } from "./notifications";
@@ -24,6 +25,9 @@ import { RESTORED_VOUCHER_MIN_DAYS } from "./vouchers";
  * **A voucher is restored, never paid out** (DV-112). When the chain ends at a
  * booking a gift voucher paid for, the voucher becomes usable again instead.
  *
+ * **Minutes are returned, never paid out** (ADR-022 section 7). When the chain ends
+ * at a booking subscription minutes paid for, the minutes go back on the balance.
+ *
  * Pass the transaction client. The entitlement, the payment, the booking, the
  * audit row and the email share one fate.
  */
@@ -33,7 +37,7 @@ export type RefundRefusal =
   | "PROVIDER_REFUND_UNAVAILABLE";
 
 export type RefundResult =
-  | { ok: true; paymentId: string | null; voucherId: string | null }
+  | { ok: true; paymentId: string | null; voucherId: string | null; minutesReturned: number }
   | { ok: false; reason: RefundRefusal };
 
 /** A reschedule of a reschedule of ... is legal; a loop is not, and this bounds the walk. */
@@ -64,17 +68,26 @@ export async function refundEntitledBooking(
 
   type VoucherSummary = { id: string; expiresAt: Date | null };
 
+  type MinutesBooking = { id: string; userId: string; subscriptionMinutesSpent: number };
+
   let payment = null as PaymentSummary | null;
   let voucher = null as VoucherSummary | null;
+  let minutesBooking = null as MinutesBooking | null;
   let current: string | null = bookingId;
   for (let step = 0; current && step < MAX_RESCHEDULE_CHAIN; step += 1) {
     const booking: {
+      id: string;
+      userId: string;
+      subscriptionMinutesSpent: number;
       payment: PaymentSummary | null;
       redeemedVoucher: VoucherSummary | null;
       rescheduledFrom: { bookingId: string } | null;
     } = await tx.booking.findUniqueOrThrow({
       where: { id: current },
       select: {
+        id: true,
+        userId: true,
+        subscriptionMinutesSpent: true,
         payment: {
           select: {
             id: true,
@@ -97,10 +110,15 @@ export async function refundEntitledBooking(
       voucher = booking.redeemedVoucher;
       break;
     }
+    if (booking.subscriptionMinutesSpent > 0) {
+      minutesBooking = booking;
+      break;
+    }
     current = booking.rescheduledFrom?.bookingId ?? null;
   }
 
   if (voucher) return restoreVoucher(tx, { entitlementId: entitlement.id, userId: entitlement.userId, bookingId, voucher, actorUserId, automatic, now });
+  if (minutesBooking) return returnMinutes(tx, { entitlementId: entitlement.id, bookingId, paidBooking: minutesBooking, actorUserId, automatic, now });
 
   if (!payment || payment.status !== "CAPTURED") {
     return { ok: false, reason: "NOTHING_TO_REFUND" };
@@ -158,7 +176,7 @@ export async function refundEntitledBooking(
     payload: { bookingId },
   });
 
-  return { ok: true, paymentId: payment.id, voucherId: null };
+  return { ok: true, paymentId: payment.id, voucherId: null, minutesReturned: 0 };
 }
 
 async function restoreVoucher(
@@ -215,5 +233,58 @@ async function restoreVoucher(
     payload: { voucherId: voucher.id, bookingId },
   });
 
-  return { ok: true, paymentId: null, voucherId: voucher.id };
+  return { ok: true, paymentId: null, voucherId: voucher.id, minutesReturned: 0 };
+}
+
+/**
+ * The paid booking is the root of the reschedule chain, where the minutes were
+ * spent, so the release is keyed on it and a chain refunds its minutes once.
+ *
+ * No email: the refund email states an amount of money, and none moved. The
+ * customer sees the minutes back on `GET /subscription`.
+ */
+async function returnMinutes(
+  tx: Prisma.TransactionClient,
+  input: {
+    entitlementId: string;
+    bookingId: string;
+    paidBooking: { id: string; userId: string; subscriptionMinutesSpent: number };
+    actorUserId: string | null;
+    automatic: boolean;
+    now: Date;
+  },
+): Promise<RefundResult> {
+  const { entitlementId, bookingId, paidBooking, actorUserId, automatic, now } = input;
+
+  const { count } = await tx.bookingEntitlement.updateMany({
+    where: { id: entitlementId, outcome: "OPEN" },
+    data: { outcome: "REFUNDED", resolvedAt: now },
+  });
+  if (count === 0) return { ok: false, reason: "NO_OPEN_ENTITLEMENT" };
+
+  await releaseSpentMinutes(tx, paidBooking);
+  await tx.booking.update({ where: { id: bookingId }, data: { status: "REFUNDED" } });
+
+  await recordAuditEvent(
+    {
+      category: "BOOKING",
+      action: "BOOKING_MINUTES_RETURNED",
+      actorUserId,
+      entityType: "Booking",
+      entityId: bookingId,
+      detail: {
+        paidBookingId: paidBooking.id,
+        minutes: paidBooking.subscriptionMinutesSpent,
+        automatic,
+      },
+    },
+    tx,
+  );
+
+  return {
+    ok: true,
+    paymentId: null,
+    voucherId: null,
+    minutesReturned: paidBooking.subscriptionMinutesSpent,
+  };
 }

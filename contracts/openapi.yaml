@@ -552,9 +552,13 @@ paths:
         signed-in customer's subscription balance: `durationMinutes` minutes are taken,
         the booking is CONFIRMED at once at no charge, its mission is scheduled, and
         `paymentIntent` is null. The minutes are taken in the same transaction as the
-        reservation, so a reservation that fails takes nothing. Too few minutes, no
-        subscription, or a subscription that is not ACTIVE, is 422. Never together with
-        `voucherCode` or `loyaltyPoints`: a booking uses one price reduction.
+        reservation, so a reservation that fails takes nothing, and two bookings racing
+        on one balance cannot both spend it. Minutes are spendable while the
+        subscription is ACTIVE or PAUSED and its current period has not ended (the
+        maintainer's decision of 2026-09-19: a pause stops charging and granting, not
+        spending). Too few minutes, no subscription, or no current period, is 422.
+        Never together with `voucherCode` or `loyaltyPoints`: a booking uses one price
+        reduction. A refunded booking returns its minutes, never money.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -888,7 +892,9 @@ paths:
         DV-111. Available while the booking's `entitlement.status` is OPEN: its slot
         was lost to weather or to an observatory fault and the customer lost half of
         it or more. The whole amount originally paid is returned -- for a booking that
-        was itself a free reschedule, the payment it was rescheduled from. 409 with no
+        was itself a free reschedule, the payment it was rescheduled from. A booking
+        a gift voucher paid for restores the voucher, and one subscription minutes
+        paid for returns the minutes (ADR-022 §7); neither is paid out. 409 with no
         open entitlement. 503 when the payment's provider has no refund integration
         yet; the entitlement stays open.
       parameters:
@@ -3162,6 +3168,10 @@ components:
           type: integer
           minimum: 0
           description: Points spent on this booking (DV-095).
+        subscriptionMinutesSpent:
+          type: integer
+          minimum: 0
+          description: Subscription minutes that paid for this booking (ADR-022).
         entitlement:
           description: |
             DV-111. Null until the slot has ended and been evaluated, and when nothing

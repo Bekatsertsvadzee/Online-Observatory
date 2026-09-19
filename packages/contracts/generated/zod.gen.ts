@@ -520,6 +520,7 @@ export const zBooking = z.strictObject({
     missionId: z.uuid().nullish(),
     tierDiscountMinor: z.int().gte(0).optional(),
     loyaltyPointsRedeemed: z.int().gte(0).optional(),
+    subscriptionMinutesSpent: z.int().gte(0).optional(),
     entitlement: zBookingEntitlement.nullish(),
     createdAt: z.iso.datetime()
 });

@@ -930,6 +930,8 @@ model Booking {
   tierDiscountMinor     Int @default(0)
   /// DV-095. Points spent on this booking, taken when the slot was held.
   loyaltyPointsRedeemed Int @default(0)
+  /// ADR-022. Subscription minutes that paid for this booking, taken when it was made.
+  subscriptionMinutesSpent Int @default(0)
 
   @@unique([userId, idempotencyKey])
   @@index([observatoryId, slotStartAt])

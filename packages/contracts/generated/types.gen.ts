@@ -747,6 +747,10 @@ export type Booking = {
      */
     loyaltyPointsRedeemed?: number;
     /**
+     * Subscription minutes that paid for this booking (ADR-022).
+     */
+    subscriptionMinutesSpent?: number;
+    /**
      * DV-111. Null until the slot has ended and been evaluated, and when nothing
      * was lost on our side or less than half the slot was lost.
      *

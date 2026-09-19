@@ -2203,6 +2203,7 @@ class Booking(BaseModel):
     mission_id: UUID | None = Field(None, alias='missionId')
     tier_discount_minor: int | None = Field(None, alias='tierDiscountMinor', description="What the customer's loyalty tier took off the slot price (DV-095).", ge=0)
     loyalty_points_redeemed: int | None = Field(None, alias='loyaltyPointsRedeemed', description='Points spent on this booking (DV-095).', ge=0)
+    subscription_minutes_spent: int | None = Field(None, alias='subscriptionMinutesSpent', description='Subscription minutes that paid for this booking (ADR-022).', ge=0)
     entitlement: BookingEntitlement | None = Field(None, description='DV-111. Null until the slot has ended and been evaluated, and when nothing\nwas lost on our side or less than half the slot was lost.\n')
     created_at: AwareDatetime = Field(..., alias='createdAt')
 
