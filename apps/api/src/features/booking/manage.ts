@@ -44,6 +44,10 @@ export async function cancelMyBooking(input: {
   userId: string;
   bookingId: string;
   reason?: string;
+  /** Passed in rather than read here, because returning the booking's minutes
+   * depends on whether the subscription period they were spent in is still
+   * running (ADR-022: minutes expire at period end). */
+  now: Date;
 }): Promise<{ ok: true; booking: Booking } | Refusal> {
   const database = getDatabase();
 
@@ -87,7 +91,7 @@ export async function cancelMyBooking(input: {
       } as const;
     }
 
-    await releaseHeldSlot(tx, booking, reason);
+    await releaseHeldSlot(tx, booking, reason, input.now);
 
     return {
       ok: true,

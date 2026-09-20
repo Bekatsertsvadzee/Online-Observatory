@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -60,7 +60,16 @@ class AgentConfig:
     driver_mode: DriverMode = DriverMode.SIMULATED
     attended: bool = False
     cloud_url: str | None = None
-    device_token: str | None = None
+    device_token: str | None = field(default=None, repr=False)
+    """The observatory's credential. Kept out of the default repr on purpose.
+
+    A frozen dataclass prints every field, so one `logger.debug("%r", config)`
+    anywhere -- in this repository or in a traceback a crash report carries out of
+    the observatory -- would put the token in a log file. `docs/security.md` says
+    never read, print or commit a secret; this is the line that makes the easy
+    mistake impossible rather than forbidden.
+    """
+
     observatory_id: uuid.UUID | None = None
     site: SiteLocation | None = None
     state_path: Path = DEFAULT_STATE_PATH

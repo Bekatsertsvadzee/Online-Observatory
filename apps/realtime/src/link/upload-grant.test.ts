@@ -59,6 +59,8 @@ function grantRequest(overrides: Record<string, unknown> = {}) {
     missionId: MISSION,
     commandId,
     kind: "IMAGE",
+    contentType: "image/jpeg",
+    contentLength: 2_400_000,
     ...overrides,
   });
 }
@@ -157,7 +159,7 @@ describe("granting somewhere to put a capture", () => {
     const link = await online();
 
     await link.receive(grantRequest());
-    await link.receive(grantRequest({ kind: "FITS" }));
+    await link.receive(grantRequest({ kind: "FITS", contentType: "application/fits" }));
 
     const keys = grants().map((grant) =>
       grant.type === "CLOUD_UPLOAD_GRANT" ? grant.storageKey : "",
@@ -167,6 +169,28 @@ describe("granting somewhere to put a capture", () => {
 });
 
 describe("what will not be granted", () => {
+  it("refuses a media type that asset kind is never written as", async () => {
+    // The URL signs the content type, so this is the only moment the cloud can
+    // decide what may be written. After it, the grant is between the agent and
+    // storage.
+    store.addCommand({ observatoryId: observatory.id, envelope: captureEnvelope() });
+    const link = await online();
+
+    await link.receive(grantRequest({ contentType: "application/zip" }));
+
+    expect(grants()).toHaveLength(0);
+  });
+
+  it("refuses an object larger than a capture asset can be", async () => {
+    store.addCommand({ observatoryId: observatory.id, envelope: captureEnvelope() });
+    const link = await online();
+
+    await link.receive(grantRequest({ contentLength: 512 * 1024 * 1024 }));
+
+    expect(grants()).toHaveLength(0);
+  });
+
+
   it("refuses a command the cloud never minted", async () => {
     const link = await online();
 

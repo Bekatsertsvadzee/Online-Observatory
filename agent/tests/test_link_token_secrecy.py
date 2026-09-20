@@ -38,6 +38,21 @@ def test_redact_handles_an_absent_secret():
     assert redact("plain message", "") == "plain message"
 
 
+def test_the_configuration_does_not_print_the_token():
+    """A frozen dataclass prints every field it has. One `%r` of the config --
+    here, or in a traceback a crash report carries off the observatory -- would
+    be a leak, so the field is kept out of the repr rather than kept out of
+    everybody's habits."""
+    from darkview_agent.config import load_config
+
+    config = load_config({"DARKVIEW_AGENT_DEVICE_TOKEN": TOKEN})
+
+    assert config.device_token == TOKEN
+    assert TOKEN not in repr(config)
+    assert TOKEN not in str(config)
+    assert TOKEN not in f"{config}"
+
+
 def test_a_failed_connection_does_not_leak_the_token(caplog):
     """The most likely leak: an exception message containing the URL or headers."""
     transport = WebSocketTransport("wss://nonexistent.invalid/agent", TOKEN)

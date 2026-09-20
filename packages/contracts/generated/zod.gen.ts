@@ -406,8 +406,8 @@ export const zSafetyEnvelopeConfig = z.strictObject({
     maxAltitudeMeasurementNote: z.string().nullish(),
     horizonMask: z.array(zHorizonMaskEntry),
     forbiddenAzimuthSectors: z.array(zAzimuthSector),
-    sunExclusionDegrees: z.number().gte(0).lte(180),
-    daylightLockSunAltitudeDegrees: z.number(),
+    sunExclusionDegrees: z.number().gte(15).lte(180),
+    daylightLockSunAltitudeDegrees: z.number().gte(-90).lte(0),
     nudgeMaxDegrees: z.number().gt(0),
     nudgeRateDegreesPerSecond: z.number().gt(0),
     slewTimeoutSeconds: z.int().gt(0),
@@ -1648,6 +1648,11 @@ export const zAgentError = z.strictObject({
  * The mission and command say which capture this is for. Together with
  * `kind` they identify the object, so no correlation identifier is needed:
  * a grant answers the request naming the same three.
+ * The agent also declares what it is about to write. A presigned URL signs
+ * only the headers it was given, so a grant that names neither the media type
+ * nor the size is a grant to PUT anything of any size at that key until it
+ * expires. The cloud checks both against the asset kind, signs them, and the
+ * upload is refused by storage itself if either differs.
  *
  */
 export const zAgentUploadGrantRequest = z.strictObject({
@@ -1656,7 +1661,9 @@ export const zAgentUploadGrantRequest = z.strictObject({
     sentAt: z.iso.datetime(),
     missionId: z.uuid(),
     commandId: z.uuid(),
-    kind: zCaptureAssetKind
+    kind: zCaptureAssetKind,
+    contentType: z.string(),
+    contentLength: z.int().gte(1)
 });
 
 /**
@@ -1765,6 +1772,8 @@ export const zCloudUploadGrant = z.strictObject({
     commandId: z.uuid(),
     kind: zCaptureAssetKind,
     storageKey: z.string(),
+    contentType: z.string(),
+    contentLength: z.int().gte(1),
     url: z.url(),
     method: z.enum(['PUT']),
     expiresAt: z.iso.datetime()

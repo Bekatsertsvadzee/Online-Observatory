@@ -16,6 +16,7 @@ never redefined.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -41,9 +42,53 @@ class Verdict:
 
 PERMITTED = Verdict(permitted=True)
 
+#: The narrowest Sun exclusion the agent will believe, whatever it is told.
+#:
+#: The envelope arrives from the cloud, so every number in it is only as
+#: trustworthy as the cloud that sent it — and the contract's own minimum for
+#: `sunExclusionDegrees` was zero, a value that switches rule 3 off entirely.
+#: ADR-013 says the Sun exclusion "remains unreachable from any parameter on any
+#: path"; a parameter that can set it to zero is that path. The agent therefore
+#: treats a configured exclusion narrower than this as a lower bound to raise,
+#: not a limit to obey. Widening it from the cloud still works, because a wider
+#: exclusion refuses more.
+MIN_SUN_EXCLUSION_DEGREES = 15.0
+
+#: The highest the Sun may be before the daylight lock engages, whatever the
+#: configured lock says. A cloud that sets the lock to +90 has disabled it; the
+#: Sun is never above 90 degrees.
+MAX_DAYLIGHT_LOCK_ALTITUDE_DEGREES = 0.0
+
 
 def _refuse(reason: CommandRejectionReason, detail: str) -> Verdict:
     return Verdict(permitted=False, reason=reason, detail=detail)
+
+
+def sun_exclusion_degrees(config: SafetyEnvelopeConfig) -> float:
+    """The exclusion actually enforced, after the agent's own floor is applied.
+
+    A value that is not a finite number is not a measurement, and the only safe
+    reading of one is the widest exclusion there is: 180 degrees refuses every
+    pointing, which is what an observatory that cannot say where the Sun is
+    should do.
+    """
+    configured = config.sun_exclusion_degrees
+    if not math.isfinite(configured):
+        return 180.0
+    return max(configured, MIN_SUN_EXCLUSION_DEGREES)
+
+
+def daylight_lock_altitude_degrees(config: SafetyEnvelopeConfig) -> float:
+    """The daylight lock actually enforced, after the agent's own cap.
+
+    `NaN` deserves particular care here: `solar_altitude > nan` is False, so a
+    NaN lock does not merely misbehave, it silently never engages. It is read as
+    the strictest lock there is.
+    """
+    configured = config.daylight_lock_sun_altitude_degrees
+    if not math.isfinite(configured):
+        return -90.0
+    return min(configured, MAX_DAYLIGHT_LOCK_ALTITUDE_DEGREES)
 
 
 def is_measured(config: SafetyEnvelopeConfig | None) -> bool:
@@ -152,7 +197,17 @@ def evaluate_pointing(
         )
     assert config is not None and config.max_altitude_degrees is not None
 
-    # 2. Where we are must be known before the Sun can be computed. Fail closed:
+    # 2. A reading that is not a number is not a reading. Without this the
+    #    separation calculation raises a domain error, and an exception here
+    #    leaves the cloud with no ack at all rather than a refusal it can act on.
+    if not (math.isfinite(altitude_degrees) and math.isfinite(azimuth_degrees)):
+        return _refuse(
+            CommandRejectionReason.device_unavailable,
+            f"Pointing ({altitude_degrees}, {azimuth_degrees}) is not a finite "
+            "position, so it cannot be checked against the envelope.",
+        )
+
+    # 3. Where we are must be known before the Sun can be computed. Fail closed:
     #    an unknown site cannot prove the pointing is clear of the Sun.
     if site is None:
         return _refuse(
@@ -163,30 +218,29 @@ def evaluate_pointing(
 
     solar = sun.position(at_time, site)
 
-    # 3. Sun exclusion. Not overridable, by anything, ever.
+    # 4. Sun exclusion. Not overridable, by anything, ever.
     separation = sun.angular_separation(
         altitude_degrees, azimuth_degrees, solar.altitude_degrees, solar.azimuth_degrees
     )
-    if separation < config.sun_exclusion_degrees:
+    exclusion = sun_exclusion_degrees(config)
+    if separation < exclusion:
         return _refuse(
             CommandRejectionReason.safety_sun_exclusion,
             f"Pointing is {separation:.2f} degrees from the Sun; the exclusion is "
-            f"{config.sun_exclusion_degrees:.2f} degrees. This cannot be overridden.",
+            f"{exclusion:.2f} degrees. This cannot be overridden.",
         )
 
-    # 4. Daylight lock. Overridable for attended terrestrial testing, and even
+    # 5. Daylight lock. Overridable for attended terrestrial testing, and even
     #    then the Sun exclusion above has already been enforced.
-    if (
-        solar.altitude_degrees > config.daylight_lock_sun_altitude_degrees
-        and not operator_override
-    ):
+    daylight_lock = daylight_lock_altitude_degrees(config)
+    if solar.altitude_degrees > daylight_lock and not operator_override:
         return _refuse(
             CommandRejectionReason.safety_daylight_lock,
             f"The Sun is at {solar.altitude_degrees:.2f} degrees altitude; the "
-            f"daylight lock is {config.daylight_lock_sun_altitude_degrees:.2f}.",
+            f"daylight lock is {daylight_lock:.2f}.",
         )
 
-    # 5. Altitude limits.
+    # 6. Altitude limits.
     if altitude_degrees < config.min_altitude_degrees:
         return _refuse(
             CommandRejectionReason.safety_below_min_altitude,
@@ -200,7 +254,7 @@ def evaluate_pointing(
             f"{config.max_altitude_degrees:.2f}.",
         )
 
-    # 6. Horizon mask from the compass survey.
+    # 7. Horizon mask from the compass survey.
     surveyed_minimum = horizon_minimum_altitude(azimuth_degrees, config.horizon_mask)
     if surveyed_minimum is not None and altitude_degrees < surveyed_minimum:
         return _refuse(
@@ -210,7 +264,7 @@ def evaluate_pointing(
             f"{surveyed_minimum:.2f}.",
         )
 
-    # 7. Cable-wrap exclusion sectors.
+    # 8. Cable-wrap exclusion sectors.
     for sector in config.forbidden_azimuth_sectors:
         if azimuth_in_sector(azimuth_degrees, sector.from_degrees, sector.to_degrees):
             return _refuse(

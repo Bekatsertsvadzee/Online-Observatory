@@ -63,6 +63,7 @@ def test_a_decided_command_is_still_decided_after_a_restart(on_disk):
 
     first = StateStore(on_disk)
     first.remember(command_id, NOW)
+    first.mark_executed(command_id, NOW)
     assert first.has(command_id) is True
     first.close()
 
@@ -70,6 +71,45 @@ def test_a_decided_command_is_still_decided_after_a_restart(on_disk):
     assert second.has(command_id) is True
     assert second.has(str(uuid4())) is False
     second.close()
+
+
+def test_a_command_decided_but_never_carried_out_does_not_survive_a_restart(on_disk):
+    """The other half of "neither replayed nor lost".
+
+    The row is written before the command runs, so a crash in that window used to
+    leave the agent refusing a slew it had never performed -- and refusing it to
+    the cloud retry that was trying to recover exactly that. Within the process
+    the decision still stands; it is only the restart that reopens it.
+    """
+    command_id = str(uuid4())
+
+    first = StateStore(on_disk)
+    first.remember(command_id, NOW)
+    assert first.has(command_id) is True, "the running agent still knows it decided this"
+    first.close()
+
+    second = StateStore(on_disk)
+    assert second.has(command_id) is False
+    second.close()
+
+
+def test_rows_written_before_the_column_existed_are_read_as_carried_out(on_disk):
+    """An older agent's file has no `executed_at`. Those commands were decided by
+    an agent that ran them in the same breath, and the only safe reading of them
+    is the one that keeps refusing them."""
+    import sqlite3
+
+    connection = sqlite3.connect(on_disk)
+    connection.executescript(
+        "CREATE TABLE seen_command (command_id TEXT PRIMARY KEY, decided_at TEXT NOT NULL);"
+        "INSERT INTO seen_command VALUES ('old-command', '2026-06-21T22:00:00+00:00');"
+    )
+    connection.commit()
+    connection.close()
+
+    store = StateStore(on_disk)
+    assert store.has("old-command") is True
+    store.close()
 
 
 def test_remembering_the_same_command_twice_does_not_raise(store):
@@ -290,7 +330,9 @@ def test_retention_drops_what_is_old_and_keeps_what_is_not(store):
     ancient = NOW - timedelta(days=AUDIT_RETENTION_DAYS + 1)
 
     store.remember("old-command", old)
+    store.mark_executed("old-command", old)
     store.remember("recent-command", NOW - timedelta(hours=1))
+    store.mark_executed("recent-command", NOW - timedelta(hours=1))
     store.append_audit(event(detail="ancient", occurred_at=ancient))
     store.append_audit(event(detail="recent", occurred_at=NOW))
 

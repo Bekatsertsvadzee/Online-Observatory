@@ -137,9 +137,12 @@ describe("mission events (#25)", () => {
   // criterion 1
   it("moves the mission the reporting observatory holds", async () => {
     const link = await onlineLink();
-    await link.receive(missionEvent({ state: "COMPLETE" }));
+    // The step the agent actually takes from CAPTURING. A mission cannot reach
+    // COMPLETE from here -- the transition table in `store.ts` is the agent's own
+    // state machine, and PROCESSING is where the capture is handed over.
+    await link.receive(missionEvent({ state: "PROCESSING" }));
 
-    expect(store.mission(MISSION_ID)?.state).toBe("COMPLETE");
+    expect(store.mission(MISSION_ID)?.state).toBe("PROCESSING");
     expect(sent).toEqual([]);
   });
 

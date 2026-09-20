@@ -488,6 +488,10 @@ describe("a customer's booking, from sign-in to their Collection", () => {
       missionId,
       commandId: capture.commandId,
       kind: "IMAGE",
+      // The URL is signed over these, so the grant is for one object of one
+      // media type and one exact size, and nothing else may be PUT at that key.
+      contentType: "image/jpeg",
+      contentLength: 2_400_000,
     });
     const grant = await eventually(
       () => sent.find((message) => message.type === "CLOUD_UPLOAD_GRANT"),

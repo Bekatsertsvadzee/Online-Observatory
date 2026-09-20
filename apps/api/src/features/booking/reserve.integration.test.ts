@@ -1396,7 +1396,7 @@ describe("cancelling a booking", () => {
   it("releases an unpaid hold, fails its payment, and puts the slot back on sale", async () => {
     const { slotStartAt, booking } = await held();
 
-    const result = await cancelMyBooking({ userId, bookingId: booking.id, reason: "clouds" });
+    const result = await cancelMyBooking({ userId, bookingId: booking.id, reason: "clouds", now: NOW });
 
     expect(result).toMatchObject({ ok: true, booking: { id: booking.id, status: "CANCELLED" } });
     const payment = await database.payment.findUniqueOrThrow({
@@ -1416,7 +1416,7 @@ describe("cancelling a booking", () => {
       data: { status: "CONFIRMED", holdExpiresAt: null },
     });
 
-    const result = await cancelMyBooking({ userId, bookingId: booking.id });
+    const result = await cancelMyBooking({ userId, bookingId: booking.id, now: NOW });
 
     expect(result).toMatchObject({ ok: false, status: 409, code: "CONFLICT" });
     expect(await heldBookingsAt(slotStartAt)).toBe(1);
@@ -1424,9 +1424,9 @@ describe("cancelling a booking", () => {
 
   it("refuses to cancel a booking twice", async () => {
     const { booking } = await held();
-    await cancelMyBooking({ userId, bookingId: booking.id });
+    await cancelMyBooking({ userId, bookingId: booking.id, now: NOW });
 
-    await expect(cancelMyBooking({ userId, bookingId: booking.id })).resolves.toMatchObject({
+    await expect(cancelMyBooking({ userId, bookingId: booking.id, now: NOW })).resolves.toMatchObject({
       ok: false,
       status: 409,
     });
@@ -1436,8 +1436,8 @@ describe("cancelling a booking", () => {
     const { slotStartAt, booking } = await held();
     const stranger = await createUser();
 
-    const theirs = await cancelMyBooking({ userId: stranger, bookingId: booking.id });
-    const missing = await cancelMyBooking({ userId: stranger, bookingId: randomUUID() });
+    const theirs = await cancelMyBooking({ userId: stranger, bookingId: booking.id, now: NOW });
+    const missing = await cancelMyBooking({ userId: stranger, bookingId: randomUUID(), now: NOW });
 
     expect(theirs).toEqual(missing);
     expect(theirs).toMatchObject({ ok: false, status: 404 });

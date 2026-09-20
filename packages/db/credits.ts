@@ -176,6 +176,15 @@ export type BookingSpendResult =
  * has not ended: a pause stops charging and granting, not spending (maintainer
  * decision of 2026-09-19). A period that has ended spends nothing even before its
  * expiry entry is written, because those minutes are already gone.
+ *
+ * **Open, and deliberately left alone:** a capture that settles against a
+ * subscription the customer has already CANCELLED grants that period's minutes
+ * (`subscriptions.ts`, "ADR-022 gives them the minutes it bought"), and this
+ * function will not let them be spent. One of the two is wrong -- either the grant
+ * should not happen, or CANCELLED should keep spending until the period it paid for
+ * ends -- and which is a product decision, not an implementation one. ADR-022
+ * section 9 calls cancellation "immediate", which is why this side was not changed.
+ * See `ledger.integration.test.ts`.
  */
 export async function spendBookingMinutes(
   tx: Tx,
@@ -206,16 +215,39 @@ export async function spendBookingMinutes(
   return result.posted ? { spent: true } : { spent: false, reason: result.reason };
 }
 
+/** Whether this customer has a period that has been paid for and has not ended. */
+async function hasRunningPeriod(tx: Tx, userId: string, now: Date): Promise<boolean> {
+  const subscription = await tx.subscription.findUnique({
+    where: { userId },
+    select: { currentPeriodEnd: true },
+  });
+  return Boolean(subscription?.currentPeriodEnd && subscription.currentPeriodEnd > now);
+}
+
 /**
  * Give back the minutes a booking spent, when the booking did not happen. One entry
  * per booking however many release paths reach it, beside `releaseRedeemedPoints`.
  * A credit is returned as a credit, never as money.
+ *
+ * **Nothing comes back after the period has ended.** Minutes do not roll over; they
+ * expire at period end (ADR-022, amended 2026-09-19), and the expiry entry is keyed
+ * to that end, so a later pass of the sweep writes nothing. Without this test the
+ * automatic refund of an unflown booking -- which runs thirty days later, long after
+ * the period it belonged to -- put minutes back into a dead period and left them
+ * there permanently, spendable against a month nobody paid for.
+ *
+ * Minutes released during a *later* funded period do land in that period. They are
+ * bounded by what was spent and they expire with it, and the alternative is
+ * recording which period every booking's minutes came from for a distinction the
+ * customer would experience as their refund vanishing.
  */
 export async function releaseSpentMinutes(
   tx: Tx,
   booking: { id: string; userId: string; subscriptionMinutesSpent: number },
+  now: Date,
 ): Promise<void> {
   if (booking.subscriptionMinutesSpent <= 0) return;
+  if (!(await hasRunningPeriod(tx, booking.userId, now))) return;
   await postCreditEntry(tx, {
     userId: booking.userId,
     amount: booking.subscriptionMinutesSpent,

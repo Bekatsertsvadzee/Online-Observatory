@@ -72,6 +72,8 @@ class SeenCommands(Protocol):
 
     def remember(self, command_id: str, at: datetime) -> None: ...
 
+    def mark_executed(self, command_id: str, at: datetime) -> None: ...
+
 
 class BoundedSeenCommands:
     """The default: the most recent decisions, in memory.
@@ -97,6 +99,11 @@ class BoundedSeenCommands:
         self._seen[command_id] = at
         while len(self._seen) > self._capacity:
             self._seen.popitem(last=False)
+
+    def mark_executed(self, command_id: str, at: datetime) -> None:
+        """Nothing to record. The distinction between a command that was carried
+        out and one that was only decided exists to survive a restart, and none
+        of this survives a restart."""
 
 
 @dataclass(frozen=True)
@@ -230,8 +237,19 @@ class CommandValidator:
     # Validation
     # ------------------------------------------------------------------
 
-    def validate(self, raw_envelope: dict, at_time: datetime) -> Ack:
-        """Decide one command. Always returns exactly one ack."""
+    def validate(
+        self, raw_envelope: dict, at_time: datetime, cloud_time: datetime | None = None
+    ) -> Ack:
+        """Decide one command. Always returns exactly one ack.
+
+        `cloud_time` is `at_time` corrected for measured clock skew. `expiresAt`
+        was stamped by the cloud's clock, and comparing it against a mini-PC's
+        clock is a comparison between two different clocks -- which is how an
+        observatory that has drifted a few minutes forward comes to refuse every
+        command it is sent. Everything else, the sky included, is still judged on
+        the agent's own clock. Defaults to `at_time`, so a caller that has no
+        measurement behaves exactly as before.
+        """
         command_id = str(raw_envelope.get("commandId", "")) or "unknown"
 
         # 1. Structure.
@@ -246,19 +264,21 @@ class CommandValidator:
         if self._seen.has(command_id):
             return self._duplicate(envelope)
 
-        ack = self._evaluate(envelope, at_time)
+        ack = self._evaluate(envelope, at_time, cloud_time or at_time)
         self._seen.remember(command_id, at_time)
         return ack
 
-    def _evaluate(self, envelope: CommandEnvelope, at_time: datetime) -> Ack:
+    def _evaluate(
+        self, envelope: CommandEnvelope, at_time: datetime, cloud_time: datetime
+    ) -> Ack:
         command_type = envelope.type.value
 
         # 3. Expiry. A command queued before a reconnect must not fire after it.
-        if envelope.expires_at <= at_time:
+        if envelope.expires_at <= cloud_time:
             return self._reject(
                 envelope,
                 CommandRejectionReason.command_expired,
-                f"expired at {envelope.expires_at.isoformat()}, now {at_time.isoformat()}",
+                f"expired at {envelope.expires_at.isoformat()}, now {cloud_time.isoformat()}",
                 status=CommandAcceptanceStatus.expired,
             )
 
@@ -510,3 +530,8 @@ class CommandValidator:
 
     def has_seen(self, command_id: str) -> bool:
         return self._seen.has(command_id)
+
+    def mark_executed(self, command_id: str, at: datetime) -> None:
+        """Close the record opened by `validate`: this command has been dealt
+        with, and a restart must keep refusing it."""
+        self._seen.mark_executed(command_id, at)

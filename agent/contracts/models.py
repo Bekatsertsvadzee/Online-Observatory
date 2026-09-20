@@ -496,8 +496,8 @@ class SafetyEnvelopeConfig(BaseModel):
     max_altitude_measurement_note: str | None = Field(None, alias='maxAltitudeMeasurementNote', description='How the value was obtained, including the clearance actually observed.')
     horizon_mask: list[HorizonMaskEntry] = Field(..., alias='horizonMask', description='Minimum altitude by bearing, built from the site compass survey.')
     forbidden_azimuth_sectors: list[AzimuthSector] = Field(..., alias='forbiddenAzimuthSectors', description='Cable-wrap exclusion sectors. The mount routes the long way round rather than crossing one.')
-    sun_exclusion_degrees: float = Field(..., alias='sunExclusionDegrees', description='Hard block on any coordinate within this angle of the Sun, computed\nindependently by cloud and agent. Never overridable, including by an\noperator override.\n', ge=0.0, le=180.0)
-    daylight_lock_sun_altitude_degrees: float = Field(..., alias='daylightLockSunAltitudeDegrees', description='No customer mission may start while the Sun is above this altitude. An\noperator override is permitted for attended terrestrial testing and remains\nSun-bounded.\n')
+    sun_exclusion_degrees: float = Field(..., alias='sunExclusionDegrees', description='Hard block on any coordinate within this angle of the Sun, computed\nindependently by cloud and agent. Never overridable, including by an\noperator override.\n\nThe minimum is 15 rather than 0 because ADR-013 requires the Sun exclusion\nto be unreachable from any parameter on any path, and a parameter that may\nbe set to zero is that path. Cloud and agent each apply the same floor\nagain in code, independently, so a stored value below it is raised rather\nthan obeyed.\n', ge=15.0, le=180.0)
+    daylight_lock_sun_altitude_degrees: float = Field(..., alias='daylightLockSunAltitudeDegrees', description='No customer mission may start while the Sun is above this altitude. An\noperator override is permitted for attended terrestrial testing and remains\nSun-bounded.\n\nBounded to real Sun altitudes, and never above the horizon: a lock set\nhigher than 0 is a lock that cannot fire.\n', ge=-90.0, le=0.0)
     nudge_max_degrees: float = Field(..., alias='nudgeMaxDegrees', description='Cumulative offset a customer may apply from the locked target before the control re-centres.', gt=0.0)
     nudge_rate_degrees_per_second: float = Field(..., alias='nudgeRateDegreesPerSecond', description='Discrete bounded steps only. No continuous slew is ever exposed to a customer.', gt=0.0)
     slew_timeout_seconds: int = Field(..., alias='slewTimeoutSeconds', gt=0)
@@ -1810,6 +1810,11 @@ class AgentUploadGrantRequest(BaseModel):
     The mission and command say which capture this is for. Together with
     `kind` they identify the object, so no correlation identifier is needed:
     a grant answers the request naming the same three.
+    The agent also declares what it is about to write. A presigned URL signs
+    only the headers it was given, so a grant that names neither the media type
+    nor the size is a grant to PUT anything of any size at that key until it
+    expires. The cloud checks both against the asset kind, signs them, and the
+    upload is refused by storage itself if either differs.
 
     """
     model_config = ConfigDict(
@@ -1821,6 +1826,8 @@ class AgentUploadGrantRequest(BaseModel):
     mission_id: UUID = Field(..., alias='missionId')
     command_id: UUID = Field(..., alias='commandId')
     kind: CaptureAssetKind
+    content_type: str = Field(..., alias='contentType', description='Media type of the bytes the agent will PUT. Checked against `kind` and\nthen signed, so it is what the agent must actually send.\n')
+    content_length: int = Field(..., alias='contentLength', description="Exact size in bytes of the object the agent will PUT. Checked against the\ncloud's per-kind maximum and then signed.\n", ge=1)
 
 
 class AgentToCloudMessage(RootModel[AgentHello | AgentHeartbeat | AgentCommandAck | AgentStateDelta | AgentMissionEvent | LiveFrameHeader | AgentUploadGrantRequest | AgentCaptureReady | AgentError]):
@@ -1939,6 +1946,8 @@ class CloudUploadGrant(BaseModel):
     command_id: UUID = Field(..., alias='commandId')
     kind: CaptureAssetKind
     storage_key: str = Field(..., alias='storageKey', description='Object storage key the cloud derived. Not a URL and never a public path.')
+    content_type: str = Field(..., alias='contentType', description='The media type the URL was signed for, echoed from the request. The agent\nsends exactly this; storage refuses anything else.\n')
+    content_length: int = Field(..., alias='contentLength', description='The exact size the URL was signed for, echoed from the request. The agent\nsends exactly this many bytes; storage refuses anything else.\n', ge=1)
     url: AnyUrl = Field(..., description='Presigned URL. Names one object and one method, and expires.')
     method: Literal['PUT'] = Field(..., description='Always PUT. Stated rather than assumed, so a reader of a captured message knows what it permitted.')
     expires_at: AwareDatetime = Field(..., alias='expiresAt')

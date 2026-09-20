@@ -787,6 +787,17 @@ class MissionRunner:
     def _park(self, why: str) -> None:
         """Criterion 6: every terminal path parks, or records why it could not.
 
+        docs/ENGINEERING.md gives the order: "stop capture, halt unsafe motion, Park." It is
+        an order, not a list. A mount that faults mid-slew is still slewing, and a
+        Park issued while a slew is running asks the mount to do two things at
+        once -- on real hardware that is how a slew keeps going toward whatever
+        the envelope just refused. The exposure is stopped first for the same
+        reason: a camera still integrating while the mount swings is a shutter
+        open through the mount's own motion.
+
+        Each step is attempted independently. A failure in one must not skip the
+        ones after it, because the last of them is Park.
+
         Park is attempted even when the mount is faulted, because a mount that
         might respond should be asked. A failure here is recorded rather than
         raised: there is nothing further the runner could do about it, and losing
@@ -804,6 +815,14 @@ class MissionRunner:
             except Exception as error:
                 logger.error("could not stop the focuser (%s): %s", why, error)
             progress.focus = None
+        try:
+            self._devices.camera.abort_exposure()
+        except Exception as error:
+            logger.error("could not stop the exposure (%s): %s", why, error)
+        try:
+            self._devices.mount.abort_slew()
+        except Exception as error:
+            logger.error("could not halt the slew (%s): %s", why, error)
         try:
             self._devices.mount.park()
             progress.parked = True

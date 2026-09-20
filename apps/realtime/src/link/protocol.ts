@@ -108,6 +108,8 @@ export function cloudUploadGrant(grant: {
   storageKey: string;
   url: string;
   expiresAt: Date;
+  contentType: string;
+  contentLength: number;
 }): CloudUploadGrant {
   return {
     type: "CLOUD_UPLOAD_GRANT",
@@ -119,6 +121,11 @@ export function cloudUploadGrant(grant: {
     url: grant.url,
     method: "PUT",
     expiresAt: grant.expiresAt.toISOString(),
+    // Echoed because they are in the signature: an agent that sends anything
+    // else is refused by storage, so it has to be told what it was granted
+    // rather than left to remember what it asked for.
+    contentType: grant.contentType,
+    contentLength: grant.contentLength,
   };
 }
 

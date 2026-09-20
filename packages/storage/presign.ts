@@ -62,6 +62,7 @@ function requestFor(
   configuration: StorageConfiguration,
   method: "PUT" | "GET",
   key: string,
+  extraHeaders: Record<string, string> = {},
 ) {
   const endpoint = new URL(configuration.S3_ENDPOINT);
   const encodedKey = key.split("/").map(encodeURIComponent).join("/");
@@ -80,7 +81,10 @@ function requestFor(
     port: endpoint.port ? Number(endpoint.port) : undefined,
     method,
     path,
-    headers: { host: endpoint.port ? `${hostname}:${endpoint.port}` : hostname },
+    headers: {
+      host: endpoint.port ? `${hostname}:${endpoint.port}` : hostname,
+      ...extraHeaders,
+    },
   });
 }
 
@@ -99,22 +103,44 @@ function urlOf(signed: HttpRequest) {
 
 export type PresignedUrl = { url: string; expiresAt: Date };
 
+/** What the agent has declared it is about to write. */
+export type UploadShape = { contentType: string; contentLength: number };
+
 /**
- * One object, one method, minutes.
+ * One object, one method, one shape, minutes.
  *
  * This is the whole of the observatory's authority over object storage. It holds
  * no bucket credential, so a stolen mini-PC yields a revocable device token and
  * nothing that reads or overwrites another customer's images.
+ *
+ * The media type and the exact length are signed alongside the key, not merely
+ * checked before signing. A signature covers the headers it was given and
+ * nothing else, so a URL signed over `host` alone permits any body of any size
+ * at that key for as long as it lives -- and the party holding it is the least
+ * trusted machine we operate. Signing them puts the limit in the grant itself,
+ * where storage enforces it without this service being in the path.
  */
 export async function presignUpload(
   configuration: StorageConfiguration,
   key: string,
   now: Date,
+  shape: UploadShape,
   ttlSeconds = UPLOAD_URL_TTL_SECONDS,
 ): Promise<PresignedUrl> {
   const signed = await signerFor(configuration).presign(
-    requestFor(configuration, "PUT", key),
-    { expiresIn: ttlSeconds, signingDate: now },
+    requestFor(configuration, "PUT", key, {
+      "content-type": shape.contentType,
+      "content-length": String(shape.contentLength),
+    }),
+    {
+      expiresIn: ttlSeconds,
+      signingDate: now,
+      // Both must be in the signature rather than hoisted into the query string,
+      // which is what the signer does by default with anything it is not told to
+      // sign. A hoisted header is a suggestion; a signed one is a condition.
+      unsignableHeaders: new Set<string>(),
+      signableHeaders: new Set(["host", "content-type", "content-length"]),
+    },
   );
 
   return {
