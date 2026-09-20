@@ -9,10 +9,12 @@ import type {
   CloudSessionUpdate,
   CloudToAgentMessage,
   CloudUploadGrant,
+  CloudWeatherUpdate,
   CloudWelcome,
   CommandEnvelope,
   ErrorCode,
   SafetyEnvelopeConfig,
+  WeatherState,
 } from "@darkview/contracts";
 import { zAgentToCloudMessage } from "@darkview/contracts/zod";
 
@@ -165,6 +167,22 @@ export function cloudSafetyEnvelopeUpdate(
   envelope: SafetyEnvelopeConfig,
 ): CloudSafetyEnvelopeUpdate {
   return { type: "CLOUD_SAFETY_ENVELOPE_UPDATE", ...messageHeader(), envelope };
+}
+
+/**
+ * Hand the agent the operator's weather hold.
+ *
+ * Carries the whole `WeatherState` rather than a boolean. The agent files what
+ * it refuses, and "the operator called it CLOUDY at 21:40" is what an operator
+ * reading the agent's own audit trail the next morning needs to see; a bare flag
+ * would leave the observatory's record of the night saying only that something
+ * stopped it.
+ */
+export function cloudWeatherUpdate(
+  observatoryId: string,
+  weather: WeatherState,
+): CloudWeatherUpdate {
+  return { type: "CLOUD_WEATHER_UPDATE", ...messageHeader(), observatoryId, weather };
 }
 
 export type Send = (message: CloudToAgentMessage) => void;

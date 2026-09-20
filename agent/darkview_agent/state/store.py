@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from contracts.models import SafetyEnvelopeConfig
+from contracts.models import SafetyEnvelopeConfig, WeatherState
 from darkview_agent.command.audit import AuditEvent
 
 logger = logging.getLogger("darkview.agent.state")
@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS agent_state (
 OWNERSHIP_KEY = "ownership"
 MISSION_KEY = "mission"
 ENVELOPE_KEY = "safety_envelope"
+WEATHER_KEY = "weather"
 
 
 @dataclass(frozen=True)
@@ -370,6 +371,37 @@ class StateStore:
             # envelope; it is no envelope, and no envelope refuses every slew.
             logger.error("the stored safety envelope is unreadable; discarding it")
             self._delete(ENVELOPE_KEY)
+            return None
+
+    # ------------------------------------------------------------------
+    # The weather
+    # ------------------------------------------------------------------
+
+    def save_weather(self, weather: WeatherState) -> None:
+        """Keep the operator's hold across a restart.
+
+        The same argument as the envelope, one step further. An agent that
+        rebooted under a hold and came back with no memory of it would accept the
+        next command it was sent, and the operator who closed the observatory has
+        no way of learning that it reopened itself.
+        """
+        self._put(WEATHER_KEY, json.loads(weather.model_dump_json(by_alias=True)))
+
+    def load_weather(self) -> WeatherState | None:
+        stored = self._get(WEATHER_KEY)
+        if stored is None:
+            return None
+        try:
+            return WeatherState.model_validate(stored)
+        except Exception:
+            # Discarded rather than repaired, and the agent is then in the state
+            # every agent is in on its first boot: it has not been told. Unlike
+            # the envelope there is nothing safe to invent here -- a fabricated
+            # hold would be a statement about the sky that nobody made -- and the
+            # cloud re-sends the weather on every reconnect, so the gap is one
+            # reconnect wide.
+            logger.error("the stored weather is unreadable; discarding it")
+            self._delete(WEATHER_KEY)
             return None
 
     # ------------------------------------------------------------------

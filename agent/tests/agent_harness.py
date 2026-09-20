@@ -124,6 +124,32 @@ class Agent:
         )
         self.pump()
 
+    def weather(
+        self,
+        *,
+        hold_active: bool,
+        status: str = "CLOUDY",
+        note: str | None = None,
+        observatory_id: UUID | None = None,
+    ) -> None:
+        """Deliver one CLOUD_WEATHER_UPDATE and pump."""
+        self.deliver(
+            {
+                "type": "CLOUD_WEATHER_UPDATE",
+                "messageId": str(uuid4()),
+                "sentAt": self.wall.now.isoformat(),
+                "observatoryId": str(observatory_id or OBSERVATORY_ID),
+                "weather": {
+                    "status": status,
+                    "source": "OPERATOR",
+                    "holdActive": hold_active,
+                    "note": note,
+                    "updatedAt": self.wall.now.isoformat(),
+                },
+            }
+        )
+        self.pump()
+
     def command(self, envelope: dict, sent_at: datetime | None = None) -> dict | None:
         """Send one command and return the ack that came back, if any.
 

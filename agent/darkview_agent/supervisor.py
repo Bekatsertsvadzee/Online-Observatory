@@ -47,6 +47,7 @@ from contracts.models import (
     CommandRejectionReason,
     MissionFailureReason,
     SafetyEnvelopeConfig,
+    WeatherState,
 )
 from darkview_agent.capture import profiles
 from darkview_agent.capture.deliverable import Deliverable, RenderedAsset, render
@@ -212,6 +213,9 @@ class Supervisor:
         # and then forgotten -- see `recover`.
         self._recovered_mission: StoredMission | None = None
         self._saved_mission_state: str | None = None
+        # The last weather the cloud sent, or the last one recovered from local
+        # state. None means nobody has said, which is not the same as clear.
+        self._weather: WeatherState | None = None
         self._link.set_safety_envelope_configured(envelope.is_measured)
 
     # ------------------------------------------------------------------
@@ -245,6 +249,11 @@ class Supervisor:
     @property
     def recovered_mission(self) -> StoredMission | None:
         return self._recovered_mission
+
+    @property
+    def weather(self) -> WeatherState | None:
+        """The sky as the cloud last described it, or None if it never has."""
+        return self._weather
 
     # ------------------------------------------------------------------
     # Coming back
@@ -280,6 +289,7 @@ class Supervisor:
         now = self._now()
         self._store.prune(now)
         self._restore_ownership(now)
+        self._restore_weather()
         self._restore_mission()
 
     def _restore_ownership(self, now: datetime) -> None:
@@ -306,6 +316,20 @@ class Supervisor:
         # stay spent across a restart.
         self._validator.set_nudge_offset(stored.cumulative_nudge_degrees)
         logger.info("recovered session %s", stored.session_id)
+
+    def _restore_weather(self) -> None:
+        """Pick the operator's hold back up.
+
+        Before the mission, deliberately. A hold that stands is a reason to park
+        rather than to carry on, and restoring it first means the Park below
+        happens under a validator that is already refusing everything else.
+        """
+        assert self._store is not None
+        stored = self._store.load_weather()
+        if stored is None:
+            return
+
+        self._apply_weather(stored, source="local state")
 
     def _restore_mission(self) -> None:
         assert self._store is not None
@@ -413,6 +437,8 @@ class Supervisor:
             self._handle_session_update(message)
         elif message_type == "CLOUD_SAFETY_ENVELOPE_UPDATE":
             self._handle_envelope_update(message)
+        elif message_type == "CLOUD_WEATHER_UPDATE":
+            self._handle_weather_update(message)
         elif message_type == "CLOUD_UPLOAD_GRANT":
             self._handle_upload_grant(message)
         elif message_type == "CLOUD_ERROR":
@@ -559,6 +585,71 @@ class Supervisor:
             logger.warning(
                 "safety envelope updated: UNMEASURED — every slew will be refused "
                 "until MAX_ALT_SAFE is measured"
+            )
+
+    def _handle_weather_update(self, message: dict) -> None:
+        """Take the cloud's word on the sky, and keep it.
+
+        The cloud is the only party that can have one in Phase 1: no sensor is
+        fitted, and the operator console is the only writer. What the agent adds
+        is persistence -- it stores the hold and goes on enforcing it after the
+        link dies, which is the half a cloud-side hold could never do.
+        """
+        observatory_id = _parse_uuid(message.get("observatoryId"))
+        if observatory_id is not None and observatory_id != self._config.observatory_id:
+            # Not this observatory's weather. Nothing should ever send it here,
+            # and acting on it would mean holding a telescope because of a sky
+            # somewhere else.
+            logger.warning(
+                "discarding a CLOUD_WEATHER_UPDATE addressed to observatory %s",
+                observatory_id,
+            )
+            return
+
+        try:
+            weather = WeatherState.model_validate(message.get("weather"))
+        except Exception as error:
+            # The previous weather stays in force, for the reason an unreadable
+            # envelope leaves the previous envelope standing: discarding it would
+            # lift a hold, and that is the wrong direction to fail in.
+            logger.error("refusing an unreadable weather update: %s", error)
+            return
+
+        self._apply_weather(weather, source="the cloud")
+
+    def _apply_weather(self, weather: WeatherState, *, source: str) -> None:
+        """Hold or release the sky, and say so once.
+
+        The watchdog is triggered only when the hold goes on, not on every update
+        that carries one. The cloud re-sends the weather on every reconnect and an
+        operator may save a hold again with a new note; a Park and an audit row
+        per repetition would bury the one that mattered.
+        """
+        was_holding = self._weather is not None and self._weather.hold_active
+        self._weather = weather
+        self._validator.set_weather_hold(weather.hold_active)
+        if self._store is not None:
+            self._store.save_weather(weather)
+
+        if weather.hold_active and not was_holding:
+            detail = f"weather hold from {source}: {weather.status.value}"
+            if weather.note:
+                detail = f"{detail} ({weather.note})"
+            logger.warning("%s; parking and refusing commands", detail)
+            self._audit_event(
+                "WEATHER_HOLD_SET",
+                detail=detail,
+                context={"status": weather.status.value, "source": weather.source.value},
+            )
+            self._watchdog.weather_unsafe(detail)
+            return
+
+        if not weather.hold_active and was_holding:
+            logger.info("weather hold cleared by %s", source)
+            self._audit_event(
+                "WEATHER_HOLD_CLEARED",
+                detail=f"weather hold cleared by {source}",
+                context={"status": weather.status.value},
             )
 
     def _handle_cloud_error(self, message: dict) -> None:

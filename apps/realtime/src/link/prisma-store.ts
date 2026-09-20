@@ -7,7 +7,11 @@ import { recordAuditEvent } from "@darkview/db/audit";
 import { CAPTURE_CONTRACT_COLUMNS, toContractCapture } from "@darkview/db/capture";
 import { queueEmail } from "@darkview/db/notifications";
 
-import type { CommandEnvelope, SafetyEnvelopeConfig } from "@darkview/contracts";
+import type {
+  CommandEnvelope,
+  SafetyEnvelopeConfig,
+  WeatherState,
+} from "@darkview/contracts";
 
 import {
   COMMAND_STATUS_FOR,
@@ -680,6 +684,22 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
         heartbeatLossSeconds: row.heartbeatLossSeconds,
         linkDeadSeconds: row.linkDeadSeconds,
         refocusTemperatureDeltaC: row.refocusTemperatureDeltaC,
+        updatedAt: row.updatedAt.toISOString(),
+      };
+    },
+
+    async loadWeather(observatoryId: string): Promise<WeatherState | null> {
+      const row = await database.weatherState.findUnique({ where: { observatoryId } });
+      if (!row) return null;
+
+      return {
+        status: row.status,
+        // OPERATOR, for the reason the admin endpoint asserts it: the console is
+        // the only writer in Phase 1 and no sensor is fitted. When one is, the
+        // source becomes a column and this reads it.
+        source: "OPERATOR",
+        holdActive: row.holdActive,
+        note: row.note,
         updatedAt: row.updatedAt.toISOString(),
       };
     },
