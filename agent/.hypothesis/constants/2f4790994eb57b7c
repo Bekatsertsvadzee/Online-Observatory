@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/capture/upload.py
+# hypothesis_version: 6.140.3
+
+[5.0, 120.0, 200, 300, '?', 'Content-Length', 'Content-Type', 'DEFAULT_MAX_ATTEMPTS', 'PUT', 'UploadJob', 'UploadResult', 'Uploader', '[PRESIGNED-URL]', '[REDACTED]', 'darkview-upload', 'giving up on %s: %s', 'no attempt was made']

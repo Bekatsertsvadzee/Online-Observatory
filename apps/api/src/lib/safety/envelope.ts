@@ -14,7 +14,7 @@ import {
 /**
  * The cloud's half of the two-layer safety design.
  *
- * `CLAUDE.md`: "The cloud validates commands; the local agent validates them
+ * `docs/ENGINEERING.md`: "The cloud validates commands; the local agent validates them
  * again. A cloud-approved command that fails local safety is refused." This is the
  * first of those two checks. Until it existed the cloud minted commands it had
  * never examined, and the entire safety argument rested on one implementation.

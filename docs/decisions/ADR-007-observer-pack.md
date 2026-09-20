@@ -8,7 +8,7 @@
 
 ## Context
 
-`CLAUDE.md` states: *one active mission at a time, one active session owner at a time.*
+`docs/ENGINEERING.md` states: *one active mission at a time, one active session owner at a time.*
 That rule is about **control** — who decides where the telescope points. It has never
 said only one person may *watch*.
 
@@ -28,7 +28,7 @@ that somebody else controls.
 ### The rules
 
 1. **Exactly one controller.** The session owner alone chooses the target and issues
-   commands. This is unchanged and non-negotiable — it is a `CLAUDE.md` rule.
+   commands. This is unchanged and non-negotiable — it is a `docs/ENGINEERING.md` rule.
 2. **Observers never command.** An observer cannot slew, capture, abort or park. This
    is enforced structurally, not by UI: `CommandEnvelope` carries `sessionId` and
    `userId`, the cloud mints envelopes only for the session owner, and **the agent
@@ -50,7 +50,7 @@ that somebody else controls.
 
 - **Five, not unlimited.** A cap of five fans out to a handful of WebSocket clients
   from the existing realtime service. Unlimited observers would mean a media server or
-  CDN — new infrastructure that `CLAUDE.md` forbids adding without measured need and
+  CDN — new infrastructure that `docs/ENGINEERING.md` forbids adding without measured need and
   maintainer approval. Five keeps the product intimate and the architecture unchanged.
 - **View-only.** It keeps a clear reason to book your own session, and it keeps the
   media pipeline simple: captures belong to the person who commanded them.

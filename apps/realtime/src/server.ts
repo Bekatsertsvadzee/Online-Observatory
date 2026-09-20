@@ -91,7 +91,7 @@ const MISSION_PATH = /^\/ws\/mission\/([0-9a-fA-F-]{36})$/;
  *
  * A separate long-running process, by design and not by preference. The
  * observatory link is a socket held open for hours: a serverless function cannot
- * hold one, and `CLAUDE.md` forbids trying. The Next.js API app never sees it.
+ * hold one, and `docs/ENGINEERING.md` forbids trying. The Next.js API app never sees it.
  *
  * The observatory dials out to this service. Nothing here ever dials the
  * observatory, which has no reachable address and no listening port.

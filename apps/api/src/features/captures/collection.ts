@@ -61,7 +61,7 @@ async function withSignedThumbnail(
 /**
  * The Collection: what a customer keeps.
  *
- * `CLAUDE.md` describes the product as a customer who "can Capture the result, and
+ * `docs/ENGINEERING.md` describes the product as a customer who "can Capture the result, and
  * keeps it in their Collection", and the contract calls `GET /captures` "the
  * signed-in user's Collection". The Collection is therefore the captures they own
  * -- not the `Collection` table, which holds curated named sets (SOLAR_SYSTEM,

@@ -272,7 +272,7 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
             commandId: causedBy?.id ?? null,
             message: event.detail,
             occurredAt: event.occurredAt,
-            // `CLAUDE.md`: a mission run against the simulator is permanently
+            // `docs/ENGINEERING.md`: a mission run against the simulator is permanently
             // marked SIMULATED and never presented as real telescope output.
             // Letting these default to false would file simulator events as real.
             simulated: mission.mode === "SIMULATED",

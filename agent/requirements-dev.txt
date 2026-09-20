@@ -1,5 +1,5 @@
 # Tooling and runtime for the Darkview Observatory Agent development environment.
-# Python 3.12 per CLAUDE.md. Create with:
+# Python 3.12 per docs/ENGINEERING.md. Create with:
 #   python3.12 -m venv agent/.venv
 #   agent/.venv/bin/pip install -r agent/requirements-dev.txt
 #

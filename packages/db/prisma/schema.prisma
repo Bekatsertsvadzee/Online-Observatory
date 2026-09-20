@@ -739,7 +739,7 @@ model Mission {
 
 /// Contract: MissionSession. Who currently holds the telescope.
 ///
-/// `CLAUDE.md`: one active mission at a time, one active session owner at a time.
+/// `docs/ENGINEERING.md`: one active mission at a time, one active session owner at a time.
 /// Both are partial unique indexes rather than application checks, because two
 /// simultaneous requests cannot be separated by a read followed by a write. DV-058
 /// creates them as raw SQL in the migration; Prisma cannot express either.

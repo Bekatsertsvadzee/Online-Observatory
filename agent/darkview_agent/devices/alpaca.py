@@ -5,7 +5,7 @@ Written against the ASCOM Alpaca Device API v1, Telescope device
 the observatory mini-PC. DV-034 is where that happens. Nothing here is hardware
 evidence.
 
-The bridge is reached on a loopback address only. `CLAUDE.md` allows exactly one
+The bridge is reached on a loopback address only. `docs/ENGINEERING.md` allows exactly one
 listener at the observatory -- the ASCOM Remote / Alpaca bridge on `127.0.0.1` --
 and a driver that accepted any other host would be the first piece of this agent
 able to address a device across a network. The host must be a literal loopback

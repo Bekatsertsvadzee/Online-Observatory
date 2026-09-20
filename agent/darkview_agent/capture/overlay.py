@@ -12,7 +12,7 @@ the Collection and ends up somewhere with no caption around it, and an image of
 the sky with no provenance is indistinguishable from any other image of the sky.
 
 **Whether it is real.** A frame carries its own `mode`, and a simulated frame is
-marked SIMULATED on the face of the image. `CLAUDE.md` forbids presenting
+marked SIMULATED on the face of the image. `docs/ENGINEERING.md` forbids presenting
 simulator output as real telescope output; a field in a database row does not
 survive a screenshot, and this does.
 

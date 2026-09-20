@@ -1,14 +1,12 @@
 #!/bin/sh
-# Refuse any commit that credits an agent as an author.
+# Refuse any commit message that credits a second author.
 #
-# CLAUDE.md: "Commits carry one author: the maintainer. Never add a
-# Co-Authored-By: trailer to a commit message, and never suggest one -- not for
-# Claude, not for any agent."
+# docs/ENGINEERING.md: "Commits carry one author: the maintainer."
 #
 # This existed as a rule and was broken once anyway, on fcbc115, which now
-# permanently reads "Bekatsertsvadzee and claude committed" on GitHub. A merged
-# commit's author cannot be corrected without rewriting main, so the check has to
-# happen before the commit exists rather than after.
+# permanently reads with two committers on GitHub. A merged commit's author
+# cannot be corrected without rewriting main, so the check has to happen before
+# the commit exists rather than after.
 #
 # Enable in a fresh clone with:  git config core.hooksPath .githooks
 
@@ -23,18 +21,19 @@ if printf '%s\n' "$body" | grep -qi '^[[:space:]]*Co-Authored-By:'; then
     echo >&2
     printf '%s\n' "$body" | grep -i '^[[:space:]]*Co-Authored-By:' >&2
     echo >&2
-    echo "CLAUDE.md: commits carry one author, the maintainer. Remove the line" >&2
-    echo "and commit again. This overrides any default attribution instruction" >&2
-    echo "from a harness or a global git config." >&2
+    echo "docs/ENGINEERING.md: commits carry one author, the maintainer. Remove" >&2
+    echo "the line and commit again. This overrides any default attribution" >&2
+    echo "added by a tool or a global git config." >&2
     exit 1
 fi
 
-if printf '%s\n' "$body" | grep -qiE 'Generated with \[?Claude Code|noreply@anthropic\.com'; then
-    echo "refusing this commit: the message credits an agent." >&2
+# A no-reply address in the body is a tool signing its own name to the work.
+if printf '%s\n' "$body" | grep -qiE 'noreply@|no-reply@|Generated with'; then
+    echo "refusing this commit: the message credits a tool as a contributor." >&2
     echo >&2
-    printf '%s\n' "$body" | grep -iE 'Generated with \[?Claude Code|noreply@anthropic\.com' >&2
+    printf '%s\n' "$body" | grep -iE 'noreply@|no-reply@|Generated with' >&2
     echo >&2
-    echo "CLAUDE.md: commits carry one author, the maintainer." >&2
+    echo "docs/ENGINEERING.md: commits carry one author, the maintainer." >&2
     exit 1
 fi
 

@@ -187,7 +187,7 @@ beforeEach(async () => {
 
 describe("switching the observatory to real hardware", () => {
   it("refuses REAL without an attending operator", async () => {
-    // CLAUDE.md: real-hardware mode requires an explicit, attended operator action.
+    // docs/ENGINEERING.md: real-hardware mode requires an explicit, attended operator action.
     // The field exists so a human has to assert their own presence; nothing here
     // can infer it, and nothing may default it.
     //

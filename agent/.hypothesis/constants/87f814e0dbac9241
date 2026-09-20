@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/capture/deliverable.py
+# hypothesis_version: 6.140.3
+
+[480, 2048, 'CONTENT_TYPE', 'Deliverable', 'JPEG', 'RGB', 'RenderedAsset', 'image/jpeg', 'render']

@@ -65,7 +65,7 @@ DEFAULT_IDLE_PARK_SECONDS = 120.0
 #: request ends the wait immediately; this is only what happens when none comes.
 #:
 #: Bounded, and it proceeds to CAPTURING rather than to COMPLETE when it lapses.
-#: The mission state machine in CLAUDE.md is linear and every mission passes
+#: The mission state machine in docs/ENGINEERING.md is linear and every mission passes
 #: through CAPTURING -- what an uncaptured run produces is a stack nobody asked
 #: to keep, which PROCESSING then does not deliver.
 #:

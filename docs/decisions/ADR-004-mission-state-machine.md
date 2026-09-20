@@ -12,12 +12,12 @@
 Three documents in this project defined three different mission state
 enumerations, and no decision record said which one governed.
 
-- `CLAUDE.md` — ten primary states and five failure/hold states.
+- `docs/ENGINEERING.md` — ten primary states and five failure/hold states.
 - Darkview Build Plan §08 — additionally defines `LOCKED` and `DELIVERED` as
   primary states and `SOLVE_FAILED`, `LINK_LOST`, `EXPIRED` as failure states,
   and omits `FAILED`.
-- `prisma/schema.prisma` — the `CLAUDE.md` list with `PLATE_SOLVING` written
-  where `CLAUDE.md` has `VERIFYING`.
+- `prisma/schema.prisma` — the `docs/ENGINEERING.md` list with `PLATE_SOLVING` written
+  where `docs/ENGINEERING.md` has `VERIFYING`.
 
 The mission state machine crosses every process boundary in the system: the
 orchestrator drives it, the agent reports it, the database persists it and the
@@ -25,7 +25,7 @@ live room renders it. Three spellings of it is three bugs waiting.
 
 ## Decision
 
-The mission state machine is **exactly the enumeration in `CLAUDE.md`**, and
+The mission state machine is **exactly the enumeration in `docs/ENGINEERING.md`**, and
 nothing else.
 
 Primary, in order:

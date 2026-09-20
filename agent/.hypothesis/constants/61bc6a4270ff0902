@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/state/store.py
+# hypothesis_version: 6.140.3
+
+[0.0, ',', ':', 'command_id', 'context', 'darkview.agent.state', 'detail', 'executed_at', 'expiresAt', 'kind', 'mission', 'missionId', 'name', 'occurred_at', 'ownership', 'reason', 'recordedAt', 'safety_envelope', 'sessionId', 'state', 'userId', 'value']

@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/link/session.py
+# hypothesis_version: 6.140.3
+
+[0.0, 1.0, 2.0, 60.0, 900.0, ',', '1', ':', 'AGENT_HEARTBEAT', 'AGENT_HELLO', 'AWAITING_WELCOME', 'CLOUD_WELCOME', 'DISCONNECTED', 'ONLINE', 'REFUSED', 'agentVersion', 'bootedAt', 'darkview.agent.link', 'messageId', 'mode', 'observatoryId', 'protocolVersion', 'resumeMissionId', 'sentAt', 'sequence', 'serverTime', 'type', 'uptimeSeconds']

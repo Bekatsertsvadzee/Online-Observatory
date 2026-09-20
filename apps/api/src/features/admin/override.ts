@@ -335,7 +335,7 @@ async function preValidate(input: {
  *
  * So there is no envelope a standalone override could produce that the agent would
  * accept, and no row it could be written to. That is a contract conflict, not an
- * implementation gap, and `CLAUDE.md` says to report one rather than resolve it
+ * implementation gap, and `docs/ENGINEERING.md` says to report one rather than resolve it
  * quietly -- inventing a sentinel mission or a fake session to fill the fields
  * would be exactly the fabrication the two-validation design exists to prevent.
  *

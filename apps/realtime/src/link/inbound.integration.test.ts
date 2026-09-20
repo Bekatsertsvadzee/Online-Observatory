@@ -251,7 +251,7 @@ describe("a completed mission releases the observatory", () => {
       where: { missionId, source: "AGENT" },
     });
     expect(event.occurredAt).toEqual(duringTheOutage);
-    // The mission is SIMULATED, so its events are too. `CLAUDE.md`: simulator
+    // The mission is SIMULATED, so its events are too. `docs/ENGINEERING.md`: simulator
     // output is never presented as real telescope output.
     expect(event.simulated).toBe(true);
   });

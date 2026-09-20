@@ -214,7 +214,7 @@ consequences, and it would collide with refunds.
 subscription nobody visits would never renew, and the customer would discover the
 charge at the moment they wanted to book.
 
-**A cron service or job queue.** Rejected for now under `CLAUDE.md`'s rule
+**A cron service or job queue.** Rejected for now under `docs/ENGINEERING.md`'s rule
 against new services without a measured need. One more idempotent sweep beside
 five existing ones is the smaller change. **If a second realtime instance is ever
 run, every sweep needs leader election or an advisory lock** — that is true today

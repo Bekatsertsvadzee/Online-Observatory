@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/devices/alpaca.py
+# hypothesis_version: 6.140.3
+
+[0.0, 5.0, 180.0, 200, 1031, 1032, 'Altitude', 'Azimuth', 'ClientID', 'ClientTransactionID', 'Connected', 'Content-Type', 'ErrorNumber', 'False', 'GET', 'PUT', 'Tracking', 'True', 'Value', 'abortslew', 'altitude', 'atpark', 'azimuth', 'canpark', 'cansettracking', 'canslewaltazasync', 'canunpark', 'connected', 'park', 'replace', 'slewing', 'slewtoaltazasync', 'tracking', 'unpark', 'utf-8']

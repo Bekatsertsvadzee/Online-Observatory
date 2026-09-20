@@ -83,7 +83,7 @@ wired, and what it deferred** below before touching command intake.
 ### The two contract issues, and why they exist
 
 Both were raised by work that stopped rather than inventing a field, which is what
-`CLAUDE.md` requires: "If a task needs a field that does not exist in the contract,
+`docs/ENGINEERING.md` requires: "If a task needs a field that does not exist in the contract,
 stop."
 
 **DV-065** was small. `CaptureAssetKind` had a THUMBNAIL and `AGENT_CAPTURE_READY`
@@ -629,7 +629,7 @@ was a stub, and the cloud's grant and download surfaces had nothing to talk to.
 **OBSERVING now waits for a person.** It used to transition to CAPTURING on the
 next pass, which left no window in which a customer could press Capture at all. It
 holds for a bounded dwell instead, and a capture request ends the wait. When none
-comes the mission still passes through CAPTURING -- CLAUDE.md's state list is
+comes the mission still passes through CAPTURING -- docs/ENGINEERING.md's state list is
 linear and every mission visits it -- and PROCESSING delivers nothing. The dwell is
 PROVISIONAL: the real figure is the slot's length, which the agent is not told.
 
@@ -649,7 +649,7 @@ trustworthy.
 authority over object storage, so every message leaving `upload.py` is scrubbed of
 it -- the same rule `link/websocket.py` applies to the device token.
 
-**A simulated capture says SIMULATED on the face of the image.** CLAUDE.md forbids
+**A simulated capture says SIMULATED on the face of the image.** docs/ENGINEERING.md forbids
 presenting simulator output as real telescope output. A `mode` column does not
 survive a screenshot; the caption does.
 
@@ -953,7 +953,7 @@ Until then `thumbnailUrl` is null throughout, which is the contract's own word f
 "no thumbnail". A fabricated path would be a broken image in every card.
 
 **The `Collection` table is not the Collection.** `GET /captures` is what the
-contract and `CLAUDE.md` mean by a customer's Collection. The `Collection` /
+contract and `docs/ENGINEERING.md` mean by a customer's Collection. The `Collection` /
 `CollectionCapture` tables hold curated named sets (SOLAR_SYSTEM,
 MESSIER_STARTER) that no endpoint reads and nothing writes. They predate the
 contract and are left alone.
