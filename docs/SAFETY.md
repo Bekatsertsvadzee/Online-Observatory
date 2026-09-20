@@ -73,17 +73,44 @@ thing wrong, not whichever rule happened to be tested last.
 | # | Rule | Refusal | Overridable |
 | --- | --- | --- | --- |
 | 1 | `MAX_ALT_SAFE` is measured | `SAFETY_ENVELOPE_UNMEASURED` | no |
-| 2 | Site coordinates are known | `SAFETY_SUN_EXCLUSION` | no |
-| 3 | Angular separation from the Sun ≥ `sunExclusionDegrees` | `SAFETY_SUN_EXCLUSION` | **never, by anything** |
-| 4 | Sun below `daylightLockSunAltitudeDegrees` | `SAFETY_DAYLIGHT_LOCK` | operator, attended only |
-| 5 | Altitude within `minAltitudeDegrees`…`MAX_ALT_SAFE` | `SAFETY_BELOW_MIN_ALTITUDE` / `SAFETY_ABOVE_MAX_ALTITUDE` | no |
-| 6 | Altitude above the surveyed horizon at this bearing | `SAFETY_HORIZON_MASK` | no |
-| 7 | Bearing outside every cable-wrap sector | `SAFETY_FORBIDDEN_AZIMUTH` | no |
+| 2 | The pointing is a finite number | `DEVICE_UNAVAILABLE` | no |
+| 3 | Site coordinates are known | `SAFETY_SUN_EXCLUSION` | no |
+| 4 | Angular separation from the Sun ≥ the enforced exclusion | `SAFETY_SUN_EXCLUSION` | **never, by anything** |
+| 5 | Sun below the enforced daylight lock | `SAFETY_DAYLIGHT_LOCK` | operator, attended only |
+| 6 | Altitude within `minAltitudeDegrees`…`MAX_ALT_SAFE` | `SAFETY_BELOW_MIN_ALTITUDE` / `SAFETY_ABOVE_MAX_ALTITUDE` | no |
+| 7 | Altitude above the surveyed horizon at this bearing | `SAFETY_HORIZON_MASK` | no |
+| 8 | Bearing outside every cable-wrap sector | `SAFETY_FORBIDDEN_AZIMUTH` | no |
+
+**Rule 2 exists because an exception is not a refusal.** A mount that reports `inf`
+or `NaN` used to reach the Sun calculation and raise, which left the cloud with no
+ack at all rather than a refusal it could act on.
 
 **Rule 3 is absolute.** No flag, configuration value, operator override or admin role
 widens or disables the Sun exclusion. The `operator_override` parameter exists for
-attended terrestrial testing and reaches only rule 4 — and by the time it is consulted,
-rule 3 has already been enforced.
+attended terrestrial testing and reaches only rule 5 — and by the time it is consulted,
+rule 4 has already been enforced.
+
+### The enforced exclusion is not always the configured one
+
+`sunExclusionDegrees` and `daylightLockSunAltitudeDegrees` arrive from the cloud, so
+they are only as trustworthy as the cloud that sent them, and the contract's own
+minimum for the exclusion used to be zero — a value that switches rule 4 off
+altogether. ADR-013 requires the Sun exclusion to be "unreachable from any parameter
+on any path", and a parameter that can be set to zero is that path.
+
+Both sides now apply their own floors, independently, in code as well as in the
+schema:
+
+- a configured exclusion narrower than **15 degrees** is raised to it;
+- a daylight lock set above **0 degrees** — above the horizon, where it could never
+  fire — is capped back to it;
+- a value that is not a finite number is read as the strictest setting there is:
+  180 degrees of exclusion, and a lock at −90.
+
+A *wider* configured exclusion is still honoured, because a wider exclusion refuses
+more. The contract carries the same bounds (`minimum: 15`, and −90…0), so the floors
+are a second line of defence against a value that reached the agent anyway, not the
+only one.
 
 Nudges are judged separately by `evaluate_nudge`: a negative step is refused, a step
 larger than `nudgeRateDegreesPerSecond` is refused, and a cumulative offset that would

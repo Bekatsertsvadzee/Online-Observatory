@@ -2922,18 +2922,29 @@ components:
             $ref: "#/components/schemas/AzimuthSector"
         sunExclusionDegrees:
           type: number
-          minimum: 0
+          minimum: 15
           maximum: 180
           description: |
             Hard block on any coordinate within this angle of the Sun, computed
             independently by cloud and agent. Never overridable, including by an
             operator override.
+
+            The minimum is 15 rather than 0 because ADR-013 requires the Sun exclusion
+            to be unreachable from any parameter on any path, and a parameter that may
+            be set to zero is that path. Cloud and agent each apply the same floor
+            again in code, independently, so a stored value below it is raised rather
+            than obeyed.
         daylightLockSunAltitudeDegrees:
           type: number
+          minimum: -90
+          maximum: 0
           description: |
             No customer mission may start while the Sun is above this altitude. An
             operator override is permitted for attended terrestrial testing and remains
             Sun-bounded.
+
+            Bounded to real Sun altitudes, and never above the horizon: a lock set
+            higher than 0 is a lock that cannot fire.
         nudgeMaxDegrees:
           type: number
           exclusiveMinimum: 0
@@ -5309,8 +5320,13 @@ components:
         The mission and command say which capture this is for. Together with
         `kind` they identify the object, so no correlation identifier is needed:
         a grant answers the request naming the same three.
+        The agent also declares what it is about to write. A presigned URL signs
+        only the headers it was given, so a grant that names neither the media type
+        nor the size is a grant to PUT anything of any size at that key until it
+        expires. The cloud checks both against the asset kind, signs them, and the
+        upload is refused by storage itself if either differs.
       additionalProperties: false
-      required: [type, messageId, sentAt, missionId, commandId, kind]
+      required: [type, messageId, sentAt, missionId, commandId, kind, contentType, contentLength]
       properties:
         type:
           type: string
@@ -5329,6 +5345,17 @@ components:
           format: uuid
         kind:
           $ref: "#/components/schemas/CaptureAssetKind"
+        contentType:
+          type: string
+          description: |
+            Media type of the bytes the agent will PUT. Checked against `kind` and
+            then signed, so it is what the agent must actually send.
+        contentLength:
+          type: integer
+          minimum: 1
+          description: |
+            Exact size in bytes of the object the agent will PUT. Checked against the
+            cloud's per-kind maximum and then signed.
 
     AgentToCloudMessage:
       description: Every message the Observatory Agent may send over its outbound link.
@@ -5513,7 +5540,20 @@ components:
         with a grant naming no URL.
       additionalProperties: false
       required:
-        [type, messageId, sentAt, missionId, commandId, kind, storageKey, url, method, expiresAt]
+        [
+          type,
+          messageId,
+          sentAt,
+          missionId,
+          commandId,
+          kind,
+          storageKey,
+          url,
+          method,
+          expiresAt,
+          contentType,
+          contentLength,
+        ]
       properties:
         type:
           type: string
@@ -5535,6 +5575,17 @@ components:
         storageKey:
           type: string
           description: Object storage key the cloud derived. Not a URL and never a public path.
+        contentType:
+          type: string
+          description: |
+            The media type the URL was signed for, echoed from the request. The agent
+            sends exactly this; storage refuses anything else.
+        contentLength:
+          type: integer
+          minimum: 1
+          description: |
+            The exact size the URL was signed for, echoed from the request. The agent
+            sends exactly this many bytes; storage refuses anything else.
         url:
           type: string
           format: uri

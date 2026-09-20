@@ -202,19 +202,24 @@ describe("a completed mission releases the observatory", () => {
     // Before: the index is occupied and the observatory is shut.
     await expect(startAnotherMission()).rejects.toMatchObject({ code: "P2002" });
 
-    await link.receive(
-      JSON.stringify({
-        type: "AGENT_MISSION_EVENT",
-        messageId: randomUUID(),
-        sentAt: NOW.toISOString(),
-        missionId,
-        state: "COMPLETE",
-        failureReason: null,
-        occurredAt: NOW.toISOString(),
-        commandId: null,
-        detail: "stack finished",
-      }),
-    );
+    // The agent's own sequence out of CAPTURING. A mission does not jump from
+    // capturing to complete, and since `store.ts` gained the transition table it
+    // cannot: PROCESSING is where the capture is handed over.
+    for (const state of ["PROCESSING", "COMPLETE"]) {
+      await link.receive(
+        JSON.stringify({
+          type: "AGENT_MISSION_EVENT",
+          messageId: randomUUID(),
+          sentAt: NOW.toISOString(),
+          missionId,
+          state,
+          failureReason: null,
+          occurredAt: NOW.toISOString(),
+          commandId: null,
+          detail: "stack finished",
+        }),
+      );
+    }
 
     const after = await database.mission.findUniqueOrThrow({ where: { id: missionId } });
     expect(after.state).toBe("COMPLETE");

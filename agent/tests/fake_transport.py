@@ -63,15 +63,23 @@ class FakeTransport(Transport):
         self._inbox.append(json.dumps(message))
 
     def deliver_welcome(
-        self, protocol_version: str = "1", heartbeat_interval_seconds: int = 5
+        self,
+        protocol_version: str = "1",
+        heartbeat_interval_seconds: int = 5,
+        server_time: datetime | None = None,
     ) -> None:
+        """`server_time` is the cloud's clock. A test that moves the agent's wall
+        clock must say what the cloud's says, or the two disagree by however far
+        the fixture happens to be from today and the agent dutifully corrects for
+        it."""
+        stamped = (server_time or datetime.now(UTC)).isoformat()
         self.deliver(
             {
                 "type": "CLOUD_WELCOME",
                 "messageId": str(uuid4()),
-                "sentAt": datetime.now(UTC).isoformat(),
+                "sentAt": stamped,
                 "protocolVersion": protocol_version,
-                "serverTime": datetime.now(UTC).isoformat(),
+                "serverTime": stamped,
                 "expectedMissionId": None,
                 "heartbeatIntervalSeconds": heartbeat_interval_seconds,
             }

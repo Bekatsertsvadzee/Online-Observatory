@@ -59,8 +59,11 @@ AUDIT_RETENTION_DAYS = 90
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS seen_command (
-    command_id TEXT PRIMARY KEY,
-    decided_at TEXT NOT NULL
+    command_id  TEXT PRIMARY KEY,
+    decided_at  TEXT NOT NULL,
+    -- When the agent finished acting on it. NULL means the verdict was reached
+    -- and the agent stopped before carrying it out; see `_forget_undecided`.
+    executed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS seen_command_decided_at ON seen_command (decided_at);
 
@@ -138,7 +141,48 @@ class StateStore:
             self._connection.execute("PRAGMA synchronous=FULL")
             self._connection.execute("PRAGMA foreign_keys=ON")
             self._connection.executescript(SCHEMA)
+            self._add_missing_columns()
+            self._forget_unexecuted_commands()
             self._connection.commit()
+
+    def _add_missing_columns(self) -> None:
+        """`CREATE TABLE IF NOT EXISTS` does nothing to a table that already
+        exists, so a file written by an older agent keeps the older shape."""
+        columns = {
+            row["name"]
+            for row in self._connection.execute("PRAGMA table_info(seen_command)")
+        }
+        if "executed_at" not in columns:
+            self._connection.execute("ALTER TABLE seen_command ADD COLUMN executed_at TEXT")
+            # Everything already in the table was decided by an agent that had no
+            # notion of the difference, and the only safe reading of those rows is
+            # the one that keeps refusing them: they were carried out.
+            self._connection.execute(
+                "UPDATE seen_command SET executed_at = decided_at WHERE executed_at IS NULL"
+            )
+
+    def _forget_unexecuted_commands(self) -> None:
+        """Drop commands this agent decided but never carried out.
+
+        `docs/observatory-protocol.md` asks that a command be "neither replayed
+        nor lost". The seen-set alone gives the first half: a retry is refused as
+        a duplicate. It also gave away the second half, because the row was
+        written before the command ran -- so an agent that died in that window
+        came back refusing, as already done, the one GOTO nobody ever performed.
+
+        A row with no `executed_at` is a decision that had no effect on anything.
+        Forgetting it lets the cloud's retry run, which is what a retry is for. A
+        command that did touch the mount keeps its row and is still refused.
+        """
+        deleted = self._connection.execute(
+            "DELETE FROM seen_command WHERE executed_at IS NULL"
+        ).rowcount
+        if deleted:
+            logger.warning(
+                "forgetting %d command(s) decided but never carried out; a retry "
+                "will be accepted",
+                deleted,
+            )
 
     @property
     def path(self) -> str:
@@ -164,11 +208,30 @@ class StateStore:
 
         `INSERT OR IGNORE`: deciding the same command twice is the retry this
         table exists to catch, and it must not raise on the way to being refused.
+
+        The row is written before the command runs, deliberately -- a crash
+        between the two must not replay a slew. `mark_executed` closes it, and a
+        row left open is dropped at the next start rather than standing in for a
+        command that never happened.
         """
         with self._lock:
             self._connection.execute(
                 "INSERT OR IGNORE INTO seen_command (command_id, decided_at) VALUES (?, ?)",
                 (command_id, _iso(at)),
+            )
+            self._connection.commit()
+
+    def mark_executed(self, command_id: str, at: datetime) -> None:
+        """Record that the agent finished acting on this command.
+
+        Refusals count: a refused command has been fully dealt with and there is
+        nothing a restart could usefully redo.
+        """
+        with self._lock:
+            self._connection.execute(
+                "UPDATE seen_command SET executed_at = ? WHERE command_id = ? "
+                "AND executed_at IS NULL",
+                (_iso(at), command_id),
             )
             self._connection.commit()
 

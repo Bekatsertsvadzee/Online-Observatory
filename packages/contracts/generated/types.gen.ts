@@ -596,12 +596,21 @@ export type SafetyEnvelopeConfig = {
      * independently by cloud and agent. Never overridable, including by an
      * operator override.
      *
+     * The minimum is 15 rather than 0 because ADR-013 requires the Sun exclusion
+     * to be unreachable from any parameter on any path, and a parameter that may
+     * be set to zero is that path. Cloud and agent each apply the same floor
+     * again in code, independently, so a stored value below it is raised rather
+     * than obeyed.
+     *
      */
     sunExclusionDegrees: number;
     /**
      * No customer mission may start while the Sun is above this altitude. An
      * operator override is permitted for attended terrestrial testing and remains
      * Sun-bounded.
+     *
+     * Bounded to real Sun altitudes, and never above the horizon: a lock set
+     * higher than 0 is a lock that cannot fire.
      *
      */
     daylightLockSunAltitudeDegrees: number;
@@ -2288,6 +2297,11 @@ export type AgentError = {
  * The mission and command say which capture this is for. Together with
  * `kind` they identify the object, so no correlation identifier is needed:
  * a grant answers the request naming the same three.
+ * The agent also declares what it is about to write. A presigned URL signs
+ * only the headers it was given, so a grant that names neither the media type
+ * nor the size is a grant to PUT anything of any size at that key until it
+ * expires. The cloud checks both against the asset kind, signs them, and the
+ * upload is refused by storage itself if either differs.
  *
  */
 export type AgentUploadGrantRequest = {
@@ -2297,6 +2311,18 @@ export type AgentUploadGrantRequest = {
     missionId: string;
     commandId: string;
     kind: CaptureAssetKind;
+    /**
+     * Media type of the bytes the agent will PUT. Checked against `kind` and
+     * then signed, so it is what the agent must actually send.
+     *
+     */
+    contentType: string;
+    /**
+     * Exact size in bytes of the object the agent will PUT. Checked against the
+     * cloud's per-kind maximum and then signed.
+     *
+     */
+    contentLength: number;
 };
 
 /**
@@ -2425,6 +2451,18 @@ export type CloudUploadGrant = {
      * Object storage key the cloud derived. Not a URL and never a public path.
      */
     storageKey: string;
+    /**
+     * The media type the URL was signed for, echoed from the request. The agent
+     * sends exactly this; storage refuses anything else.
+     *
+     */
+    contentType: string;
+    /**
+     * The exact size the URL was signed for, echoed from the request. The agent
+     * sends exactly this many bytes; storage refuses anything else.
+     *
+     */
+    contentLength: number;
     /**
      * Presigned URL. Names one object and one method, and expires.
      */

@@ -123,6 +123,9 @@ describe("POST /bookings/{bookingId}/cancel", () => {
       userId: USER_ID,
       bookingId: BOOKING_ID,
       reason: undefined,
+      // Whether the booking's subscription minutes come back depends on whether
+      // the period they were spent in is still running, so the route says when.
+      now: expect.any(Date),
     });
   });
 

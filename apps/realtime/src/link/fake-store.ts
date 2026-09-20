@@ -14,9 +14,11 @@ import type {
 import {
   COMMAND_STATUS_FOR,
   LIVE_MISSION_STATES,
+  START_NOT_RUN_STATUSES,
   TERMINAL_MISSION_STATES,
   failureReasonForRefusedStart,
   isStartingGoto,
+  isLegalMissionTransition,
   isTerminalCommandStatus,
   type ActiveSession,
   type CaptureOutcome,
@@ -374,6 +376,10 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     });
 
     if (isTerminal(mission.state)) return "RECORDED";
+    // The same table the Prisma store applies. An event that cannot have
+    // happened is still written down -- what an observatory claimed is evidence
+    // -- but it does not move the mission.
+    if (!isLegalMissionTransition(mission.state, event.state)) return "RECORDED";
 
     mission.state = event.state;
     mission.failureReason = event.failureReason;
@@ -460,7 +466,7 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     const missionId = command.envelope.missionId;
     const mission = this.missions.get(missionId);
     if (
-      status === "REJECTED" &&
+      (START_NOT_RUN_STATUSES as readonly string[]).includes(status) &&
       isStartingGoto(command.envelope.type, command.envelope.payload) &&
       mission?.state === "PREPARING"
     ) {

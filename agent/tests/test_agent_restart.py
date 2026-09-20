@@ -69,6 +69,32 @@ def test_a_command_already_carried_out_is_refused_after_a_restart(state_path):
     revived.close()
 
 
+def test_a_command_decided_but_never_carried_out_is_retried_after_a_restart(state_path):
+    """"Neither replayed nor lost" is two guarantees, and the seen-set on its own
+    only gave the first.
+
+    The row is written before the command runs, which is what stops a retry
+    slewing the telescope twice. It also meant that an agent losing power in that
+    window came back refusing, as already done, a GOTO that never happened -- and
+    the cloud's retry, the one thing that could have recovered it, was the exact
+    message being refused.
+    """
+    agent = build_agent(max_altitude_degrees=70.0, state_path=state_path)
+    agent.own()
+    goto = agent.goto()
+    # The verdict, without the act: precisely the window a power cut lands in.
+    agent.supervisor.validator.validate(goto, agent.wall.now)
+    agent.close()
+
+    revived = build_agent(max_altitude_degrees=70.0, state_path=state_path)
+    revived.own()
+    ack = revived.command(goto)
+
+    assert ack["status"] == "ACCEPTED"
+    assert revived.supervisor.runner.is_active is True
+    revived.close()
+
+
 def test_a_command_never_seen_before_is_still_accepted_after_a_restart(state_path):
     """The seen-set must refuse repeats, not everything."""
     agent = build_agent(max_altitude_degrees=70.0, state_path=state_path)

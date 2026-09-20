@@ -793,3 +793,86 @@ class TestLiveStackWiring:
 
         stack.reset()
         assert stack.frames_stacked == 0
+
+
+# --------------------------------------------------------------------------
+# Recovery order — CLAUDE.md: stop capture, halt unsafe motion, Park
+# --------------------------------------------------------------------------
+
+
+class _RecordingDevices:
+    """Devices that write down what the runner asked them to do, in order."""
+
+    def __init__(self, clock: ManualClock) -> None:
+        self.calls: list[str] = []
+        recorder = self.calls
+        fault = {"mount": False}
+        self.fault = fault
+
+        class RecordingMount(SimMount):
+            def status(self):
+                if fault["mount"]:
+                    raise DeviceError("mount fault mid-slew")
+                return super().status()
+
+            def abort_slew(self) -> None:
+                recorder.append("abort_slew")
+                super().abort_slew()
+
+            def park(self) -> None:
+                recorder.append("park")
+                super().park()
+
+        class RecordingCamera(SimCamera):
+            def abort_exposure(self) -> None:
+                recorder.append("abort_exposure")
+                super().abort_exposure()
+
+        mount = RecordingMount(clock=clock)
+        self.devices = Devices(
+            mount=mount,
+            camera=RecordingCamera(clock=clock, mount=mount, width_px=64, height_px=64),
+            focuser=SimFocuser(clock=clock),
+        )
+
+
+def test_a_mount_fault_mid_slew_stops_the_camera_and_the_slew_before_parking():
+    """A Park issued while a slew is still running asks the mount to do two
+    things at once, and on real hardware the slew is the one that wins."""
+    clock = ManualClock()
+    recording = _RecordingDevices(clock)
+    runner = build_runner(clock, devices=recording.devices)
+
+    runner.offer(request(), NIGHT)
+    runner.pump(NIGHT)  # PREPARING -> SLEWING, the mount is moving
+    recording.fault["mount"] = True
+    runner.pump(NIGHT)
+
+    assert runner.state is MissionState.hardware_error
+    calls = recording.calls
+    assert "abort_exposure" in calls, calls
+    assert "abort_slew" in calls, calls
+    assert "park" in calls, calls
+    assert calls.index("abort_exposure") < calls.index("park"), calls
+    assert calls.index("abort_slew") < calls.index("park"), calls
+
+
+def test_a_park_still_happens_when_stopping_the_camera_fails():
+    """Each step is attempted independently: the last of them is Park."""
+    clock = ManualClock()
+    recording = _RecordingDevices(clock)
+
+    def refuse_to_stop() -> None:
+        recording.calls.append("abort_exposure")
+        raise DeviceError("the camera stopped answering")
+
+    recording.devices.camera.abort_exposure = refuse_to_stop
+    runner = build_runner(clock, devices=recording.devices)
+
+    runner.offer(request(), NIGHT)
+    runner.pump(NIGHT)
+    recording.fault["mount"] = True
+    runner.pump(NIGHT)
+
+    assert runner.mount_parked is True
+    assert "park" in recording.calls

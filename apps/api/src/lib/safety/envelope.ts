@@ -42,6 +42,48 @@ export type SafetyVerdict =
 
 export const PERMITTED: SafetyVerdict = { permitted: true };
 
+/**
+ * The narrowest Sun exclusion this code will enforce, whatever the stored
+ * envelope says.
+ *
+ * `sunExclusionDegrees` is a row in a table an operator can edit, and the
+ * contract's own minimum for it was zero -- a value that switches rule 3 off
+ * altogether. ADR-013 says the Sun exclusion "remains unreachable from any
+ * parameter on any path", and a parameter that can set it to zero is exactly
+ * that path. A wider configured exclusion is still honoured; a narrower one is
+ * raised to this. The agent applies the same floor independently, which is the
+ * point: neither side is trusting the other's arithmetic.
+ */
+export const MIN_SUN_EXCLUSION_DEGREES = 15;
+
+/**
+ * The highest the Sun may be before the daylight lock engages, whatever the
+ * configured lock says. A lock set above the horizon is a lock that never fires.
+ */
+export const MAX_DAYLIGHT_LOCK_ALTITUDE_DEGREES = 0;
+
+/**
+ * The exclusion actually enforced. A value that is not a finite number is not a
+ * measurement, and the only safe reading of one is the widest exclusion there
+ * is: 180 degrees refuses every pointing.
+ */
+export function sunExclusionDegrees(config: SafetyEnvelopeConfig): number {
+  const configured = config.sunExclusionDegrees;
+  if (!Number.isFinite(configured)) return 180;
+  return Math.max(configured, MIN_SUN_EXCLUSION_DEGREES);
+}
+
+/**
+ * The daylight lock actually enforced. `NaN` matters here beyond tidiness:
+ * `altitude > NaN` is false, so a NaN lock does not misbehave, it silently never
+ * engages.
+ */
+export function daylightLockAltitudeDegrees(config: SafetyEnvelopeConfig): number {
+  const configured = config.daylightLockSunAltitudeDegrees;
+  if (!Number.isFinite(configured)) return -90;
+  return Math.min(configured, MAX_DAYLIGHT_LOCK_ALTITUDE_DEGREES);
+}
+
 function refuse(reason: CommandRejectionReason, detail: string): SafetyVerdict {
   return { permitted: false, reason, detail };
 }
@@ -57,9 +99,18 @@ export function isMeasured(config: SafetyEnvelopeConfig | null): boolean {
   return config !== null && config.maxAltitudeDegrees !== null;
 }
 
-/** Wrap a bearing into 0..360. */
+/**
+ * Wrap a bearing into 0..360, with 360 itself excluded.
+ *
+ * The second `% 360` is not redundant: a bearing a hair below due north is a
+ * tiny negative number, `-1e-15 + 360` is exactly 360 in floating point, and a
+ * full turn is not a bearing. The agent's `_wrap_azimuth` excludes it the same
+ * way, which is the point -- the two implementations must reach the same
+ * decision, not share the same code.
+ */
 export function normaliseAzimuth(azimuthDegrees: number): number {
-  return ((azimuthDegrees % 360) + 360) % 360;
+  const wrapped = ((azimuthDegrees % 360) + 360) % 360;
+  return wrapped >= 360 ? 0 : wrapped;
 }
 
 /**
@@ -168,7 +219,18 @@ export function evaluatePointing(input: {
     );
   }
 
-  // 2. Where we are must be known before the Sun can be computed. Fail closed: an
+  // 2. A reading that is not a number is not a reading. Without this the
+  //    separation below returns NaN, every comparison against it is false, and a
+  //    garbage coordinate walks through all seven rules permitted.
+  if (!Number.isFinite(altitudeDegrees) || !Number.isFinite(azimuthDegrees)) {
+    return refuse(
+      "DEVICE_UNAVAILABLE",
+      `Pointing (${altitudeDegrees}, ${azimuthDegrees}) is not a finite position, so ` +
+        "it cannot be checked against the envelope.",
+    );
+  }
+
+  // 3. Where we are must be known before the Sun can be computed. Fail closed: an
   //    unknown site cannot prove the pointing is clear of the Sun.
   if (site === null) {
     return refuse(
@@ -180,30 +242,32 @@ export function evaluatePointing(input: {
 
   const sun = sunHorizontal(at, site);
 
-  // 3. Sun exclusion. Not overridable, by anything, ever.
+  // 4. Sun exclusion. Not overridable, by anything, ever.
   const separation = horizontalSeparationDegrees(
     { altitudeDegrees, azimuthDegrees },
     sun,
   );
-  if (separation < config.sunExclusionDegrees) {
+  const exclusion = sunExclusionDegrees(config);
+  if (separation < exclusion) {
     return refuse(
       "SAFETY_SUN_EXCLUSION",
       `Pointing is ${separation.toFixed(2)} degrees from the Sun; the exclusion is ` +
-        `${config.sunExclusionDegrees.toFixed(2)} degrees. This cannot be overridden.`,
+        `${exclusion.toFixed(2)} degrees. This cannot be overridden.`,
     );
   }
 
-  // 4. Daylight lock. Overridable for attended terrestrial testing, and even then
+  // 5. Daylight lock. Overridable for attended terrestrial testing, and even then
   //    the Sun exclusion above has already been enforced.
-  if (sun.altitudeDegrees > config.daylightLockSunAltitudeDegrees && !operatorOverride) {
+  const daylightLock = daylightLockAltitudeDegrees(config);
+  if (sun.altitudeDegrees > daylightLock && !operatorOverride) {
     return refuse(
       "SAFETY_DAYLIGHT_LOCK",
       `The Sun is at ${sun.altitudeDegrees.toFixed(2)} degrees altitude; the daylight ` +
-        `lock is ${config.daylightLockSunAltitudeDegrees.toFixed(2)}.`,
+        `lock is ${daylightLock.toFixed(2)}.`,
     );
   }
 
-  // 5. Altitude limits.
+  // 6. Altitude limits.
   if (altitudeDegrees < config.minAltitudeDegrees) {
     return refuse(
       "SAFETY_BELOW_MIN_ALTITUDE",
@@ -219,7 +283,7 @@ export function evaluatePointing(input: {
     );
   }
 
-  // 6. Horizon mask from the compass survey.
+  // 7. Horizon mask from the compass survey.
   const surveyed = horizonMinimumAltitude(azimuthDegrees, config.horizonMask);
   if (surveyed !== null && altitudeDegrees < surveyed) {
     return refuse(
@@ -230,7 +294,7 @@ export function evaluatePointing(input: {
     );
   }
 
-  // 7. Cable-wrap exclusion sectors.
+  // 8. Cable-wrap exclusion sectors.
   for (const sector of config.forbiddenAzimuthSectors as AzimuthSector[]) {
     if (azimuthInSector(azimuthDegrees, sector.fromDegrees, sector.toDegrees)) {
       return refuse(

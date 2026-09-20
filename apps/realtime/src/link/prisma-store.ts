@@ -13,9 +13,10 @@ import {
   COMMAND_STATUS_FOR,
   LIVE_MISSION_STATES,
   TERMINAL_COMMAND_STATUSES,
-  TERMINAL_MISSION_STATES,
+  START_NOT_RUN_STATUSES,
   failureReasonForRefusedStart,
   isStartingGoto,
+  legalPredecessorsOf,
   isTerminalCommandStatus,
   type ActiveSession,
   type CaptureOutcome,
@@ -279,15 +280,20 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
           },
         });
 
-        // The terminal guard is the WHERE clause rather than a branch on the row
-        // read above. Two events for one mission can be in flight at once -- the
+        // The guards are the WHERE clause rather than a branch on the row read
+        // above. Two events for one mission can be in flight at once -- the
         // socket handler does not serialise them -- and a read-then-write would
         // let whichever arrived second win.
+        //
+        // `state: { in: ... }` is the transition table: the set of states this
+        // event may legally arrive from, which already excludes the terminal
+        // ones. An event from anywhere else is recorded and ignored, because
+        // what an observatory claimed is evidence even when it cannot be true.
         const { count } = await tx.mission.updateMany({
           where: {
             id: event.missionId,
             observatoryId: event.observatoryId,
-            state: { notIn: [...TERMINAL_MISSION_STATES] },
+            state: { in: legalPredecessorsOf(event.state) },
           },
           data: { state: event.state, failureReason: event.failureReason },
         });
@@ -556,7 +562,11 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
         );
       }
 
-      if (count === 1 && status === "REJECTED" && isStartingGoto(command.type, command.payload)) {
+      if (
+        count === 1 &&
+        (START_NOT_RUN_STATUSES as readonly string[]).includes(status) &&
+        isStartingGoto(command.type, command.payload)
+      ) {
         await failRefusedStart(database, {
           observatoryId: verdict.observatoryId,
           missionId: command.missionId,

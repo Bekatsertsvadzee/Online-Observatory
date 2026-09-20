@@ -580,11 +580,17 @@ class Supervisor:
             logger.warning("discarding a CLOUD_COMMAND with no command envelope")
             return
 
-        ack = self._validator.validate(raw, at_time)
+        ack = self._validator.validate(raw, at_time, self._link.cloud_time(at_time))
         if ack.accepted:
             refusal = self._execute(raw, at_time)
             if refusal is not None:
                 ack = self._downgrade(ack, refusal)
+
+        # The command has now been dealt with, whichever way it went. Until this
+        # line the durable record of it is deliberately open, so an agent that
+        # dies between the verdict and the act comes back ready to accept the
+        # cloud's retry rather than refusing it as something it already did.
+        self._validator.mark_executed(ack.command_id, at_time)
 
         # The nudge allowance moves when a nudge is accepted, and it has to
         # survive a restart with the session that spent it.
@@ -926,15 +932,19 @@ class Supervisor:
             )
             return
 
-        self._pending[finished.command_id] = _PendingCapture(
+        pending = _PendingCapture(
             finished=finished,
             deliverable=deliverable,
             optical_config=self._config.optical_config.value,
             outstanding=set(CAPTURE_ASSETS),
             written={},
         )
+        self._pending[finished.command_id] = pending
 
         for kind in CAPTURE_ASSETS:
+            asset = pending.asset(kind)
+            if asset is None:  # pragma: no cover - every asset in CAPTURE_ASSETS is rendered
+                continue
             self._link.send(
                 {
                     "type": "AGENT_UPLOAD_GRANT_REQUEST",
@@ -943,6 +953,12 @@ class Supervisor:
                     "missionId": finished.mission_id,
                     "commandId": finished.command_id,
                     "kind": kind.value,
+                    # Declared here because the URL that comes back signs them.
+                    # The cloud checks both against the asset kind before signing,
+                    # and storage refuses a PUT that differs -- so these are not a
+                    # hint about the upload, they are the upload's shape.
+                    "contentType": asset.content_type,
+                    "contentLength": len(asset.payload),
                 }
             )
 
@@ -994,6 +1010,21 @@ class Supervisor:
         url = message.get("url")
         if expires_at is None or not isinstance(storage_key, str) or not isinstance(url, str):
             logger.error("discarding an unreadable upload grant for %s", kind.value)
+            return
+
+        # The grant echoes the shape it was signed for. Anything other than what
+        # this agent is holding means the URL was signed for a different object
+        # than the one about to be sent, and storage would refuse the PUT -- so
+        # the asset is settled here rather than after a round trip that cannot
+        # succeed.
+        if (
+            message.get("contentType") != asset.content_type
+            or message.get("contentLength") != len(asset.payload)
+        ):
+            logger.error(
+                "the upload grant for %s was signed for a different %s", kind.value, "object"
+            )
+            self._settle_asset(pending, kind, written_key=None)
             return
 
         try:
@@ -1245,6 +1276,7 @@ def build_supervisor(
         connect=connect,
         clock=clock,
         mode=devices.mount.mode,
+        now=now,
     )
     watchdog = Watchdog(devices=devices, clock=clock, audit=audit, config=envelope.config)
 

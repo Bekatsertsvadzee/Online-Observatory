@@ -55,6 +55,7 @@ export async function POST(
     userId: guard.session.user.id,
     bookingId: path.data.bookingId,
     reason: body.data?.reason,
+    now: new Date(),
   });
   if (!result.ok) return apiError(result.status, result.code, result.message);
 

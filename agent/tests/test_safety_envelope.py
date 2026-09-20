@@ -243,7 +243,7 @@ def sun_exclusion_config():
         max_altitude_degrees=89.0,
         min_altitude_degrees=0.0,
         sun_exclusion_degrees=30.0,
-        daylight_lock_sun_altitude_degrees=90.0,  # lock disabled, isolate the Sun rule
+        daylight_lock_sun_altitude_degrees=-12.0,
     )
 
 
@@ -261,6 +261,12 @@ def test_just_outside_the_sun_exclusion_is_permitted():
         altitude=solar.altitude_degrees - 31.0,
         azimuth=solar.azimuth_degrees,
         at_time=NOON,
+        # The daylight lock is what else refuses a NOON pointing, and it can no
+        # longer be configured away -- a lock above the horizon is capped back to
+        # it. The override is the one thing that lifts it, and by the time it is
+        # consulted the Sun exclusion has already had its say, so this still
+        # isolates the rule under test.
+        override=True,
     )
     assert result.permitted is True
 
@@ -303,23 +309,72 @@ def test_operator_override_does_not_bypass_the_sun_exclusion():
     assert result.reason is CommandRejectionReason.safety_sun_exclusion
 
 
-def test_the_sun_exclusion_cannot_be_configured_to_zero_and_ignored():
-    """Even a zero exclusion still refuses pointing exactly at the Sun's centre.
+@pytest.mark.parametrize("configured_exclusion", [0.0, 0.5, float("nan")])
+def test_a_narrow_configured_exclusion_is_raised_to_the_floor(configured_exclusion):
+    """ADR-013: the Sun exclusion is unreachable from any parameter on any path.
 
-    A zero configuration is the widest the exclusion can be made, and it is still
-    not a bypass: it merely shrinks the margin, and the Sun itself stays refused
-    by the daylight lock that a zero exclusion leaves in force.
+    The envelope arrives from the cloud, so a zero here is not a local decision to
+    accept a thin margin -- it is whatever the cloud last wrote, and a cloud that
+    can write zero can aim the telescope at the Sun. The agent raises it to
+    MIN_SUN_EXCLUSION_DEGREES and says so in the refusal; NaN, which no comparison
+    is true about, is read as the widest exclusion there is.
     """
     solar = sun_position_at()
+    # `model_copy`, not `build_config`: the contract's own minimum now refuses
+    # these values, and this test is about the second line of defence -- what the
+    # agent does with a number that reached it anyway, from a database row
+    # written before the bound existed or a cloud that is not validating.
     config = build_config(
         max_altitude_degrees=89.0,
         min_altitude_degrees=0.0,
-        sun_exclusion_degrees=0.0,
         daylight_lock_sun_altitude_degrees=-12.0,
+    ).model_copy(update={"sun_exclusion_degrees": configured_exclusion})
+    # Ten degrees off the Sun: inside the floor, outside the configured value.
+    result = verdict(
+        config,
+        solar.altitude_degrees - 10.0,
+        solar.azimuth_degrees,
+        at_time=NOON,
+        override=True,
     )
-    result = verdict(config, solar.altitude_degrees, solar.azimuth_degrees, at_time=NOON)
+    assert result.permitted is False
+    assert result.reason is CommandRejectionReason.safety_sun_exclusion
+
+
+def test_a_daylight_lock_above_the_horizon_is_capped_back_to_it():
+    """A lock set to +90 is a lock that can never fire, and it arrives from the
+    same place the exclusion does."""
+    config = build_config(max_altitude_degrees=89.0, min_altitude_degrees=0.0).model_copy(
+        update={"daylight_lock_sun_altitude_degrees": 90.0}
+    )
+    solar = sun_position_at()
+    result = verdict(
+        config, solar.altitude_degrees - 40.0, solar.azimuth_degrees, at_time=NOON
+    )
     assert result.permitted is False
     assert result.reason is CommandRejectionReason.safety_daylight_lock
+
+
+def test_a_nan_daylight_lock_does_not_silently_disable_the_lock():
+    """`altitude > nan` is False, so a NaN lock never engages. It is read as -90."""
+    config = build_config(max_altitude_degrees=89.0, min_altitude_degrees=0.0).model_copy(
+        update={"daylight_lock_sun_altitude_degrees": float("nan")}
+    )
+    solar = sun_position_at()
+    result = verdict(
+        config, solar.altitude_degrees - 40.0, solar.azimuth_degrees, at_time=NOON
+    )
+    assert result.reason is CommandRejectionReason.safety_daylight_lock
+
+
+@pytest.mark.parametrize("altitude", [float("inf"), float("-inf"), float("nan")])
+def test_a_pointing_that_is_not_a_number_is_refused_rather_than_raising(altitude):
+    """A mount that reports a non-finite position must produce a refusal the cloud
+    can act on, not an exception that leaves it with no ack at all."""
+    config = build_config(max_altitude_degrees=80.0)
+    result = verdict(config, altitude, 100.0)
+    assert result.permitted is False
+    assert result.reason is CommandRejectionReason.device_unavailable
 
 
 def test_an_unknown_site_refuses_rather_than_assuming_the_sun_is_elsewhere():
@@ -345,7 +400,6 @@ def test_above_the_daylight_lock_is_refused():
     config = build_config(
         max_altitude_degrees=89.0,
         min_altitude_degrees=0.0,
-        sun_exclusion_degrees=1.0,
         daylight_lock_sun_altitude_degrees=-12.0,
     )
     # Point well away from the Sun so only the daylight lock can fire.
@@ -362,7 +416,6 @@ def test_operator_override_lifts_the_daylight_lock():
     config = build_config(
         max_altitude_degrees=89.0,
         min_altitude_degrees=0.0,
-        sun_exclusion_degrees=1.0,
         daylight_lock_sun_altitude_degrees=-12.0,
     )
     solar = sun_position_at()

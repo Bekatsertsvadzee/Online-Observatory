@@ -251,7 +251,7 @@ export async function expireLapsedHolds(
   // DV-095 and ADR-022: a hold that lapsed spent its points and minutes on nothing.
   for (const booking of lapsed) {
     await releaseRedeemedPoints(tx, booking);
-    await releaseSpentMinutes(tx, booking);
+    await releaseSpentMinutes(tx, booking, now);
   }
 }
 
@@ -1115,6 +1115,7 @@ export async function releaseHeldSlot(
     subscriptionMinutesSpent: number;
   },
   reason: string,
+  now: Date,
 ): Promise<{ released: boolean }> {
   if (booking.status !== "PENDING_PAYMENT") return { released: false };
 
@@ -1139,7 +1140,7 @@ export async function releaseHeldSlot(
   // DV-095 and ADR-022: points and minutes spent on a booking that will not happen
   // come back.
   await releaseRedeemedPoints(tx, booking);
-  await releaseSpentMinutes(tx, booking);
+  await releaseSpentMinutes(tx, booking, now);
 
   // A slot leaving the held set is what makes it purchasable again. When two
   // customers dispute who was entitled to a half hour, this row is the answer.
@@ -1179,7 +1180,7 @@ export async function releaseSlotForFailedPayment(input: {
     });
 
     if (!booking) return { released: false };
-    return releaseHeldSlot(tx, booking, input.reason);
+    return releaseHeldSlot(tx, booking, input.reason, input.now);
   });
 }
 

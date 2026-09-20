@@ -22,6 +22,7 @@ import pytest
 
 from contracts.models import MissionState
 from darkview_agent.devices.base import DeviceError
+from darkview_agent.link.session import MAX_CLOCK_CORRECTION_SECONDS
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
 from tests import command_fixtures as commands
 from tests.agent_harness import (
@@ -672,7 +673,7 @@ def test_a_safety_envelope_update_reaches_everything_that_enforces_it():
     agent.advance(2.0, steps=4)
     assert hello_from(agent)["safetyEnvelopeConfigured"] is True
 
-    agent.connector.current.deliver_welcome()
+    agent.connector.current.deliver_welcome(server_time=agent.wall.now)
     agent.pump()
     agent.own()
     ack = agent.command(agent.goto())
@@ -872,7 +873,7 @@ def test_a_heartbeat_blip_costs_one_exposure_not_the_mission():
     assert agent.devices.camera.status().exposing is False
 
     # The link returns on the redialled socket.
-    agent.connector.current.deliver_welcome()
+    agent.connector.current.deliver_welcome(server_time=agent.wall.now)
     agent.pump()
     assert agent.supervisor.link.is_online is True
 
@@ -906,3 +907,71 @@ def test_live_frames_are_sent_outside_the_device_lock():
 
     assert held_during_send, "no live frame was sent, so nothing was checked"
     assert not any(held_during_send)
+
+
+# ----------------------------------------------------------------------
+# The two clocks
+# ----------------------------------------------------------------------
+
+
+def test_an_agent_whose_clock_ran_ahead_still_accepts_fresh_commands():
+    """`expiresAt` is stamped by the cloud and compared here against a mini-PC in
+    a garden. Until the agent read the cloud's own time, a few minutes of drift
+    meant every command the cloud sent was refused as COMMAND_EXPIRED -- and from
+    the cloud that is indistinguishable from an observatory that has stopped
+    working.
+    """
+    agent = build_agent(max_altitude_degrees=70.0)
+    cloud_now = agent.wall.now
+    agent.wall.now = cloud_now + timedelta(minutes=10)
+    agent.own()
+
+    ack = agent.command(commands.envelope(command_type="PARK", issued_at=cloud_now))
+
+    assert ack["status"] == "ACCEPTED", ack
+    agent.close()
+
+
+def test_a_command_the_cloud_queued_for_too_long_is_still_expired():
+    """The correction is for the clocks disagreeing, not for a stale command.
+
+    `sentAt` is when the cloud sent the message, so a command it issued ten
+    minutes earlier and only sent now arrives visibly old however well the clocks
+    agree. That is the case expiry exists for and it must survive the fix.
+    """
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.own()
+
+    ack = agent.command(
+        commands.envelope(
+            command_type="PARK", issued_at=agent.wall.now - timedelta(minutes=10)
+        ),
+        sent_at=agent.wall.now,
+    )
+
+    assert ack["status"] == "EXPIRED", ack
+    agent.close()
+
+
+def test_the_correction_is_bounded():
+    """A cloud that names a time far in the past would otherwise hold every
+    command it has ever issued open. It moves the agent by fifteen minutes at
+    most, and says so."""
+    agent = build_agent(max_altitude_degrees=70.0)
+    agent.deliver(
+        {
+            "type": "CLOUD_SESSION_UPDATE",
+            "messageId": str(uuid4()),
+            "sentAt": (agent.wall.now - timedelta(days=30)).isoformat(),
+            "missionId": None,
+            "sessionId": None,
+            "userId": None,
+            "expiresAt": None,
+        }
+    )
+    agent.pump()
+
+    assert agent.supervisor.link.clock_correction == -timedelta(
+        seconds=MAX_CLOCK_CORRECTION_SECONDS
+    )
+    agent.close()

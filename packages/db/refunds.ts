@@ -262,7 +262,7 @@ async function returnMinutes(
   });
   if (count === 0) return { ok: false, reason: "NO_OPEN_ENTITLEMENT" };
 
-  await releaseSpentMinutes(tx, paidBooking);
+  await releaseSpentMinutes(tx, paidBooking, now);
   await tx.booking.update({ where: { id: bookingId }, data: { status: "REFUNDED" } });
 
   await recordAuditEvent(

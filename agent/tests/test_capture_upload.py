@@ -134,6 +134,9 @@ def grant(
         "url": url,
         "method": method,
         "expiresAt": expires_at.isoformat(),
+        # Echoed from the request, because the URL was signed over them.
+        "contentType": request["contentType"],
+        "contentLength": request["contentLength"],
     }
 
 
@@ -631,3 +634,43 @@ def test_a_second_capture_once_the_run_has_started_is_refused():
     assert ack["status"] == "REJECTED"
     assert ack["rejectionReason"] == "DEVICE_UNAVAILABLE"
     agent.close()
+
+
+def test_the_agent_declares_the_shape_of_what_it_is_about_to_write():
+    """A presigned URL signs the headers it was given. Until the agent declared
+    the media type and the exact length, the grant it received was permission to
+    PUT anything of any size at that key for fifteen minutes -- held by the least
+    trusted machine we operate (ADR-012)."""
+    uploader = SyncUploader()
+    agent = build_agent(max_altitude_degrees=70.0, uploader=uploader)
+
+    requests = capture_through_processing(agent, uploader)
+
+    assert requests
+    for request in requests:
+        assert request["contentType"] == "image/jpeg"
+        assert request["contentLength"] > 0
+
+    for request in requests:
+        agent.deliver(grant(request))
+    agent.pump()
+
+    image = uploader.job_for(CaptureAssetKind.image)
+    assert image.content_type == "image/jpeg"
+    assert len(image.payload) == next(
+        request["contentLength"] for request in requests if request["kind"] == "IMAGE"
+    )
+
+
+def test_a_grant_signed_for_a_different_object_is_not_uploaded():
+    """Storage would refuse the PUT, because the length is in the signature. The
+    asset is settled here rather than after a round trip that cannot succeed."""
+    uploader = SyncUploader()
+    agent = build_agent(max_altitude_degrees=70.0, uploader=uploader)
+
+    requests = capture_through_processing(agent, uploader)
+    for request in requests:
+        agent.deliver(grant({**request, "contentLength": request["contentLength"] + 1}))
+    agent.pump()
+
+    assert uploader.jobs == []

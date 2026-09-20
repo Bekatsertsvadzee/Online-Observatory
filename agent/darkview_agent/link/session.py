@@ -18,7 +18,7 @@ import json
 import logging
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from contracts.models import ObservatoryMode
@@ -34,6 +34,21 @@ INITIAL_BACKOFF_SECONDS = 1.0
 MAX_BACKOFF_SECONDS = 60.0
 BACKOFF_MULTIPLIER = 2.0
 DEFAULT_HEARTBEAT_SECONDS = 5
+
+#: The most the agent will shift its own clock toward the cloud's, in seconds.
+#:
+#: `CloudWelcome.serverTime` exists "for agent clock-skew detection", and every
+#: cloud message carries the `sentAt` the cloud stamped on it. Without reading
+#: either, an observatory whose clock has drifted forward refuses every command
+#: it is sent as COMMAND_EXPIRED and looks, from the cloud, like a telescope that
+#: has stopped answering.
+#:
+#: The correction is bounded because the cloud is a remote party. An unbounded
+#: one would let a compromised or simply broken cloud hold a command open for as
+#: long as it liked by naming a time in the past; fifteen minutes is far more
+#: skew than a working NTP client ever produces and far less than the window any
+#: attack would want.
+MAX_CLOCK_CORRECTION_SECONDS = 900.0
 
 
 class LinkState(StrEnum):
@@ -66,11 +81,16 @@ class LinkSession:
         clock: Clock | None = None,
         queue: OutboundQueue | None = None,
         mode: ObservatoryMode = ObservatoryMode.simulated,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         self._observatory_id = observatory_id
         self._agent_version = agent_version
         self._connect = connect
         self._clock = clock or SystemClock()
+        # The wall clock, separate from the monotonic one: skew is a statement
+        # about calendar time, and the monotonic clock has no opinion about it.
+        self._now = now or (lambda: datetime.now(UTC))
+        self._clock_correction = timedelta(0)
         # Not `queue or OutboundQueue()`: OutboundQueue defines __len__, so an
         # empty one is falsy and an injected queue would be silently discarded.
         self._queue = OutboundQueue() if queue is None else queue
@@ -112,6 +132,19 @@ class LinkSession:
     @property
     def heartbeat_sequence(self) -> int:
         return self._heartbeat_sequence
+
+    @property
+    def clock_correction(self) -> timedelta:
+        """How far the agent's clock is behind the cloud's, as last measured."""
+        return self._clock_correction
+
+    def cloud_time(self, local: datetime) -> datetime:
+        """The cloud's clock, as best the agent can tell.
+
+        Used where a cloud-stamped deadline is compared against local time, and
+        nowhere else. The sky is still computed from the agent's own clock.
+        """
+        return local + self._clock_correction
 
     @property
     def connect_attempts(self) -> int:
@@ -288,6 +321,8 @@ class LinkSession:
                 f"agent protocol {PROTOCOL_VERSION}, cloud {version}"
             )
 
+        self._note_cloud_time(message.get("serverTime"))
+
         interval = message.get("heartbeatIntervalSeconds") or DEFAULT_HEARTBEAT_SECONDS
         self._heartbeat_interval = float(interval)
         self._state = LinkState.ONLINE
@@ -299,6 +334,47 @@ class LinkSession:
             len(self._queue),
         )
         self._drain()
+
+    def _note_cloud_time(self, raw: object) -> None:
+        """Re-measure the difference between the two clocks.
+
+        Every cloud message carries the instant the cloud sent it, so the
+        estimate is refreshed continuously rather than only at the welcome. That
+        matters: a clock that steps -- an NTP correction, a mini-PC coming back
+        from suspend with a dead RTC -- does not wait for the next reconnect to
+        start refusing commands.
+
+        `sentAt` is when the cloud *sent* the message, not when it issued the
+        command inside it, so a command that sat in a cloud queue for ten minutes
+        still arrives visibly stale and is still refused. That is the difference
+        this is allowed to correct for and the one it must not.
+        """
+        if not isinstance(raw, str):
+            return
+        try:
+            stamped = datetime.fromisoformat(raw)
+        except ValueError:
+            logger.warning("discarding an unreadable cloud timestamp")
+            return
+        if stamped.tzinfo is None:
+            # A naive timestamp is not a moment. The contract requires an offset.
+            logger.warning("discarding a cloud timestamp with no timezone")
+            return
+
+        difference = (stamped - self._now()).total_seconds()
+        bounded = max(-MAX_CLOCK_CORRECTION_SECONDS, min(MAX_CLOCK_CORRECTION_SECONDS, difference))
+        if abs(difference) > MAX_CLOCK_CORRECTION_SECONDS:
+            logger.error(
+                "this agent's clock differs from the cloud by %.0fs; correcting only "
+                "%.0fs of it. Fix the observatory's clock -- commands will be refused.",
+                difference,
+                bounded,
+            )
+        elif abs(difference) > 1.0 and abs(bounded - self._clock_correction.total_seconds()) > 1.0:
+            logger.warning(
+                "this agent's clock is %.1fs from the cloud's", -difference
+            )
+        self._clock_correction = timedelta(seconds=bounded)
 
     def _schedule_retry(self, reason: str) -> None:
         self._close_transport()
@@ -337,6 +413,7 @@ class LinkSession:
             if message.get("type") == "CLOUD_WELCOME":
                 self._handle_welcome(message)
             else:
+                self._note_cloud_time(message.get("sentAt"))
                 self._received.append(message)
 
     def _send_heartbeat_if_due(self) -> None:

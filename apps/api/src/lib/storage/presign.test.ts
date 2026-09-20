@@ -32,6 +32,8 @@ const CONFIGURATION: StorageConfiguration = {
 
 const NOW = new Date("2026-12-15T18:00:00.000Z");
 
+const SHAPE = { contentType: "image/jpeg", contentLength: 2_400_000 };
+
 const KEY = captureObjectKey({
   observatoryId: "11111111-1111-4111-8111-111111111111",
   missionId: "22222222-2222-4222-8222-222222222222",
@@ -41,7 +43,7 @@ const KEY = captureObjectKey({
 
 describe("what an upload grant permits", () => {
   it("names one object, one method and an expiry", async () => {
-    const { url, expiresAt } = await presignUpload(CONFIGURATION, KEY, NOW);
+    const { url, expiresAt } = await presignUpload(CONFIGURATION, KEY, NOW, SHAPE);
     const parsed = new URL(url);
 
     expect(parsed.host).toBe("darkview-captures.s3.eu-central-1.example.com");
@@ -52,8 +54,38 @@ describe("what an upload grant permits", () => {
     expect(expiresAt).toEqual(new Date(NOW.getTime() + UPLOAD_URL_TTL_SECONDS * 1000));
   });
 
+  it("binds the media type and the exact length, not only the key", async () => {
+    // ADR-012 hands this URL to the least-trusted machine we operate. A
+    // signature covers the headers it was given, so one over `host` alone is
+    // permission to PUT anything of any size at that key until it expires.
+    const { url } = await presignUpload(CONFIGURATION, KEY, NOW, SHAPE);
+    const signed = new URL(url).searchParams.get("X-Amz-SignedHeaders") ?? "";
+
+    expect(signed.split(";")).toEqual(
+      expect.arrayContaining(["content-length", "content-type", "host"]),
+    );
+  });
+
+  it("differs for a different size, so the length is in the signature", async () => {
+    const bigger = { ...SHAPE, contentLength: SHAPE.contentLength + 1 };
+    const signatureOf = (url: string) => new URL(url).searchParams.get("X-Amz-Signature");
+
+    expect(signatureOf((await presignUpload(CONFIGURATION, KEY, NOW, SHAPE)).url)).not.toBe(
+      signatureOf((await presignUpload(CONFIGURATION, KEY, NOW, bigger)).url),
+    );
+  });
+
+  it("differs for a different media type", async () => {
+    const other = { ...SHAPE, contentType: "application/zip" };
+    const signatureOf = (url: string) => new URL(url).searchParams.get("X-Amz-Signature");
+
+    expect(signatureOf((await presignUpload(CONFIGURATION, KEY, NOW, SHAPE)).url)).not.toBe(
+      signatureOf((await presignUpload(CONFIGURATION, KEY, NOW, other)).url),
+    );
+  });
+
   it("signs against the region and the day it was minted", async () => {
-    const { url } = await presignUpload(CONFIGURATION, KEY, NOW);
+    const { url } = await presignUpload(CONFIGURATION, KEY, NOW, SHAPE);
     const credential = new URL(url).searchParams.get("X-Amz-Credential");
 
     expect(credential).toBe(
@@ -86,13 +118,13 @@ describe("what the signature actually covers", () => {
       kind: "FITS",
     });
 
-    expect(await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW)).url)).not.toBe(
-      await signatureOf((await presignUpload(CONFIGURATION, other, NOW)).url),
+    expect(await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW, SHAPE)).url)).not.toBe(
+      await signatureOf((await presignUpload(CONFIGURATION, other, NOW, SHAPE)).url),
     );
   });
 
   it("differs between PUT and GET, so a read grant is not a write grant", async () => {
-    expect(await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW)).url)).not.toBe(
+    expect(await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW, SHAPE)).url)).not.toBe(
       await signatureOf((await presignDownload(CONFIGURATION, KEY, NOW)).url),
     );
   });
@@ -100,24 +132,24 @@ describe("what the signature actually covers", () => {
   it("differs between two buckets", async () => {
     const elsewhere = { ...CONFIGURATION, S3_BUCKET: "somebody-elses-bucket" };
 
-    expect(await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW)).url)).not.toBe(
-      await signatureOf((await presignUpload(elsewhere, KEY, NOW)).url),
+    expect(await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW, SHAPE)).url)).not.toBe(
+      await signatureOf((await presignUpload(elsewhere, KEY, NOW, SHAPE)).url),
     );
   });
 
   it("differs under a different secret", async () => {
     const rotated = { ...CONFIGURATION, S3_SECRET_ACCESS_KEY: "a different secret key" };
 
-    expect(await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW)).url)).not.toBe(
-      await signatureOf((await presignUpload(rotated, KEY, NOW)).url),
+    expect(await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW, SHAPE)).url)).not.toBe(
+      await signatureOf((await presignUpload(rotated, KEY, NOW, SHAPE)).url),
     );
   });
 
   it("is the same for the same inputs, so nothing hidden varies", async () => {
     // Guards the guard: if signatures were random, every assertion above would
     // pass while proving nothing at all.
-    expect(await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW)).url)).toBe(
-      await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW)).url),
+    expect(await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW, SHAPE)).url)).toBe(
+      await signatureOf((await presignUpload(CONFIGURATION, KEY, NOW, SHAPE)).url),
     );
   });
 });
@@ -131,6 +163,7 @@ describe("where the bucket goes in the URL", () => {
       { ...CONFIGURATION, S3_FORCE_PATH_STYLE: true },
       KEY,
       NOW,
+      SHAPE,
     );
     const parsed = new URL(url);
 

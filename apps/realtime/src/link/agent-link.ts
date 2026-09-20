@@ -26,6 +26,31 @@ import type { LiveFrame } from "@/stream/frames";
 export type LinkState = "AWAITING_HELLO" | "ONLINE" | "CLOSED";
 
 /**
+ * The media type each capture asset is written as.
+ *
+ * Checked before the URL is signed, and then signed, so a compromised agent
+ * cannot turn its one grant into a place to put arbitrary files. An allowlist
+ * rather than a shape test: the set of things a telescope produces is small and
+ * known, and anything outside it is a question worth asking rather than
+ * something to accommodate.
+ */
+const ALLOWED_UPLOAD_TYPES: Record<CaptureAssetKind, readonly string[]> = {
+  IMAGE: ["image/jpeg", "image/png"],
+  UNMARKED: ["image/jpeg", "image/png"],
+  THUMBNAIL: ["image/jpeg", "image/png"],
+  FITS: ["application/fits", "image/fits"],
+};
+
+/**
+ * The largest one capture asset may be.
+ *
+ * A live-stacked JPEG from an ASI585MC is a few megabytes and a FITS of the same
+ * stack is tens. Sixty-four mebibytes is far above either and far below anything
+ * worth doing with somebody else's object storage.
+ */
+const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
+
+/**
  * One agent's conversation with the cloud, for the life of one socket.
  *
  * The socket is already authenticated when this is constructed: the device token
@@ -357,6 +382,30 @@ export class AgentLink {
       return;
     }
 
+    // What the agent says it is about to write, checked before it is signed.
+    // The URL carries these two headers in its signature, so this is the only
+    // moment the cloud gets to decide what may be written -- afterwards the
+    // grant is between the agent and storage.
+    const allowed = ALLOWED_UPLOAD_TYPES[message.kind];
+    if (!allowed.includes(message.contentType)) {
+      this.send(
+        cloudError(
+          "VALIDATION_FAILED",
+          `A ${message.kind} is not written as ${message.contentType}.`,
+        ),
+      );
+      return;
+    }
+    if (message.contentLength > MAX_UPLOAD_BYTES) {
+      this.send(
+        cloudError(
+          "VALIDATION_FAILED",
+          `${message.contentLength} bytes is beyond what one capture asset may be.`,
+        ),
+      );
+      return;
+    }
+
     const storageKey = captureObjectKey({
       observatoryId: this.observatory.id,
       missionId: message.missionId,
@@ -368,6 +417,7 @@ export class AgentLink {
       this.storage,
       storageKey,
       new Date(this.now()),
+      { contentType: message.contentType, contentLength: message.contentLength },
     );
 
     this.send(
@@ -378,6 +428,8 @@ export class AgentLink {
         storageKey,
         url,
         expiresAt,
+        contentType: message.contentType,
+        contentLength: message.contentLength,
       }),
     );
   }

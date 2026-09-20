@@ -170,7 +170,7 @@ export async function settlePayment(input: {
       });
 
       if (booking) {
-        await releaseHeldSlot(tx, booking, outcome.failureReason ?? "PAYMENT_FAILED");
+        await releaseHeldSlot(tx, booking, outcome.failureReason ?? "PAYMENT_FAILED", now);
       }
 
       await recordAuditEvent(

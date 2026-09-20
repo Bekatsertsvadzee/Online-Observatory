@@ -42,6 +42,88 @@ export const LIVE_MISSION_STATES = [
 export const TERMINAL_MISSION_STATES = ["COMPLETE", "CANCELLED", "FAILED"] as const;
 
 /**
+ * The states that are already an answer about why an observation did not happen.
+ *
+ * They are not terminal -- a hold can be lifted and a fault can be cleared -- but
+ * they are not overwritten by a later, vaguer ending either. `refunds/
+ * entitlements.ts` classifies a weather refund from exactly this state and its
+ * failureReason, so an agent that parks for weather and then reports the park as
+ * an operator abort must not be able to turn the customer's refund into a
+ * different kind of refund on the way past.
+ */
+export const HOLD_MISSION_STATES = [
+  "WEATHER_HOLD",
+  "NOT_VISIBLE",
+  "HARDWARE_ERROR",
+] as const;
+
+/**
+ * Which state an agent-reported mission event may arrive from.
+ *
+ * The cloud's mission row is written from a message an observatory sent. Until
+ * this table existed the only question asked of that message was whether the
+ * mission had already finished, so an agent -- buggy, replaying, or hostile --
+ * could walk a live mission back to SCHEDULED, jump it from PREPARING straight
+ * to COMPLETE, or lift its own weather hold and carry on observing.
+ *
+ * The table is the agent's own state machine, read off
+ * `agent/darkview_agent/mission/runner.py`, and nothing else is legal. Two
+ * entries are deliberately empty: REQUESTED and SCHEDULED are the cloud's own
+ * states, before the observatory has been told anything, and no observatory has
+ * standing to report them.
+ *
+ * A state may always be re-reported -- a retried event is the ordinary case, and
+ * refusing it would turn a lost ack into a lost mission.
+ */
+const LEGAL_PREDECESSORS: Record<MissionState, readonly MissionState[]> = {
+  REQUESTED: [],
+  SCHEDULED: [],
+  // A hold that lifts starts the mission again from the top.
+  PREPARING: ["SCHEDULED", ...HOLD_MISSION_STATES],
+  // Re-entered from CENTERING: a corrected position is slewed to again.
+  SLEWING: ["PREPARING", "CENTERING"],
+  VERIFYING: ["SLEWING"],
+  CENTERING: ["VERIFYING"],
+  OBSERVING: ["VERIFYING"],
+  CAPTURING: ["OBSERVING"],
+  PROCESSING: ["CAPTURING"],
+  COMPLETE: ["PROCESSING"],
+  // An observation can stop at any point up to the moment it is finished, and a
+  // hold is an ending in its own right -- it is not replaced by a later one.
+  WEATHER_HOLD: [...LIVE_MISSION_STATES, "SCHEDULED"],
+  NOT_VISIBLE: [...LIVE_MISSION_STATES, "SCHEDULED"],
+  HARDWARE_ERROR: [...LIVE_MISSION_STATES, "SCHEDULED"],
+  CANCELLED: [...LIVE_MISSION_STATES, "SCHEDULED", "PROCESSING"],
+  FAILED: [...LIVE_MISSION_STATES, "SCHEDULED", "PROCESSING"],
+};
+
+/**
+ * Every state this event may be applied from, including the state itself.
+ *
+ * Shaped as a list because the Prisma store puts it straight into the WHERE
+ * clause of a single guarded UPDATE: the check and the write have to be one
+ * statement, or two events racing each other both pass a read-then-write.
+ */
+export function legalPredecessorsOf(to: MissionState): MissionState[] {
+  return [to, ...LEGAL_PREDECESSORS[to]];
+}
+
+/** Whether an agent may move a mission from `from` to `to`. */
+export function isLegalMissionTransition(from: MissionState, to: MissionState): boolean {
+  return legalPredecessorsOf(to).includes(from);
+}
+
+/**
+ * Command statuses that mean the agent never started the mission.
+ *
+ * REJECTED was handled from the beginning; EXPIRED and FAILED were not, and they
+ * end the same way -- the starting GOTO did not run. A mission left in PREPARING
+ * by one of them holds the observatory against every later booking while nobody
+ * is flying it.
+ */
+export const START_NOT_RUN_STATUSES = ["REJECTED", "EXPIRED", "FAILED"] as const;
+
+/**
  * Is this the GOTO that starts a mission, rather than a recentring one?
  *
  * ADR-018 mints it with `recenter: false`; RECENTER mints `recenter: true`. Both

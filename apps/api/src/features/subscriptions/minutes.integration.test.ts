@@ -490,8 +490,8 @@ describe("a refunded booking subscription minutes paid for (DV-111)", () => {
       subscriptionMinutesSpent: SLOT_DURATION_MINUTES,
     };
 
-    await database.$transaction((tx) => releaseSpentMinutes(tx, booking));
-    await database.$transaction((tx) => releaseSpentMinutes(tx, booking));
+    await database.$transaction((tx) => releaseSpentMinutes(tx, booking, NOW));
+    await database.$transaction((tx) => releaseSpentMinutes(tx, booking, NOW));
 
     expect(await balance()).toBe(120);
     expect(await database.creditLedger.count({ where: { reason: "REFUND" } })).toBe(1);

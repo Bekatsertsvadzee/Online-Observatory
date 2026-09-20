@@ -93,5 +93,18 @@ def equatorial_to_horizontal(
 
     return HorizontalPosition(
         altitude_degrees=altitude,
-        azimuth_degrees=azimuth % 360.0,
+        azimuth_degrees=_wrap_azimuth(azimuth),
     )
+
+
+def _wrap_azimuth(degrees: float) -> float:
+    """Into 0..360, with 360 itself excluded.
+
+    `%` alone does not manage that. A bearing a hair below due north comes out of
+    `atan2` as a tiny negative number, and `-1e-15 % 360.0` is exactly 360.0 in
+    floating point -- a full turn, which is not a bearing this function is
+    allowed to return. Everything downstream normalises again and would not
+    notice; a caller reading the value would.
+    """
+    wrapped = degrees % 360.0
+    return 0.0 if wrapped >= 360.0 else wrapped

@@ -124,14 +124,25 @@ class Agent:
         )
         self.pump()
 
-    def command(self, envelope: dict) -> dict | None:
-        """Send one command and return the ack that came back, if any."""
+    def command(self, envelope: dict, sent_at: datetime | None = None) -> dict | None:
+        """Send one command and return the ack that came back, if any.
+
+        `sentAt` is the cloud's stamp, and it defaults to the moment the cloud
+        issued the command inside it -- not to the agent's wall clock, which a
+        fake cloud reading it could never use to model the two disagreeing. Pass
+        `sent_at` for the other case: a command the cloud issued a while ago and
+        is only sending now.
+        """
         before = len(self.acks())
         self.deliver(
             {
                 "type": "CLOUD_COMMAND",
                 "messageId": str(uuid4()),
-                "sentAt": self.wall.now.isoformat(),
+                "sentAt": (
+                    sent_at.isoformat()
+                    if sent_at is not None
+                    else envelope.get("issuedAt", self.wall.now.isoformat())
+                ),
                 "command": envelope,
             }
         )
@@ -251,7 +262,7 @@ def build_agent(
     )
     if online:
         agent.pump()  # dial out and say hello
-        connector.current.deliver_welcome()
+        connector.current.deliver_welcome(server_time=wall.now)
         agent.pump()  # welcome received; the link is ONLINE
     return agent
 
