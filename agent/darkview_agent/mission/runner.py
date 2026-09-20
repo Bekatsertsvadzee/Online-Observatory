@@ -787,7 +787,7 @@ class MissionRunner:
     def _park(self, why: str) -> None:
         """Criterion 6: every terminal path parks, or records why it could not.
 
-        CLAUDE.md gives the order: "stop capture, halt unsafe motion, Park." It is
+        docs/ENGINEERING.md gives the order: "stop capture, halt unsafe motion, Park." It is
         an order, not a list. A mount that faults mid-slew is still slewing, and a
         Park issued while a slew is running asks the mount to do two things at
         once -- on real hardware that is how a slew keeps going toward whatever

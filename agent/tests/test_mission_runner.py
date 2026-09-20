@@ -796,7 +796,7 @@ class TestLiveStackWiring:
 
 
 # --------------------------------------------------------------------------
-# Recovery order — CLAUDE.md: stop capture, halt unsafe motion, Park
+# Recovery order — docs/ENGINEERING.md: stop capture, halt unsafe motion, Park
 # --------------------------------------------------------------------------
 
 

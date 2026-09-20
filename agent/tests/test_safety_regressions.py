@@ -1,10 +1,16 @@
-"""Audit probes, 2026-09-19, now regression tests. Each encodes the behaviour the
-ADRs or CLAUDE.md claim and each failed when it was written. Simulator only.
+"""The safety rules the ADRs and docs/ENGINEERING.md state, held to by test.
 
-Where a probe built an envelope the contract now refuses outright, it builds a
-valid one and overwrites the field with `model_copy`: the schema bound is the
-first line of defence and these are about the second -- what the agent does with
-a number that reached it anyway.
+Every one of these described behaviour the documents promised and the code did
+not have. They are kept because a rule that was once wrong is the rule most
+worth pinning: a cloud-set Sun exclusion of zero, a NaN daylight lock that never
+engaged, a mount fault that parked without stopping the slew, a command decided
+and then lost to a restart, an agent clock that refused everything the cloud
+sent, and a device token in a config repr.
+
+Simulator only. Where a test needs an envelope value the contract now refuses
+outright, it builds a valid one and overwrites the field with `model_copy`: the
+schema bound is the first line of defence, and these are about the second --
+what the agent does with a number that reached it anyway.
 """
 
 from __future__ import annotations
@@ -56,7 +62,7 @@ def _sun_goto():
 # cloud sets (contract minimum 0).
 @pytest.mark.parametrize("daylight_lock", [90.0, float("nan")])
 @pytest.mark.parametrize("exclusion", [0.0, 0.5])
-def test_probe_cloud_envelope_cannot_open_the_sun(exclusion, daylight_lock):
+def test_cloud_envelope_cannot_open_the_sun(exclusion, daylight_lock):
     cfg = build_config(max_altitude_degrees=85.0).model_copy(
         update={
             "sun_exclusion_degrees": exclusion,
@@ -68,7 +74,7 @@ def test_probe_cloud_envelope_cannot_open_the_sun(exclusion, daylight_lock):
 
 
 # P1. A NaN daylight lock makes `solar_alt > nan` False, so the lock never engages.
-def test_probe_nan_daylight_lock_does_not_disable_the_lock():
+def test_nan_daylight_lock_does_not_disable_the_lock():
     position = sun.equatorial_position(NOON)
     away_from_sun = envelope(
         command_type="GOTO",
@@ -85,9 +91,9 @@ def test_probe_nan_daylight_lock_does_not_disable_the_lock():
     assert ack.status.value == "REJECTED"
 
 
-# P1. CLAUDE.md: device fault -> stop capture, halt motion, Park. On the runner
+# P1. docs/ENGINEERING.md: device fault -> stop capture, halt motion, Park. On the runner
 # path (runner.py:373-381) a mid-slew fault only parks.
-def test_probe_mount_fault_mid_slew_aborts_slew_and_capture_before_park():
+def test_mount_fault_mid_slew_aborts_slew_and_capture_before_park():
     calls: list[str] = []
 
     class FaultyMount(SimMount):
@@ -134,7 +140,7 @@ def test_probe_mount_fault_mid_slew_aborts_slew_and_capture_before_park():
 # P2. A non-finite mount reading must produce a refusal, not an exception that
 # leaves the cloud without an ack (angular_separation -> math domain error).
 @pytest.mark.parametrize("altitude", [math.inf, -math.inf])
-def test_probe_non_finite_pointing_refuses_instead_of_raising(altitude):
+def test_non_finite_pointing_refuses_instead_of_raising(altitude):
     cfg = build_config(max_altitude_degrees=85.0)
     at = NOON + timedelta(hours=13)
     raw = envelope(command_type="NUDGE", payload=nudge_payload(), issued_at=at)
@@ -145,7 +151,7 @@ def test_probe_non_finite_pointing_refuses_instead_of_raising(altitude):
 # P2. "Neither replayed nor lost": the commandId is persisted before execution
 # (validator.py:249-251, supervisor.py:583-585). A crash in that window turns the
 # cloud's retry into DUPLICATE and the GOTO never happens.
-def test_probe_command_is_not_lost_when_the_agent_dies_after_validation(tmp_path):
+def test_command_is_not_lost_when_the_agent_dies_after_validation(tmp_path):
     path = tmp_path / "agent-state.sqlite3"
     agent = build_agent(max_altitude_degrees=70.0, state_path=path)
     agent.own()
@@ -167,7 +173,7 @@ def test_probe_command_is_not_lost_when_the_agent_dies_after_validation(tmp_path
 # P2. CloudWelcome.serverTime exists "for agent clock-skew detection"
 # (openapi.yaml) and the agent never reads it. With the agent 10 minutes ahead,
 # every fresh cloud command is refused as expired.
-def test_probe_agent_clock_ahead_of_cloud_does_not_expire_fresh_commands():
+def test_agent_clock_ahead_of_cloud_does_not_expire_fresh_commands():
     agent = build_agent(max_altitude_degrees=70.0)
     try:
         agent.wall.now = HARNESS_NIGHT + timedelta(minutes=10)
@@ -180,8 +186,8 @@ def test_probe_agent_clock_ahead_of_cloud_does_not_expire_fresh_commands():
 
 # P3. AgentConfig is a frozen dataclass with the default repr, which includes the
 # device token. One `logger.debug("%r", config)` would leak it.
-def test_probe_agent_config_repr_does_not_carry_the_device_token():
-    token = "probe-secret-token-value"
+def test_agent_config_repr_does_not_carry_the_device_token():
+    token = "a-distinctive-token-value"
     config = load_config({"DARKVIEW_AGENT_DEVICE_TOKEN": token})
     assert token not in repr(config)
     assert token not in str(config)

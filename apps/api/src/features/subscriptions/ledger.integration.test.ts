@@ -13,11 +13,12 @@ import {
 } from "@darkview/db/credits";
 
 /**
- * Audit probes, 2026-09-19, now regression tests. ADR-022 (amended 2026-09-19):
- * minutes do not roll over, they expire at period end -- and cancelling refunds
- * nothing "because the period is already funded and its credits already granted",
- * which is only true if a cancelled customer can still spend them. Needs a real
- * PostgreSQL at DATABASE_TEST_URL and skips without one.
+ * The credit ledger against ADR-022, as amended on 2026-09-19: minutes do not
+ * roll over, they expire at period end -- and cancelling refunds nothing
+ * "because the period is already funded and its credits already granted", which
+ * is only true if a cancelled customer can still spend them.
+ *
+ * Needs a real PostgreSQL at DATABASE_TEST_URL and skips without one.
  */
 const CONNECTION_STRING = process.env.DATABASE_TEST_URL;
 const PERIOD_START = new Date("2026-12-01T00:00:00.000Z");
@@ -52,7 +53,7 @@ async function subscribe(status: "ACTIVE" | "CANCELLED", periodEnd: Date) {
   );
 }
 
-describe.skipIf(!CONNECTION_STRING)("probe: the credit ledger against ADR-022", () => {
+describe.skipIf(!CONNECTION_STRING)("the credit ledger against ADR-022", () => {
   beforeAll(async () => {
     database = new PrismaClient({
       adapter: new PrismaPg({ connectionString: CONNECTION_STRING! }),

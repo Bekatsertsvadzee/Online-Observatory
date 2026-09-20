@@ -1,7 +1,12 @@
-"""Audit probes, 2026-09-19: property-based checks on the safety code.
+"""Property-based checks on the safety code.
 
-Needs `hypothesis`, which is not in requirements-dev.txt; the module skips
-without it. Simulator and pure functions only.
+The boundary pairs in test_safety_envelope.py say what happens at each limit.
+These say that nothing between the limits behaves differently -- that no
+generated pointing above MAX_ALT_SAFE is ever permitted, that none inside the Sun
+exclusion is, and that a coordinate conversion always lands in range.
+
+Pure functions and the simulator only. `hypothesis` is in requirements-dev.txt;
+the module skips if it is missing.
 """
 
 from __future__ import annotations
@@ -33,7 +38,7 @@ azimuths = st.floats(min_value=-720.0, max_value=720.0, allow_nan=False)
 
 @settings(max_examples=400, deadline=None)
 @given(at=moments, alt=altitudes, az=azimuths)
-def test_probe_nothing_above_max_alt_is_ever_permitted(at, alt, az):
+def test_nothing_above_max_alt_is_ever_permitted(at, alt, az):
     verdict = evaluate_pointing(CONFIG, TBILISI, at, alt, az)
     if alt > MAX_ALT:
         assert not verdict.permitted
@@ -41,7 +46,7 @@ def test_probe_nothing_above_max_alt_is_ever_permitted(at, alt, az):
 
 @settings(max_examples=400, deadline=None)
 @given(at=moments, alt=altitudes, az=azimuths)
-def test_probe_nothing_inside_the_sun_exclusion_is_ever_permitted(at, alt, az):
+def test_nothing_inside_the_sun_exclusion_is_ever_permitted(at, alt, az):
     verdict = evaluate_pointing(CONFIG, TBILISI, at, alt, az, operator_override=True)
     solar = sun.position(at, TBILISI)
     separation = sun.angular_separation(alt, az, solar.altitude_degrees, solar.azimuth_degrees)
@@ -55,7 +60,7 @@ def test_probe_nothing_inside_the_sun_exclusion_is_ever_permitted(at, alt, az):
     alt=st.floats(allow_nan=True, allow_infinity=True),
     az=st.floats(allow_nan=True, allow_infinity=True),
 )
-def test_probe_non_finite_pointing_is_refused_not_raised(at, alt, az):
+def test_non_finite_pointing_is_refused_not_raised(at, alt, az):
     if math.isfinite(alt) and math.isfinite(az):
         return
     verdict = evaluate_pointing(CONFIG, TBILISI, at, alt, az)
@@ -68,7 +73,7 @@ def test_probe_non_finite_pointing_is_refused_not_raised(at, alt, az):
     ra=st.floats(min_value=0.0, max_value=24.0, exclude_max=True, allow_nan=False),
     dec=st.floats(min_value=-90.0, max_value=90.0, allow_nan=False),
 )
-def test_probe_coordinates_stay_in_range(at, ra, dec):
+def test_coordinates_stay_in_range(at, ra, dec):
     horizontal = equatorial_to_horizontal(ra, dec, at, TBILISI)
     assert -90.0 <= horizontal.altitude_degrees <= 90.0
     assert 0.0 <= horizontal.azimuth_degrees < 360.0
@@ -76,7 +81,7 @@ def test_probe_coordinates_stay_in_range(at, ra, dec):
 
 @settings(max_examples=400, deadline=None)
 @given(a1=altitudes, z1=azimuths, a2=altitudes, z2=azimuths)
-def test_probe_angular_separation_is_a_metric(a1, z1, a2, z2):
+def test_angular_separation_is_a_metric(a1, z1, a2, z2):
     forward = sun.angular_separation(a1, z1, a2, z2)
     assert 0.0 <= forward <= 180.0
     assert math.isclose(forward, sun.angular_separation(a2, z2, a1, z1), abs_tol=1e-9)

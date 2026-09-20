@@ -3,11 +3,14 @@ import { describe, expect, it } from "vitest";
 import { FakeLinkStore } from "@/link/fake-store";
 
 /**
- * Audit probes, 2026-09-19, now regression tests. Each encodes ADR-004 / ADR-018
- * behaviour that the stores did not enforce: the only question asked of an
- * agent-reported event was whether the mission had already finished, so a live
- * mission could be walked back to SCHEDULED, jumped from PREPARING to COMPLETE,
- * or have its weather hold lifted by the observatory that set it.
+ * Which mission transitions the cloud will accept from an observatory (ADR-004,
+ * ADR-018).
+ *
+ * The only question once asked of an agent-reported event was whether the mission
+ * had already finished, so a live mission could be walked back to SCHEDULED,
+ * jumped from PREPARING to COMPLETE, or have its weather hold lifted by the
+ * observatory that set it -- and the weather hold is what the refund engine
+ * classifies from.
  *
  * `store.ts` now holds the transition table both stores apply -- the fake in code,
  * the Prisma one in the WHERE clause of its guarded UPDATE.
@@ -28,7 +31,7 @@ const event = (state: string, failureReason: string | null = null) =>
     detail: null,
   }) as never;
 
-describe("probe: the cloud accepts illegal mission transitions", () => {
+describe("the cloud refuses a transition the agent could not have made", () => {
   it.each([
     ["OBSERVING", "REQUESTED"],
     ["OBSERVING", "SCHEDULED"],
@@ -57,7 +60,7 @@ describe("probe: the cloud accepts illegal mission transitions", () => {
   });
 });
 
-describe("probe: a starting GOTO answered EXPIRED leaves the observatory blocked", () => {
+describe("a starting GOTO the agent never ran releases the observatory", () => {
   it("does not leave the mission in PREPARING holding the observatory", async () => {
     const store = new FakeLinkStore();
     store.addMission(MISSION, { observatoryId: OBS, state: "PREPARING" });
@@ -90,9 +93,9 @@ describe("probe: a starting GOTO answered EXPIRED leaves the observatory blocked
   });
 });
 
-describe("probe: a network blip ends the mission", () => {
+describe("a network blip still ends the mission — open, see the comment", () => {
   // STILL FAILING, DELIBERATELY. This one is a conflict between controlling
-  // documents, which CLAUDE.md says to report rather than resolve.
+  // documents, which docs/ENGINEERING.md says to report rather than resolve.
   //
   // `AgentHello.resumeMissionId` is documented as "set when the agent restarts
   // holding a mission recovered from its local state store" (openapi.yaml:4986).
