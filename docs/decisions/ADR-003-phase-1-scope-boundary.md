@@ -19,7 +19,7 @@
 ## Context
 
 The repository as it stands models product surface that appears in no controlling
-document. `CLAUDE.md` describes one product: one customer, one reservation, one
+document. `docs/ENGINEERING.md` describes one product: one customer, one reservation, one
 operator-approved target, one real telescope. The Build Plan data model is
 `users, bookings, missions, targets, payments, captures, mission_events,
 observatory_state`. Master Plan v2's Phase 1 scope matches.
@@ -51,7 +51,7 @@ Frozen means, precisely:
    or a test to the frozen surface. No Phase 1 issue may depend on it.
 4. **It is not wired into the Phase 1 mission path.** The mission runner, the
    orchestrator, the agent link and the live room behave as though exactly one
-   observatory and exactly one session owner exist, because per `CLAUDE.md` that
+   observatory and exactly one session owner exist, because per `docs/ENGINEERING.md` that
    is the product: one active mission at a time, one active session owner at a
    time.
 5. **The contract does not model it.** `contracts/openapi.yaml` describes Phase 1

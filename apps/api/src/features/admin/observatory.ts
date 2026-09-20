@@ -34,7 +34,7 @@ export type ModeResult = { ok: true; mode: ObservatoryMode } | AdminFailure;
 /**
  * Switch the observatory between the simulator and real hardware.
  *
- * `CLAUDE.md`: "The simulator is the default implementation. Always." and
+ * `docs/ENGINEERING.md`: "The simulator is the default implementation. Always." and
  * "Real-hardware mode requires an explicit, attended operator action outside the
  * normal test workflow." This is that action, and it is the cloud's half of it --
  * the agent enforces its own half independently and will not start in REAL without

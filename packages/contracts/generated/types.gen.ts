@@ -1140,7 +1140,7 @@ export type PaymentWebhookAck = {
 };
 
 /**
- * The authoritative mission state machine, exactly as enumerated in CLAUDE.md.
+ * The authoritative mission state machine, exactly as enumerated in docs/ENGINEERING.md.
  *
  * Primary:  REQUESTED -> SCHEDULED -> PREPARING -> SLEWING -> VERIFYING ->
  * CENTERING -> OBSERVING -> CAPTURING -> PROCESSING -> COMPLETE
@@ -1151,7 +1151,7 @@ export type PaymentWebhookAck = {
  * state, and every path out of one ends at Park.
  *
  * Resolved by docs/decisions/ADR-004-mission-state-machine.md (2026-08-31). This
- * enum matches CLAUDE.md and nothing else. The Build Plan's LOCKED and DELIVERED
+ * enum matches docs/ENGINEERING.md and nothing else. The Build Plan's LOCKED and DELIVERED
  * are not states -- "Target locked" and "LIVE" are display labels mapped in the
  * web layer. Its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as
  * MissionFailureReason detail on a state above, never as states.
@@ -1176,7 +1176,7 @@ export const MissionState = {
 } as const;
 
 /**
- * The authoritative mission state machine, exactly as enumerated in CLAUDE.md.
+ * The authoritative mission state machine, exactly as enumerated in docs/ENGINEERING.md.
  *
  * Primary:  REQUESTED -> SCHEDULED -> PREPARING -> SLEWING -> VERIFYING ->
  * CENTERING -> OBSERVING -> CAPTURING -> PROCESSING -> COMPLETE
@@ -1187,7 +1187,7 @@ export const MissionState = {
  * state, and every path out of one ends at Park.
  *
  * Resolved by docs/decisions/ADR-004-mission-state-machine.md (2026-08-31). This
- * enum matches CLAUDE.md and nothing else. The Build Plan's LOCKED and DELIVERED
+ * enum matches docs/ENGINEERING.md and nothing else. The Build Plan's LOCKED and DELIVERED
  * are not states -- "Target locked" and "LIVE" are display labels mapped in the
  * web layer. Its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as
  * MissionFailureReason detail on a state above, never as states.

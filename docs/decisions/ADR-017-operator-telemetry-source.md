@@ -114,7 +114,7 @@ the operator role check would then live in two processes.
 **Status of this amendment: APPROVED 2026-09-14.** Found before implementation, not after.
 
 §2's response crosses a process boundary: `apps/realtime` serialises it and `apps/api`
-reads it. `CLAUDE.md` makes `contracts/openapi.yaml` the only source of truth for every
+reads it. `docs/ENGINEERING.md` makes `contracts/openapi.yaml` the only source of truth for every
 payload that does that, with no hand-written duplicate in either service. As approved,
 this record would have had each service define the shape for itself.
 

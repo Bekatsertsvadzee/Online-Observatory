@@ -10,7 +10,7 @@ delivered twice because the agent forgot it had already run it is the single
 highest-consequence duplicate in the system.
 
 SQLite, in one file. It is in the standard library, so it adds no dependency; it
-is a file rather than a service, so it does not touch the rule in `CLAUDE.md`
+is a file rather than a service, so it does not touch the rule in `docs/ENGINEERING.md`
 about not adding services; and it is transactional, which a directory of JSON
 files is not. A half-written state file is exactly the artefact a crash produces
 and exactly the one that must not exist. ADR-010 records the choice.

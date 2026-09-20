@@ -18,7 +18,7 @@ function filesUnder(directory: string): string[] {
  * DV-057 criterion 1: the observatory socket lives in its own long-running
  * process, and the Next.js app holds no agent connection.
  *
- * `CLAUDE.md` is unambiguous -- never hold the observatory socket inside a
+ * `docs/ENGINEERING.md` is unambiguous -- never hold the observatory socket inside a
  * serverless function. A Next.js route is one. This is the kind of rule that is
  * obeyed on the day it is written and quietly broken a month later by someone
  * adding "just a small websocket handler", so it is asserted rather than trusted.

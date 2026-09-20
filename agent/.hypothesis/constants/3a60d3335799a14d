@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/config.py
+# hypothesis_version: 6.140.3
+
+['#', '.darkview', '1', '=', 'DARKVIEW_AGENT_', 'REAL', 'SIMULATED', 'agent-state.sqlite3', 'agent.env', 'true', 'utf-8', 'yes']

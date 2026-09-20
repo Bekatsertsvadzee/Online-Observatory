@@ -167,7 +167,7 @@ class TestTheHeader:
 
         header = live_frame_header(MISSION, frame, encode_frame(frame), sequence=0)
 
-        # `CLAUDE.md`: simulator output is never presented as real telescope
+        # `docs/ENGINEERING.md`: simulator output is never presented as real telescope
         # output. The surest way to break that is to let anything other than the
         # frame decide what the frame is.
         assert header["mode"] == "SIMULATED"

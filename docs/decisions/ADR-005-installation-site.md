@@ -20,7 +20,7 @@ site means no horizon mask, which means no safe remote operation and no GATE 1.
 
 Phase 1 is installed on a **Tbilisi rooftop, on mains power**.
 
-This matches `CLAUDE.md`, which describes Darkview as "a Live Remote Observatory in
+This matches `docs/ENGINEERING.md`, which describes Darkview as "a Live Remote Observatory in
 Tbilisi, Georgia".
 
 ## Consequences

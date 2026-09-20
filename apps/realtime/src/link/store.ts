@@ -34,7 +34,7 @@ export const LIVE_MISSION_STATES = [
 /**
  * The states a mission never leaves.
  *
- * `CLAUDE.md` also lists WEATHER_HOLD, NOT_VISIBLE and HARDWARE_ERROR as failure
+ * `docs/ENGINEERING.md` also lists WEATHER_HOLD, NOT_VISIBLE and HARDWARE_ERROR as failure
  * or hold states, and they are deliberately absent: a hold can be lifted and a
  * hardware fault can be cleared by an operator, so a later transition out of one
  * is legitimate. These three are the ones nothing may transition out of.

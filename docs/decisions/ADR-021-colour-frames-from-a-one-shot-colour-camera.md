@@ -46,7 +46,7 @@ aligns after debayering need not.
 three-channel float accumulator at that size is roughly 200 MB, against 66 MB for
 a single-channel one.
 
-**Phase 1 is a live view, not astrophotography.** `CLAUDE.md` is explicit. The
+**Phase 1 is a live view, not astrophotography.** `docs/ENGINEERING.md` is explicit. The
 image a customer watches has to look right; it does not have to survive
 photometric scrutiny.
 

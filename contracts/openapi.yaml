@@ -53,10 +53,10 @@ info:
     contains no long-exposure astrophotography concepts.
 
     KNOWN OPEN ITEMS (see docs/planning/phase1-issue-decomposition.md)
-      - MissionState below is exactly the enumeration in CLAUDE.md. RESOLVED by
+      - MissionState below is exactly the enumeration in docs/ENGINEERING.md. RESOLVED by
         ADR-004 (2026-08-31): the Build Plan's LOCKED and DELIVERED are not states,
         and its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as MissionFailureReason
-        diagnostic detail attached to a CLAUDE.md state, never as competing states.
+        diagnostic detail attached to a docs/ENGINEERING.md state, never as competing states.
       - SafetyEnvelopeConfig.maxAltitudeDegrees has no default and is nullable on
         purpose. `null` means UNMEASURED. It is measured from the physical optical
         train (mount qualification test Q7) and never guessed.
@@ -3701,7 +3701,7 @@ components:
     MissionState:
       type: string
       description: |
-        The authoritative mission state machine, exactly as enumerated in CLAUDE.md.
+        The authoritative mission state machine, exactly as enumerated in docs/ENGINEERING.md.
 
         Primary:  REQUESTED -> SCHEDULED -> PREPARING -> SLEWING -> VERIFYING ->
                   CENTERING -> OBSERVING -> CAPTURING -> PROCESSING -> COMPLETE
@@ -3712,7 +3712,7 @@ components:
         state, and every path out of one ends at Park.
 
         Resolved by docs/decisions/ADR-004-mission-state-machine.md (2026-08-31). This
-        enum matches CLAUDE.md and nothing else. The Build Plan's LOCKED and DELIVERED
+        enum matches docs/ENGINEERING.md and nothing else. The Build Plan's LOCKED and DELIVERED
         are not states -- "Target locked" and "LIVE" are display labels mapped in the
         web layer. Its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as
         MissionFailureReason detail on a state above, never as states.

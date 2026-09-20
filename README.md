@@ -48,7 +48,7 @@ Do not upgrade a major mid-phase.
 | --- | --- | --- |
 | Node | **24 LTS** (`v24.14.1` in use) | `engines: >=20.19` |
 | npm | 11+ | workspaces |
-| Next.js | **16.3.2** | API route handlers only — no UI in this repository. See `AGENTS.md` |
+| Next.js | **16.3.2** | API route handlers only — no UI in this repository. |
 | TypeScript | **6.0.3** | strict |
 | Prisma | **7.9.1** | `prisma-client` generator |
 | PostgreSQL | **16+** | |
@@ -101,7 +101,7 @@ agent/.venv/bin/pip install -r agent/requirements-dev.txt
 ## Running the two processes
 
 The API and the observatory link are separate processes and are not interchangeable. The
-agent socket is long-lived; a serverless function cannot hold one, and `CLAUDE.md` forbids
+agent socket is long-lived; a serverless function cannot hold one, and `docs/ENGINEERING.md` forbids
 trying.
 
 ```bash
@@ -168,7 +168,7 @@ routes do not exist yet — DV-063 adds them.
 
 | | |
 | --- | --- |
-| What we are building and why | `CLAUDE.md` |
+| What we are building and why | `docs/ENGINEERING.md` |
 | Decisions that bind | `docs/decisions/` |
 | The work, with acceptance criteria | `docs/backlog.md` |
 | System design and boundaries | `docs/architecture.md`, `docs/OWNERSHIP.md` |

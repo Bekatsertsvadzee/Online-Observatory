@@ -198,7 +198,7 @@ def test_a_frame_count_above_the_ceiling_is_clamped_not_refused():
 
 
 def test_a_simulated_capture_is_marked_simulated_on_the_image():
-    """CLAUDE.md: simulator output is never presented as real telescope output.
+    """docs/ENGINEERING.md: simulator output is never presented as real telescope output.
 
     A database column does not survive a screenshot. This does.
     """

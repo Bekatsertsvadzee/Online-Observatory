@@ -270,7 +270,7 @@ def live_frame_header(
     `widthPx` and `heightPx` describe the **encoded** image, not the sensor: they
     are what the viewer has to allocate, and the frame was scaled down on the way
     here. `mode` comes off the frame rather than from configuration, because a
-    frame carries its own provenance -- `CLAUDE.md` is explicit that simulator
+    frame carries its own provenance -- `docs/ENGINEERING.md` is explicit that simulator
     output is never presented as real telescope output, and the surest way to
     break that is to let something other than the frame decide what it is.
     """

@@ -5,7 +5,7 @@
 - **Decided by:** project maintainer, in session
 - **Approved:** 2026-09-10, with the minimum slot amended from ten minutes to twenty
 - **Relates to:** `ADR-003` (Phase 1 scope boundary), `ADR-013` (partner observatories),
-  `CLAUDE.md` § Product
+  `docs/ENGINEERING.md` § Product
 - **Blocks:** the contract change that makes any partner node bookable
 
 ## Context
@@ -82,7 +82,7 @@ A customer names a target and pays; whenever the instrument is next free and the
 target is up, the observatory captures it and delivers the images. There is no live
 session and the customer is not present.
 
-**It is explicitly out of Phase 1.** `CLAUDE.md` defines Phase 1 as a live
+**It is explicitly out of Phase 1.** `docs/ENGINEERING.md` defines Phase 1 as a live
 observation somebody watches. Flow B needs a scheduler, a queue, a delivery step,
 and a refund policy for the week when weather closes every window — none of which
 exist. It gets its own decision record when it is taken up.
