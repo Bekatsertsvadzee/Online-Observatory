@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { PrismaPg } from "@prisma/adapter-pg";
+import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PrismaClient } from "@darkview/db";
@@ -51,6 +52,29 @@ let targetId: string;
 let missionId: string;
 let ownerId: string;
 let operatorId: string;
+let listener: Client;
+let notifications: string[] = [];
+
+/**
+ * Wait for this observatory's WEATHER notification.
+ *
+ * Opened for real rather than spied on, for the reason the envelope suite gives:
+ * a line of code that says `pg_notify` proves nothing until something on another
+ * connection hears it. Scoped to the observatory, because every test makes a new
+ * one and a straggler from the last would be a different id.
+ */
+async function nextWeatherNotification(timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const index = notifications.findIndex((raw) => {
+      const parsed = JSON.parse(raw) as { kind?: string; observatoryId?: string };
+      return parsed.kind === "WEATHER" && parsed.observatoryId === observatoryId;
+    });
+    if (index >= 0) return JSON.parse(notifications.splice(index, 1)[0]);
+    if (Date.now() > deadline) throw new Error("no WEATHER notification arrived");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
 
 function envelopeFor(maxAltitude: number | null) {
   return {
@@ -91,13 +115,22 @@ beforeAll(async () => {
   });
   testDatabase.current = database;
   await database.$queryRaw`SELECT 1`;
+
+  listener = new Client({ connectionString: CONNECTION_STRING });
+  await listener.connect();
+  await listener.query("LISTEN darkview_agent");
+  listener.on("notification", (message) => {
+    if (message.payload) notifications.push(message.payload);
+  });
 });
 
 afterAll(async () => {
+  await listener.end();
   await database.$disconnect();
 });
 
 beforeEach(async () => {
+  notifications = [];
   await database.capture.deleteMany();
   await database.auditLog.deleteMany();
   await database.missionEvent.deleteMany();
@@ -307,6 +340,38 @@ describe("the operator weather hold", () => {
       where: { action: "WEATHER_HOLD_SET" },
     });
     expect(audit.category).toBe("SAFETY");
+  });
+
+  it("tells the agent, so the hold is enforced at the observatory too", async () => {
+    // DV-039. Until this, a hold lived only in the cloud: the agent obeyed the
+    // Park that came with it and knew nothing about the sky, so an observatory
+    // that lost its link during a hold had nothing telling it to stay parked.
+    await setWeatherHold({
+      observatoryId,
+      request: { holdActive: true, status: "UNSAFE", note: "rain" },
+      actorUserId: operatorId,
+    });
+
+    expect(await nextWeatherNotification()).toEqual({ kind: "WEATHER", observatoryId });
+  });
+
+  it("tells the agent when the hold is lifted as well as when it is set", async () => {
+    // An observatory that was told to shut and never told otherwise stays shut
+    // until it next reconnects.
+    await setWeatherHold({
+      observatoryId,
+      request: { holdActive: true, status: "UNSAFE", note: null },
+      actorUserId: operatorId,
+    });
+    await nextWeatherNotification();
+
+    await setWeatherHold({
+      observatoryId,
+      request: { holdActive: false, status: "CLEAR", note: null },
+      actorUserId: operatorId,
+    });
+
+    expect(await nextWeatherNotification()).toEqual({ kind: "WEATHER", observatoryId });
   });
 
   it("stops the mission that is already running", async () => {

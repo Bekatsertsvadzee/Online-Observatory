@@ -306,6 +306,7 @@ value. Read the `CommandRejectionReason` either way — it names the rule.
 | `SAFETY_HORIZON_MASK` | Below the surveyed horizon at that bearing. |
 | `SAFETY_FORBIDDEN_AZIMUTH` | Inside a cable-wrap sector. |
 | `SAFETY_NUDGE_LIMIT_EXCEEDED` | Cumulative nudge would leave the budget. The control re-centres. |
+| `WEATHER_HOLD_ACTIVE` | An operator has the observatory closed. §7.9. Clear the hold, and nothing else will help. |
 
 ### 7.5 The watchdog fired
 
@@ -319,7 +320,7 @@ and whether capture-stop and park were attempted.
 | `LINK_DEAD` | Mount parked. |
 | `DEVICE_FAULT` | A driver raised. Capture stopped, mount parked. |
 | `OPERATOR_ABORT` | An `ABORT` envelope arrived. |
-| `WEATHER_UNSAFE` | **Cannot currently occur.** Nothing reads weather. DV-039. |
+| `WEATHER_UNSAFE` | An operator set a weather hold. Capture stopped, mount parked, and every command but `PARK` and `ABORT` is refused until the hold is cleared. |
 
 **If `park_failure` is set, the mount did not park.** Treat it as a physical incident: go
 to the observatory. The abort and the park are attempted independently, so a mount that
@@ -381,6 +382,26 @@ npx prisma migrate reset          # drops, re-migrates and re-seeds
 Do not mark the migration `--applied`: the columns it adds would be missing while the
 history claimed otherwise. There is no production database, and this migration has never
 been applied to one.
+
+### 7.9 The sky closed
+
+`POST /admin/observatories/{observatoryId}/weather-hold` with `holdActive: true` is the
+whole procedure. In one transaction it parks the running mission, revokes its session,
+records the hold and tells the agent, which then refuses everything but `PARK` and
+`ABORT` until the hold is cleared — including after the link drops, and after the agent
+restarts.
+
+Two things worth knowing while you are doing it:
+
+- **Setting a hold is never rate limited; clearing one is.** Whatever stops a telescope
+  must not be something a limiter can delay. Putting one back under the sky waits its
+  turn.
+- **Clearing the hold resumes nothing.** The customer's session is gone and their mission
+  is in `WEATHER_HOLD`. Rebooking or refunding is DV-111's path, not this one.
+
+To check what the observatory itself believes, read its audit trail: the agent writes
+`WEATHER_HOLD_SET` and `WEATHER_HOLD_CLEARED` locally, with the status and note the
+operator gave.
 
 ## 8. Backup and disaster recovery
 
@@ -479,4 +500,6 @@ they are made:
 - **Production deployment and migrations.** Never run either unless the maintainer asks
   explicitly, in that session.
 - **The Q1–Q9 qualification in full.** DV-034 owns it.
-- **Weather procedure.** DV-039 owes the trigger; there is nothing to operate yet.
+- **Weather forecasting.** DV-110 stores a forecast; nothing sets or clears a hold from
+  it. A hold is a person's judgement, taken through the operator console, and section 7
+  covers what the observatory then does with it.

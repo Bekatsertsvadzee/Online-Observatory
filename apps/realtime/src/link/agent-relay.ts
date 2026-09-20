@@ -3,6 +3,7 @@ import {
   cloudCommand,
   cloudSafetyEnvelopeUpdate,
   cloudSessionUpdate,
+  cloudWeatherUpdate,
 } from "@/link/protocol";
 import type { LinkStore } from "@/link/store";
 
@@ -28,6 +29,7 @@ export type NotificationPayload =
       sessionId: string | null;
     }
   | { kind: "ENVELOPE"; observatoryId: string }
+  | { kind: "WEATHER"; observatoryId: string }
   | { kind: "CREDENTIAL"; observatoryId: string };
 
 export type RelayOutcome = "SENT" | "NO_LINK" | "NOT_FOUND" | "MALFORMED";
@@ -66,6 +68,9 @@ export class AgentRelay {
     }
     if (notification?.kind === "ENVELOPE") {
       return this.relayEnvelope(notification.observatoryId);
+    }
+    if (notification?.kind === "WEATHER") {
+      return this.relayWeather(notification.observatoryId);
     }
     if (notification?.kind === "CREDENTIAL") {
       return this.closeForCredentialChange(notification.observatoryId);
@@ -159,6 +164,25 @@ export class AgentRelay {
   }
 
   /**
+   * Hand the agent the stored weather, hold and all.
+   *
+   * Read from the row like the envelope, and for the same reason: this is the
+   * thing that will still be stopping a telescope when the link has gone. An
+   * observatory with no weather row sends nothing -- the agent's own default is
+   * "no hold known", which is the state it was already in, and inventing a clear
+   * sky is the one way this could make things worse.
+   */
+  async relayWeather(observatoryId: string): Promise<RelayOutcome> {
+    const link = this.registry.get(observatoryId);
+    if (!link) return "NO_LINK";
+
+    const weather = await this.store.loadWeather(observatoryId);
+    if (!weather) return "NOT_FOUND";
+
+    return link.dispatch(cloudWeatherUpdate(observatoryId, weather)) ? "SENT" : "NO_LINK";
+  }
+
+  /**
    * Everything an agent needs after it has just come online.
    *
    * Run once, on the transition to ONLINE -- not on every message. It used to run
@@ -183,6 +207,11 @@ export class AgentRelay {
     // MAX_ALT_SAFE while it was away. Everything below this line is about letting
     // the telescope move, so the limits it moves within go first.
     await this.relayEnvelope(observatoryId);
+
+    // Then the sky. An agent that reconnects into a hold it was never told about
+    // would take the next command it is sent, and the operator who called the
+    // weather unsafe has no way of knowing it came back deaf to that.
+    await this.relayWeather(observatoryId);
 
     const owner = await this.store.activeSession(observatoryId, now);
     if (owner !== null) {

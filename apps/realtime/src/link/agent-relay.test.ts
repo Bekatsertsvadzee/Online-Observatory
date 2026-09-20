@@ -6,6 +6,7 @@ import type {
   CloudToAgentMessage,
   CommandEnvelope,
   SafetyEnvelopeConfig,
+  WeatherState,
 } from "@darkview/contracts";
 
 import { AgentLink } from "@/link/agent-link";
@@ -53,6 +54,10 @@ function sessionNotification(sessionId: string | null): string {
     missionId: MISSION_ID,
     sessionId,
   });
+}
+
+function weatherNotification(): string {
+  return JSON.stringify({ kind: "WEATHER", observatoryId: observatory.id });
 }
 
 let store: FakeLinkStore;
@@ -392,38 +397,38 @@ describe("sweeping what the notification missed", () => {
  * delivered here is not advice: it is the set of numbers a telescope will still be
  * obeying when nothing is left to correct them.
  */
+/** A test fake, stated here rather than defaulted into the builder below. */
+const MEASURED_ALTITUDE = 78;
+
+/**
+ * MAX_ALT_SAFE is stated by the caller, never defaulted anywhere in this
+ * repository -- `agent/tests/test_no_default_max_altitude.py` fails the build
+ * on a default, including a fixture default, because that is exactly how an
+ * unmeasured value ends up looking measured.
+ */
+function envelopeMeasuredAt(maxAltitude: number | null): SafetyEnvelopeConfig {
+  return {
+    observatoryId: observatory.id,
+    minAltitudeDegrees: 20,
+    maxAltitudeDegrees: maxAltitude,
+    maxAltitudeMeasuredAt: NOW.toISOString(),
+    maxAltitudeMeasuredBy: "unit-test fake",
+    maxAltitudeMeasurementNote: null,
+    horizonMask: [{ azimuthDegrees: 0, minAltitudeDegrees: 22 }],
+    forbiddenAzimuthSectors: [{ fromDegrees: 350, toDegrees: 10 }],
+    sunExclusionDegrees: 30,
+    daylightLockSunAltitudeDegrees: -6,
+    nudgeMaxDegrees: 1,
+    nudgeRateDegreesPerSecond: 0.25,
+    slewTimeoutSeconds: 120,
+    heartbeatLossSeconds: 15,
+    linkDeadSeconds: 60,
+    refocusTemperatureDeltaC: 1.5,
+    updatedAt: NOW.toISOString(),
+  };
+}
+
 describe("relaying the safety envelope", () => {
-  /** A test fake, stated here rather than defaulted into the builder below. */
-  const MEASURED_ALTITUDE = 78;
-
-  /**
-   * MAX_ALT_SAFE is stated by the caller, never defaulted anywhere in this
-   * repository -- `agent/tests/test_no_default_max_altitude.py` fails the build
-   * on a default, including a fixture default, because that is exactly how an
-   * unmeasured value ends up looking measured.
-   */
-  function envelopeMeasuredAt(maxAltitude: number | null): SafetyEnvelopeConfig {
-    return {
-      observatoryId: observatory.id,
-      minAltitudeDegrees: 20,
-      maxAltitudeDegrees: maxAltitude,
-      maxAltitudeMeasuredAt: NOW.toISOString(),
-      maxAltitudeMeasuredBy: "unit-test fake",
-      maxAltitudeMeasurementNote: null,
-      horizonMask: [{ azimuthDegrees: 0, minAltitudeDegrees: 22 }],
-      forbiddenAzimuthSectors: [{ fromDegrees: 350, toDegrees: 10 }],
-      sunExclusionDegrees: 30,
-      daylightLockSunAltitudeDegrees: -6,
-      nudgeMaxDegrees: 1,
-      nudgeRateDegreesPerSecond: 0.25,
-      slewTimeoutSeconds: 120,
-      heartbeatLossSeconds: 15,
-      linkDeadSeconds: 60,
-      refocusTemperatureDeltaC: 1.5,
-      updatedAt: NOW.toISOString(),
-    };
-  }
-
   const measured = envelopeMeasuredAt(MEASURED_ALTITUDE);
 
   it("sends the stored envelope, unaltered", async () => {
@@ -505,6 +510,98 @@ describe("relaying the safety envelope", () => {
       "CLOUD_SAFETY_ENVELOPE_UPDATE",
       "CLOUD_SESSION_UPDATE",
       "CLOUD_COMMAND",
+    ]);
+  });
+});
+
+/**
+ * DV-039's cloud half. The operator's hold reaches the agent as state rather
+ * than as an implication of the Park that accompanies it, because the agent
+ * keeps enforcing state after this link has gone and cannot keep enforcing a
+ * command it has already obeyed.
+ */
+describe("relaying the weather", () => {
+  const holding: WeatherState = {
+    status: "CLOUDY",
+    source: "OPERATOR",
+    holdActive: true,
+    note: "cloud in from the west",
+    updatedAt: NOW.toISOString(),
+  };
+
+  it("sends the stored weather, unaltered", async () => {
+    await connectAgent();
+    store.setWeather(observatory.id, holding);
+
+    expect(await relay.relayWeather(observatory.id)).toBe("SENT");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      type: "CLOUD_WEATHER_UPDATE",
+      observatoryId: observatory.id,
+      weather: holding,
+    });
+  });
+
+  it("reads the weather from storage, not from the notification", async () => {
+    await connectAgent();
+    store.setWeather(observatory.id, holding);
+
+    // A payload claiming the sky is clear. The relay ignores everything in it
+    // but the observatory, so nothing that can reach the database can lift a
+    // hold by writing a notification.
+    await relay.handle(
+      JSON.stringify({
+        kind: "WEATHER",
+        observatoryId: observatory.id,
+        weather: { ...holding, holdActive: false },
+      }),
+    );
+
+    expect(sent[0]).toMatchObject({ type: "CLOUD_WEATHER_UPDATE", weather: holding });
+  });
+
+  it("carries a cleared hold, so an observatory is told the sky reopened", async () => {
+    await connectAgent();
+    store.setWeather(observatory.id, { ...holding, holdActive: false, note: null });
+
+    expect(await relay.handle(weatherNotification())).toBe("SENT");
+    expect(sent[0]).toMatchObject({
+      type: "CLOUD_WEATHER_UPDATE",
+      weather: { holdActive: false },
+    });
+  });
+
+  it("sends nothing when no weather has ever been recorded", async () => {
+    await connectAgent();
+
+    expect(await relay.relayWeather(observatory.id)).toBe("NOT_FOUND");
+    // Absent is "nobody has said", not "clear". The agent is left holding
+    // whatever it recovered from its own store.
+    expect(sent).toHaveLength(0);
+  });
+
+  it("does not send to an observatory with no link", async () => {
+    store.setWeather(observatory.id, holding);
+    expect(await relay.relayWeather(observatory.id)).toBe("NO_LINK");
+    expect(sent).toHaveLength(0);
+  });
+
+  it("tells a reconnecting agent about a hold it slept through", async () => {
+    await connectAgent();
+    // Measured, because the ordering only means something when there is an
+    // envelope to come first.
+    store.setSafetyEnvelope(observatory.id, envelopeMeasuredAt(MEASURED_ALTITUDE));
+    store.setWeather(observatory.id, holding);
+    store.setActiveSession(observatory.id, liveSession());
+
+    await relay.sweep(observatory.id);
+
+    // Limits, then the sky, then who owns the mount. An agent that came back
+    // into a hold nobody repeated would take the next command it was sent.
+    expect(sent.map((message) => message.type)).toEqual([
+      "CLOUD_SAFETY_ENVELOPE_UPDATE",
+      "CLOUD_WEATHER_UPDATE",
+      "CLOUD_SESSION_UPDATE",
     ]);
   });
 });

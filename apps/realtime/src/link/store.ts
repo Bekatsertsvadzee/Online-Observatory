@@ -11,6 +11,7 @@ import type {
   MissionFailureReason,
   MissionState,
   ObservatoryMode,
+  WeatherState,
 } from "@darkview/contracts";
 
 /**
@@ -350,6 +351,16 @@ export interface LinkStore {
    * this must never invent one.
    */
   loadSafetyEnvelope(observatoryId: string): Promise<SafetyEnvelopeConfig | null>;
+
+  /**
+   * The operator's stored weather for this observatory, or null when no row
+   * exists.
+   *
+   * Null is not "the sky is clear". It is "nobody has said", and the agent is
+   * left holding whatever it already had -- which after a restart is whatever it
+   * recovered from its own store.
+   */
+  loadWeather(observatoryId: string): Promise<WeatherState | null>;
 
   /**
    * Record one finished capture and put it in its owner's Collection.

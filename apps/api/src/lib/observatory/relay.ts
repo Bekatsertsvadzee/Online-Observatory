@@ -45,6 +45,16 @@ export type AgentNotification =
    */
   | { kind: "ENVELOPE"; observatoryId: string }
   /**
+   * The operator's weather hold was set or cleared, and the agent's copy is now
+   * stale.
+   *
+   * Carries no weather, for the reason ENVELOPE carries no envelope: the agent
+   * keeps enforcing what it holds after the link dies, so a hold has to be read
+   * from the row by the service that owns the socket rather than lifted out of a
+   * notification payload.
+   */
+  | { kind: "WEATHER"; observatoryId: string }
+  /**
    * The device token was rotated or revoked (ADR-020). A link authenticated with
    * the old one is closed; a token is checked only at the handshake, so without
    * this a revoked agent would stay connected until it next dropped.

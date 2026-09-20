@@ -151,9 +151,9 @@ export function weatherHoldIsExemptFromMetering(request: SetWeatherHoldRequest) 
  * Set or clear the operator's weather hold.
  *
  * Phase 1 has no sky sensor, so this is the only thing that can declare the
- * weather unsafe. `Watchdog.weather_unsafe` on the agent has no caller for the
- * same reason; DV-039 is what connects them. Until then a hold is a cloud-side
- * refusal to start new missions, and it does not stop one already running.
+ * weather unsafe. It reaches the agent as `CLOUD_WEATHER_UPDATE`, which is what
+ * finally gives `Watchdog.weather_unsafe` a caller: the hold is enforced twice,
+ * like every other safety rule here, and the agent's copy outlives the link.
  *
  * Recorded under SAFETY rather than MISSION. A hold is a statement about whether
  * it is safe to open the roof, and it belongs with the refusals rather than with
@@ -222,6 +222,18 @@ export async function setWeatherHold(input: {
         });
       }
     }
+
+    // The agent is told, in the same transaction as the row. It parks, refuses
+    // everything but PARK and ABORT while the hold stands, and keeps refusing
+    // after the link dies -- which is the half a cloud-side hold could never do.
+    // Sent on clearing too: the observatory has to be told the sky reopened, or
+    // it stays shut until it next reconnects.
+    //
+    // Before the Park below, and the order is deliberate. The agent's own park
+    // follows from the weather alone and needs no valid session, so if only one
+    // of the two messages survives the trip, the one that stops the telescope
+    // without depending on anything else should be the one that went first.
+    await notifyAgent(tx, { kind: "WEATHER", observatoryId });
 
     // A hold has to reach a mission that is already running, or it is only half a
     // rule: `startMissionSession` refuses a new session under a hold, and until now
@@ -295,12 +307,11 @@ export async function setWeatherHold(input: {
  * 3. **The session is revoked.** The customer keeps the page; they stop keeping
  *    the telescope.
  *
- * What this cannot do is tell the agent *why*. There is no cloud-to-agent weather
- * message in the contract, so the agent obeys a Park it cannot attribute and files
- * the mission locally as an operator abort. The cloud's own record is correct --
- * the mission event and the audit row both say weather -- but the agent's is not,
- * and that is a contract gap rather than something to paper over here. See the
- * backlog for the proposal.
+ * The agent is told why separately, by the `CLOUD_WEATHER_UPDATE` its caller
+ * sends on the same commit. Both records then say weather: the cloud's mission
+ * event and audit row, and the agent's own local trail. The Park still goes as a
+ * command rather than as an implication of the weather message, because a command
+ * is acknowledged and a weather state is not.
  */
 async function holdRunningMission(input: {
   /**

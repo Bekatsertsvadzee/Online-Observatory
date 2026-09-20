@@ -183,6 +183,11 @@ class CommandValidator:
         self._seen: SeenCommands = BoundedSeenCommands() if seen is None else seen
         self._ownership: SessionOwnership | None = None
         self._cumulative_nudge_degrees = 0.0
+        # Whether the operator has called the sky unsafe. False until the cloud
+        # says otherwise, and restored from the local store on start-up: a hold
+        # the agent forgot across a restart would be a hold the observatory
+        # stopped enforcing the moment it most needed to.
+        self._weather_hold = False
 
     # ------------------------------------------------------------------
     # State the agent holds
@@ -212,6 +217,20 @@ class CommandValidator:
 
     def set_envelope(self, envelope: SafetyEnvelope) -> None:
         self._envelope = envelope
+
+    @property
+    def weather_hold(self) -> bool:
+        return self._weather_hold
+
+    def set_weather_hold(self, active: bool) -> None:
+        """Hold or release the sky.
+
+        The cloud decides this -- Phase 1 fits no sensor, so the observatory has
+        no way of forming its own opinion. What it can do, and this is the point
+        of holding it here rather than acting on the message once, is keep
+        refusing after the cloud has stopped talking.
+        """
+        self._weather_hold = active
 
     def set_nudge_offset(self, degrees: float) -> None:
         """Restore an allowance already spent, after a restart.
@@ -317,9 +336,23 @@ class CommandValidator:
                 f"envelope type is {command_type} but payload kind is {payload.kind}",
             )
 
-        # 6. Safety. Recovery commands are exempt from the pointing check.
+        # 6. Safety. Recovery commands are exempt from the pointing check, and
+        # from the weather below it: PARK and ABORT are how a telescope gets out
+        # of bad weather, so refusing them for bad weather would be circular.
         if command_type in RECOVERY_COMMANDS:
             return self._accept(envelope)
+
+        # 7. The sky, as the operator last called it. Everything that is not a
+        # recovery is refused while a hold stands -- not only the slews. A hold
+        # means the roof should not be open, and an exposure taken under one is
+        # an exposure of a closed roof at best.
+        if self._weather_hold:
+            return self._reject(
+                envelope,
+                CommandRejectionReason.weather_hold_active,
+                "an operator weather hold is in force at this observatory",
+            )
+
         if command_type in POINTING_COMMANDS:
             refusal = self._check_pointing(envelope, payload, at_time)
             if refusal is not None:

@@ -133,6 +133,33 @@ to resolve.
 They are still fully authorised. An unauthorised Park is still unauthorised — structure,
 idempotency, expiry and session ownership all apply.
 
+## 4a. The weather hold is enforced twice
+
+`CLOUD_WEATHER_UPDATE`, DV-039. Phase 1 fits no sky sensor, so the operator console is
+the only thing that can call the sky unsafe. What the agent adds is not an opinion — it
+is persistence.
+
+| Step | Where |
+| --- | --- |
+| The operator sets the hold | `POST /admin/observatories/{id}/weather-hold` writes the row, mints a Park for any running mission, revokes the session and notifies the agent, in one transaction |
+| The cloud relays it | `AgentRelay.relayWeather` reads the **row**, never the notification, and sends `CLOUD_WEATHER_UPDATE` |
+| The agent acts | Stops capture, aborts motion, Parks — the watchdog's one terminal sequence, through `Watchdog.weather_unsafe` |
+| The agent keeps acting | Every command but `PARK` and `ABORT` is refused with `WEATHER_HOLD_ACTIVE` for as long as the hold stands |
+| The agent remembers | The hold is written to local state, so a restart during an outage comes back still refusing |
+
+The last two rows are the reason this exists at all. A hold that lived only in the cloud
+stopped meaning anything at the moment the observatory most needed it to: the link drops,
+and the agent is left holding a Park it obeyed once and cannot attribute.
+
+**A repeat does not re-park.** The cloud re-sends the weather on every reconnect and an
+operator may save an active hold again with a new note; the terminal sequence runs on the
+transition into a hold, not on every message carrying one.
+
+**An unreadable update leaves the previous hold standing**, the same way an unreadable
+envelope leaves the previous envelope standing. Discarding it would lift a hold, and that
+is the wrong direction to fail in. An update addressed to another observatory is
+discarded outright.
+
 ## 5. The command envelope
 
 Every command crossing the boundary is a `CommandEnvelope` minted and signed by the cloud.
@@ -147,12 +174,14 @@ The agent re-checks all of it, in this order (`command/validator.py`):
 3. **Expiry** — a command queued before a reconnect must not fire after it.
 4. **Authorisation** — session, then user, then mission.
 5. **Payload kind** — the envelope's type and its payload must agree.
-6. **Safety envelope** — the last word, and the only step that inspects the sky.
+6. **Weather** — everything but `PARK` and `ABORT` is refused while a hold stands
+   (section 4a).
+7. **Safety envelope** — the last word, and the only step that inspects the sky.
 
 ## 6. The watchdog
 
-`safety/watchdog.py`. Heartbeat loss, device fault and operator abort all converge on one
-terminal sequence: **stop capture, abort motion, Park.**
+`safety/watchdog.py`. Heartbeat loss, device fault, operator abort and an operator
+weather hold all converge on one terminal sequence: **stop capture, abort motion, Park.**
 
 It runs on its own thread, and that is the entire point. Everything else in the agent is a
 polled state machine driven by the main loop — which is fine until the main loop is the
@@ -232,7 +261,6 @@ failure it exists to prevent.
 | Gap | Consequence today | Owed by |
 | --- | --- | --- |
 | **`Watchdog.operator_abort` still has no caller outside a command envelope.** | Closed at the cloud end: `POST /admin/override` is the operator's emergency stop, and DV-115 exempts `PARK` and `ABORT` from rate limiting so nothing can delay one. What remains is the agent-side trigger, which fires today only because an envelope arrives. | DV-034 |
-| **`Watchdog.weather_unsafe` has no caller.** Nothing reads weather and nothing raises the trigger. | `WEATHER_HOLD` is reachable only by an operator moving the mission by hand. | DV-039 |
 | **`MAX_ALT_SAFE` is unmeasured, and no hardware exists.** | Every slew is refused by both cloud and agent. This is the system working. | DV-034 |
 | **Nothing has run against a real mount or camera.** Every property above is verified against `SimMount` and `SimCamera`. | The rules are proven; their behaviour against real driver faults and real timing is not. | DV-034 … DV-038 |
 
@@ -250,6 +278,7 @@ about physical hardware. It is evidence about the rules.
 | Watchdog | `agent/darkview_agent/safety/watchdog.py` |
 | Start-up refusals | `agent/darkview_agent/config.py`, `agent/darkview_agent/__main__.py` |
 | Recording a measured envelope | `apps/api/src/features/admin/safety-envelope.ts` |
+| Setting a weather hold, and telling the agent | `apps/api/src/features/admin/observatory.ts`, `apps/realtime/src/link/agent-relay.ts` |
 | Local state that survives a restart | `agent/darkview_agent/state/store.py` (ADR-010) |
 
 Operational procedure — starting, stopping, qualifying, and what to do when something goes

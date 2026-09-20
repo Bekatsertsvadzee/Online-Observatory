@@ -1740,6 +1740,26 @@ export const zCloudSafetyEnvelopeUpdate = z.strictObject({
     envelope: zSafetyEnvelopeConfig
 });
 
+/**
+ * Tells the agent what the cloud believes the sky is doing, and whether an
+ * operator hold stands. The agent stores it locally and keeps enforcing it
+ * after the link dies, the same way it does the safety envelope: a hold that
+ * only lived in the cloud would stop meaning anything at the moment the
+ * observatory most needs it to.
+ *
+ * While `holdActive` is true the agent parks and refuses every command but
+ * PARK and ABORT, with WEATHER_HOLD_ACTIVE. Phase 1 fits no sky sensor, so
+ * the only writer is the operator console.
+ *
+ */
+export const zCloudWeatherUpdate = z.strictObject({
+    type: z.enum(['CLOUD_WEATHER_UPDATE']),
+    messageId: z.uuid(),
+    sentAt: z.iso.datetime(),
+    observatoryId: z.uuid(),
+    weather: zWeatherState
+});
+
 export const zCloudError = z.strictObject({
     type: z.enum(['CLOUD_ERROR']),
     messageId: z.uuid(),
@@ -1789,6 +1809,7 @@ export const zCloudToAgentMessage = z.discriminatedUnion('type', [
     zCloudSessionUpdate.extend({ type: z.literal('CLOUD_SESSION_UPDATE') }),
     zCloudSafetyEnvelopeUpdate.extend({ type: z.literal('CLOUD_SAFETY_ENVELOPE_UPDATE') }),
     zCloudUploadGrant.extend({ type: z.literal('CLOUD_UPLOAD_GRANT') }),
+    zCloudWeatherUpdate.extend({ type: z.literal('CLOUD_WEATHER_UPDATE') }),
     zCloudError.extend({ type: z.literal('CLOUD_ERROR') })
 ]);
 

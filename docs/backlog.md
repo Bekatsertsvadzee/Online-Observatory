@@ -861,12 +861,13 @@ in. The plausible answers are a single throttled latest-telemetry row, or the
 realtime service exposing it on its own HTTP surface the way it now serves the live
 view. **This is a maintainer decision and is not made here.**
 
-## What DV-039 built, and the contract change it is waiting on
+## What DV-039 built, in two parts
 
-A weather hold now reaches the mission that is already running. Before this it only
-refused the next one: `startMissionSession`, `POST /bookings` and the slot and
-target listings all consult `holdActive`, so an operator watching cloud roll in
-could stop the next customer and not the one holding the telescope.
+A weather hold now reaches the mission that is already running, **and** the
+observatory running it. Before the first half it only refused the next mission:
+`startMissionSession`, `POST /bookings` and the slot and target listings all
+consult `holdActive`, so an operator watching cloud roll in could stop the next
+customer and not the one holding the telescope.
 
 Setting a hold, when a mission is live, does three things in one transaction and in
 an order that is not arbitrary:
@@ -886,28 +887,40 @@ an order that is not arbitrary:
 the customer still wants their session, that their slot has time left, or that the
 mount is where it was. Resuming is a decision and nobody has made it.
 
-**Not built: the agent's own weather enforcement.** `Watchdog.weather_unsafe` still
-has no caller, and this is a contract gap rather than an omission. There is **no
-cloud-to-agent weather message**: `CloudToAgentMessage` carries welcome, command,
-heartbeat ack, session update, safety envelope update and error, and none of them
-says anything about the sky. So the agent obeys a Park it cannot attribute, and
-files the mission locally as an operator abort while the cloud's own record
-correctly says weather.
+### The second half: the agent enforces the hold itself
 
-That matters for the reason every other safety rule here is enforced twice. The
-agent keeps enforcing its safety envelope after the link dies; it cannot do the
-same for a weather hold, because it holds no copy of one. An observatory that loses
-its link during a hold has nothing telling it to stay parked.
+The contract gained `CLOUD_WEATHER_UPDATE`, approved by the maintainer on
+2026-09-20. It carries the `WeatherState` the cloud already stores, down the link
+the agent already holds.
 
-**The proposal**, which needs maintainer approval before any code: a
-`CLOUD_WEATHER_UPDATE` carrying the `WeatherState` the cloud already stores, added
-to `CloudToAgentMessage`; a `WEATHER` notification kind alongside ADR-009's
-`COMMAND`, `SESSION` and `ENVELOPE`; the state persisted in the agent's local store
-next to the safety envelope (ADR-010), so it survives a restart; and
-`Watchdog.weather_unsafe` called when a hold arrives. The agent still cannot
-*observe* weather — no sensor is fitted, and the contract is explicit that SENSOR is
-"only used if a sensor is actually fitted" — so this is about acting on being told
-and continuing to act after the telling stops.
+| | |
+| --- | --- |
+| Contract | `CloudWeatherUpdate` in `CloudToAgentMessage`. `WEATHER_HOLD_ACTIVE` already existed in `CommandRejectionReason` and needed nothing. |
+| Notification | A `WEATHER` kind beside ADR-009's `COMMAND`, `SESSION`, `ENVELOPE` and `CREDENTIAL`. Like `ENVELOPE` it carries no payload: the relay reads the row, so nothing that can reach the database can lift a hold by writing a notification. |
+| Relay | `AgentRelay.relayWeather`, and the reconnect sweep sends it **after** the envelope and **before** the session — limits, then the sky, then who owns the mount. |
+| Agent | The state is held by the supervisor, persisted next to the safety envelope (ADR-010), and handed to the validator. `Watchdog.weather_unsafe` finally has a caller. |
+
+**Everything but PARK and ABORT is refused while a hold stands**, not only the
+slews. A hold means the roof should not be open, and an exposure taken under one is
+an exposure of a closed roof at best. Refusing the two recovery commands for
+weather would be circular: they are how a telescope gets out of it.
+
+**The hold survives a restart.** That is the whole reason it is state rather than
+an implication of the Park that accompanies it. An agent that rebooted under a hold
+and came back with no memory of one would accept the next command it was sent, and
+the operator who closed the observatory would have no way of learning it reopened
+itself. `agent/tests/test_weather_hold.py` restarts an agent into an outage and
+finds it still refusing.
+
+**A repeat does not re-park**, because the cloud re-sends the weather on every
+reconnect and an operator may save an active hold again with a new note. The
+terminal sequence runs on the transition into a hold.
+
+**Still not built: the agent's own weather *observation*.** No sensor is fitted and
+the contract is explicit that `SENSOR` is "only used if a sensor is actually
+fitted". This is about acting on being told, and continuing to act after the
+telling stops. When a sensor exists, `WeatherState.source` becomes a stored column
+rather than the `OPERATOR` both writers assert today.
 
 ## What DV-061 built, and what it is waiting on
 

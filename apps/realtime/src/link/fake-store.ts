@@ -9,6 +9,7 @@ import type {
   MissionState,
   ObservatoryMode,
   SafetyEnvelopeConfig,
+  WeatherState,
 } from "@darkview/contracts";
 
 import {
@@ -105,6 +106,7 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   readonly completedAt = new Map<string, Date>();
 
   private readonly envelopes = new Map<string, SafetyEnvelopeConfig>();
+  private readonly weather = new Map<string, WeatherState>();
   private readonly commandStatuses = new Map<string, ObservatoryCommandStatus>();
   private readonly verdicts = new Map<string, FakeCommandVerdict>();
 
@@ -544,6 +546,15 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   async loadSafetyEnvelope(observatoryId: string): Promise<SafetyEnvelopeConfig | null> {
     this.envelopeReads.push(observatoryId);
     return this.envelopes.get(observatoryId) ?? null;
+  }
+
+  setWeather(observatoryId: string, weather: WeatherState | null) {
+    if (weather === null) this.weather.delete(observatoryId);
+    else this.weather.set(observatoryId, weather);
+  }
+
+  async loadWeather(observatoryId: string): Promise<WeatherState | null> {
+    return this.weather.get(observatoryId) ?? null;
   }
 
   async liveMissionId(observatoryId: string): Promise<string | null> {
