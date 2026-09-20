@@ -1736,7 +1736,7 @@ class LiveFrameHeader(BaseModel):
     encoding: LiveFrameEncoding
     width_px: int = Field(..., alias='widthPx', gt=0)
     height_px: int = Field(..., alias='heightPx', gt=0)
-    byte_length: int = Field(..., alias='byteLength', gt=0)
+    byte_length: int = Field(..., alias='byteLength', description='The exact size of the binary frame that follows. Four mebibytes is the\nceiling, and it is this contract that sets it rather than any one\ntransport: a header declaring more is refused before its pixels are\naccepted, and the bytes are never buffered.\n\nMeasured against SimCamera at 1920x1080, the shipped agent defaults of\na 1024px long edge at quality 70 produce about 165 KB; the largest\nmeasurement taken was 381 KB at 1280px and quality 82. DV-035\nre-measures both against the real ASI585MC at first light, so this\nleaves an order of magnitude of room above anything yet observed.\n', gt=0, le=4194304)
     exposure_milliseconds: float = Field(..., alias='exposureMilliseconds', gt=0.0)
     gain: int = Field(..., ge=0)
     stacked_frames: int | None = Field(None, alias='stackedFrames', description='Set when the frame is a live stack rather than a single sub-exposure.', gt=0)

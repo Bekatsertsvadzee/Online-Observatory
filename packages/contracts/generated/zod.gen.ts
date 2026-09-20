@@ -1581,7 +1581,7 @@ export const zLiveFrameHeader = z.strictObject({
     encoding: zLiveFrameEncoding,
     widthPx: z.int().gt(0),
     heightPx: z.int().gt(0),
-    byteLength: z.int().gt(0),
+    byteLength: z.int().gt(0).lte(4194304),
     exposureMilliseconds: z.number().gt(0),
     gain: z.int().gte(0),
     stackedFrames: z.int().gt(0).nullish(),
