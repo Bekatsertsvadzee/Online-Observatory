@@ -1,7 +1,7 @@
 # Darkview — system architecture
 
-Companion to `CLAUDE.md`, which governs. This describes *how* the system is put together;
-`CLAUDE.md` decides *what* it must be.
+Companion to `docs/ENGINEERING.md`, which governs. This describes *how* the system is put together;
+`docs/ENGINEERING.md` decides *what* it must be.
 
 ## 1. The shape
 

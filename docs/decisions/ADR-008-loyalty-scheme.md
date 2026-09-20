@@ -36,7 +36,7 @@ untrue.
 
 - **No file, function or fragment is copied** from the reference platform into this
   repository. Not adapted, not translated, not renamed.
-- **Supabase does not enter Darkview.** `CLAUDE.md` pins Phase 1 to PostgreSQL + Prisma
+- **Supabase does not enter Darkview.** `docs/ENGINEERING.md` pins Phase 1 to PostgreSQL + Prisma
   and forbids new services without measured need and maintainer approval. The Darkview
   implementation uses the existing Prisma schema and the existing realtime service.
 - **No WooCommerce or retail concepts.** Darkview sells Observation Slots. There is no

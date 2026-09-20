@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/mission/runner.py
+# hypothesis_version: 6.140.3
+
+[-90.0, 0.05, 24.0, 90.0, 120.0, 2000.0, 200, 'AGENT_MISSION_EVENT', 'autofocus', 'cancelled', 'detail', 'failureReason', 'focus finished: %s', 'messageId', 'mission %s -> %s', 'mission complete', 'missionId', 'mount parked (%s)', 'occurredAt', 'sentAt', 'state', 'type']

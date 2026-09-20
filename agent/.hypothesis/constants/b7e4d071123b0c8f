@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/command/validator.py
+# hypothesis_version: 6.140.3
+
+[0.0, 60.0, 400, 4096, 'ABORT', 'AGENT_COMMAND_ACK', 'ALTITUDE', 'COMMAND_ACCEPTED', 'COMMAND_DUPLICATE', 'COMMAND_REJECTED', 'GOTO', 'NUDGE', 'PARK', 'POSITIVE', 'commandId', 'detail', 'messageId', 'missionId', 'rejectionReason', 'sentAt', 'status', 'type', 'unknown']

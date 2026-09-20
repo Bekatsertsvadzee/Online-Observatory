@@ -23,7 +23,7 @@ deliberate: the agent re-validates everything the cloud sends it.
 
 ## Environment
 
-Python 3.12, per `CLAUDE.md`.
+Python 3.12, per `docs/ENGINEERING.md`.
 
 ```
 python3.12 -m venv agent/.venv

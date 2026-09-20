@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/safety/watchdog.py
+# hypothesis_version: 6.140.3
+
+[0.5, 2.0, 15.0, 60.0, 'DEVICE_FAULT', 'HEARTBEAT_LOST', 'LINK_DEAD', 'OPERATOR_ABORT', 'WATCHDOG_TRIGGERED', 'WEATHER_UNSAFE', 'darkview-watchdog', 'operator abort', 'park', 'stopCapture', 'watchdog: %s (%s)', 'weather unsafe']

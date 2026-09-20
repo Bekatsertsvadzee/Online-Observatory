@@ -22,7 +22,7 @@ observatory socket is long-lived. A serverless function cannot hold it."
 
 So the orchestrator cannot send the command itself. Something has to carry it.
 
-`CLAUDE.md` narrows the field before it opens: no message queues and no extra
+`docs/ENGINEERING.md` narrows the field before it opens: no message queues and no extra
 services without a measured need and maintainer approval. There is no measured
 need for a broker to move a few commands per observing session.
 

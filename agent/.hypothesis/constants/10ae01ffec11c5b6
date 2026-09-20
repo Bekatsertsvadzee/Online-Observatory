@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/solve/astap.py
+# hypothesis_version: 6.140.3
+
+[b'\x00', b' ', -90.0, 0.0, 5.0, 10.0, 15.0, 90.0, 360.0, 1000.0, -200, 2880, 32768, "'", '-f', '-fov', '-r', '-ra', '-spd', '.ini', '1', '16', '2', '32768', '=', '>i2', 'BAYERPAT', 'BITPIX', 'BSCALE', 'BZERO', 'CRVAL1', 'CRVAL2', 'DATE-OBS', 'END', 'EXPTIME', 'GAIN', 'NAXIS', 'NAXIS1', 'NAXIS2', 'PLTSOLVD', 'SIMPLE', 'T', 'ascii', 'darkview-solve-', 'darkview.agent.astap', 'frame.fits', 'replace', 'utf-8']

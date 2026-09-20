@@ -1,6 +1,6 @@
 """DV-059 criterion 5 — cloud approval never lets the agent skip its own check.
 
-`CLAUDE.md`: "The cloud validates commands; the local agent validates them again.
+`docs/ENGINEERING.md`: "The cloud validates commands; the local agent validates them again.
 A cloud-approved command that fails local safety is refused."
 
 DV-059 gave the cloud the first of those two checks. The risk it introduces is

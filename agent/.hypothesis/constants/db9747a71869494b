@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/devices/zwoasi_binding.py
+# hypothesis_version: 6.140.3
+
+['ASI585MC', 'BGGR', 'BayerPattern', 'BitDepth', 'Exposure', 'GBRG', 'GRBG', 'Gain', 'IsColorCam', 'MaxHeight', 'MaxValue', 'MaxWidth', 'MinValue', 'Name', 'RGGB', 'close', 'exposure_state', 'open', 'read_data', 'start_exposure', 'stop_exposure', 'zwolib']

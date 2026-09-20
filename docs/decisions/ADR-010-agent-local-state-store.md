@@ -93,7 +93,7 @@ less: no schema, no append-only enforcement, no query for retention.
 ## Consequences
 
 - SQLite is in the Python standard library, so no dependency is added. It is a
-  file, not a process, so the rule in `CLAUDE.md` about not introducing extra
+  file, not a process, so the rule in `docs/ENGINEERING.md` about not introducing extra
   services is untouched.
 - The store is used from two threads — the watchdog records what it is about to
   do before it acts — so the connection is opened with `check_same_thread=False`

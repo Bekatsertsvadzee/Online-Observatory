@@ -5,7 +5,7 @@
 - **Decided by:** project maintainer
 - **Approved:** 2026-09-09
 - **Relates to:** `ADR-003` (Phase 1 scope boundary), `ADR-005` (installation site),
-  `CLAUDE.md` § Hardware safety
+  `docs/ENGINEERING.md` § Hardware safety
 - **Blocks:** any partner-facing onboarding, and the agent installer
 
 ## Context
@@ -24,7 +24,7 @@ carries exactly one credential: a device token the cloud issues, scopes to one
 observatory, and can revoke in a single row. A partner behind a domestic router
 needs no firewall change and no static address.
 
-**The mount interface is already network-shaped.** `CLAUDE.md` chose ASCOM Alpaca
+**The mount interface is already network-shaped.** `docs/ENGINEERING.md` chose ASCOM Alpaca
 over in-process COM so the mount would be "network-shaped, mockable and testable".
 The side effect is that any ASCOM-capable mount can speak to the agent.
 
@@ -38,14 +38,14 @@ What does not exist is the answer to the question this feature actually asks.
 
 ## The conflict this record exists to resolve
 
-`CLAUDE.md` § Hardware safety says:
+`docs/ENGINEERING.md` § Hardware safety says:
 
 > No autonomous or background session may command the real mount or camera.
 > Real-hardware mode requires an explicit, attended operator action outside the
 > normal test workflow.
 
 A partner on holiday is unattended. That is the point of the feature, and it
-contradicts the rule the entire hardware-safety posture rests on. `CLAUDE.md`
+contradicts the rule the entire hardware-safety posture rests on. `docs/ENGINEERING.md`
 forbids resolving a conflict like this silently, and requires a dated record
 before it may be outranked.
 
@@ -141,7 +141,7 @@ breaking, and "the customer agreed" is not a safety mechanism.
 
 ## Consequences
 
-- **`CLAUDE.md` § Hardware safety is amended**, in the commit that approved this
+- **`docs/ENGINEERING.md` § Hardware safety is amended**, in the commit that approved this
   record. The replacement is quoted at the end, so the change to a controlling
   document and the reasoning for it are one artefact rather than two.
 - **The first-party hardware qualification comes first.** A stranger's telescope
@@ -194,7 +194,7 @@ everything".
 
 ## The amendment this record made
 
-`CLAUDE.md` § Hardware safety replaced:
+`docs/ENGINEERING.md` § Hardware safety replaced:
 
 > - No autonomous or background session may command the real mount or camera.
 > - Real-hardware mode requires an explicit, attended operator action outside the

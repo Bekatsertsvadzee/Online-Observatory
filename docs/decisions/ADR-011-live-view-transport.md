@@ -38,7 +38,7 @@ client may not send a `CommandEnvelope`. **The contract does not carry pixels on
 client channel.** That is not an omission to be filled in; it is why
 `MissionStreamInfo` exists at all.
 
-`CLAUDE.md` narrows what is left: no Redis, no message queues, no extra services
+`docs/ENGINEERING.md` narrows what is left: no Redis, no message queues, no extra services
 without a measured need and maintainer approval. The observatory accepts no inbound
 connection from the internet or the LAN. And DV-060 already fixed that the realtime
 service is served from the same host as the web app, on a path.
@@ -112,7 +112,7 @@ deliberately draws.
 **A `bytea` column.** Rejected. Continuous write churn, WAL amplification and vacuum
 pressure, for data whose useful life is shorter than the transaction that stores it.
 
-**Redis or a broker.** Excluded by `CLAUDE.md` absent a measured need. The need here
+**Redis or a broker.** Excluded by `docs/ENGINEERING.md` absent a measured need. The need here
 is to hold one image.
 
 **WebRTC.** The contract already answers this: "Phase 1 delivers MJPEG. WebRTC is a

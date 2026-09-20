@@ -7,7 +7,7 @@ export type AdmitResult =
 /**
  * Which observatory is connected, and the guarantee that it is only connected once.
  *
- * `CLAUDE.md`: one active mission at a time, one active session owner at a time.
+ * `docs/ENGINEERING.md`: one active mission at a time, one active session owner at a time.
  * That is only meaningful if one observatory means one link. Two agents claiming
  * the same observatory would each believe they held it, and commands would be
  * split between them.

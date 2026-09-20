@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/stream/mjpeg.py
+# hypothesis_version: 6.140.3
+
+[0.0, 1e-06, 0.2, 1.0, 1.4826, 2.0, 2.8, 255.0, 65535.0, 1024, 'AGENT_LIVE_FRAME', 'JPEG', 'byteLength', 'capturedAt', 'encoding', 'exposureMilliseconds', 'gain', 'heightPx', 'messageId', 'missionId', 'mode', 'sentAt', 'sequence', 'stackedFrames', 'type', 'widthPx']

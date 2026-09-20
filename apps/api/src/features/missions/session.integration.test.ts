@@ -750,7 +750,7 @@ describe("minting a command", () => {
 /**
  * DV-059 — the cloud's half of the two independent safety checks.
  *
- * `CLAUDE.md`: "The cloud validates commands; the local agent validates them
+ * `docs/ENGINEERING.md`: "The cloud validates commands; the local agent validates them
  * again." Until this landed only the second half existed, and the cloud minted
  * envelopes it had never examined. What is proved here is that a command the
  * envelope forbids never becomes a row and never reaches the relay — the agent

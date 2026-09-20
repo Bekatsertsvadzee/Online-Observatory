@@ -1,0 +1,4 @@
+# file: /Users/nika/Desktop/Darkview/part-1-platform/agent/darkview_agent/safety/envelope.py
+# hypothesis_version: 6.140.3
+
+[-90.0, 0.0, 15.0, 180.0, 360.0]
