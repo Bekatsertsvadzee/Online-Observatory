@@ -1,6 +1,6 @@
 # Darkview Platform — backlog
 
-57 issues. IDs are stable across both repositories and never reused. Gaps in the
+59 issues. IDs are stable across both repositories and never reused. Gaps in the
 numbering are intentional headroom.
 
 Detailed acceptance criteria and evidence requirements for each issue are held in the
@@ -135,6 +135,13 @@ A sixty-minute booking at 21:00 and a twenty-minute one at 21:20 both inserted.
 | DV-112 | Observation Pass: gift vouchers | M |
 | DV-114 | Backup, restore and disaster recovery | M |
 | DV-115 | Security hardening and abuse controls | M |
+| DV-116 | Bound WebSocket payloads on the agent link | S |
+| DV-117 | Rewrite `docs/security.md` for the current architecture | S |
+
+DV-116 and DV-117 were raised by an external repository audit on 2026-09-20, after
+DV-115 had already shipped. DV-116 is a defect: the observatory link accepts a
+100 MiB message and buffers it before any check runs. DV-117 is the security document
+still describing the pre-realtime architecture.
 
 ## Partner observatories (ADR-013, APPROVED)
 
