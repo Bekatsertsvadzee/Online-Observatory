@@ -12,7 +12,7 @@ import { AgentRelay } from "@/link/agent-relay";
 import { CommandListener } from "@/link/command-listener";
 import { createPrismaStore } from "@/link/prisma-store";
 import { AgentLinkRegistry } from "@/link/registry";
-import { HEARTBEAT_INTERVAL_SECONDS } from "@/link/protocol";
+import { HEARTBEAT_INTERVAL_SECONDS, MAX_BINARY_BYTES } from "@/link/protocol";
 import type { ObservatoryRecord } from "@/link/store";
 import {
   getStorageConfiguration,
@@ -139,7 +139,11 @@ export function createRealtimeServer(
         else response.end();
       });
   });
-  const sockets = new WebSocketServer({ noServer: true });
+  // `maxPayload` is the only thing standing between a device token and a 100 MiB
+  // allocation: `ws` buffers a whole message before any handler sees it, so every
+  // check this service makes -- the contract's `byteLength`, the text bound, the
+  // mission ownership test -- runs on bytes it has already taken. See DV-116.
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_BINARY_BYTES });
 
   httpServer.on("upgrade", (request, socket, head) => {
     void (async () => {

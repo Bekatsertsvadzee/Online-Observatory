@@ -2211,6 +2211,19 @@ export type LiveFrameHeader = {
     encoding: LiveFrameEncoding;
     widthPx: number;
     heightPx: number;
+    /**
+     * The exact size of the binary frame that follows. Four mebibytes is the
+     * ceiling, and it is this contract that sets it rather than any one
+     * transport: a header declaring more is refused before its pixels are
+     * accepted, and the bytes are never buffered.
+     *
+     * Measured against SimCamera at 1920x1080, the shipped agent defaults of
+     * a 1024px long edge at quality 70 produce about 165 KB; the largest
+     * measurement taken was 381 KB at 1280px and quality 82. DV-035
+     * re-measures both against the real ASI585MC at first light, so this
+     * leaves an order of magnitude of room above anything yet observed.
+     *
+     */
     byteLength: number;
     exposureMilliseconds: number;
     gain: number;

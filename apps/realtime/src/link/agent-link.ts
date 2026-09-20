@@ -143,6 +143,12 @@ export class AgentLink {
         return;
       }
 
+      // Any pending header is dropped with the rejected message. A refused frame
+      // is most often a refused AGENT_LIVE_FRAME -- an oversized `byteLength` is
+      // exactly that -- and leaving an earlier header pending would pair it with
+      // whichever pixels arrive next, serving one frame's bytes as another's.
+      this.awaitingPixels = null;
+
       // Once online, malformed input is answered and survived. It never reaches
       // storage and never affects another observatory's link.
       this.send(cloudError("BAD_REQUEST", `Message rejected: ${parsed.reason}.`));

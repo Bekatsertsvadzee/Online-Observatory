@@ -37,6 +37,34 @@ export const HEARTBEAT_INTERVAL_SECONDS = 5;
  */
 export const HEARTBEAT_GRACE_SECONDS = HEARTBEAT_INTERVAL_SECONDS * 3;
 
+/**
+ * The largest binary frame this service will take off the wire.
+ *
+ * `ws` defaults to 100 MiB, which is not a bound this link has any use for: the
+ * only binary message it carries is one live-view frame, and `contracts/openapi.yaml`
+ * caps `AgentLiveFrame.byteLength` at exactly this. The contract is what decides the
+ * size; this is the transport refusing to buffer anything the contract would reject
+ * anyway.
+ *
+ * It applies per connection, so it also bounds a text frame -- `ws` has one limit,
+ * not one per opcode. `MAX_TEXT_BYTES` below is the real limit for JSON; this is the
+ * outer wall that stops a socket allocating 100 MiB before that check can run.
+ */
+export const MAX_BINARY_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The largest JSON message either side of this service will parse.
+ *
+ * Every message in the contract is a few hundred bytes; the largest, an
+ * AGENT_CAPTURE_READY carrying every asset kind, is under two. Sixty-four
+ * kibibytes is far above that and far below anything worth parsing by accident.
+ *
+ * Enforced as a parse failure rather than as its own path, so an oversized frame is
+ * answered and survived exactly like any other malformed input -- and, before hello
+ * or before subscribe, closes the connection exactly like any other malformed input.
+ */
+export const MAX_TEXT_BYTES = 64 * 1024;
+
 export type ParsedMessage =
   { ok: true; message: AgentToCloudMessage } | { ok: false; reason: string };
 
@@ -48,6 +76,10 @@ export type ParsedMessage =
  * keeps serving every other observatory.
  */
 export function parseAgentMessage(raw: string): ParsedMessage {
+  if (Buffer.byteLength(raw, "utf8") > MAX_TEXT_BYTES) {
+    return { ok: false, reason: `over ${MAX_TEXT_BYTES} bytes` };
+  }
+
   let candidate: unknown;
   try {
     candidate = JSON.parse(raw);

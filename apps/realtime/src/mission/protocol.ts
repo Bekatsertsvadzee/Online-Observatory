@@ -20,6 +20,8 @@ import type {
 } from "@darkview/contracts";
 import { zMissionClientMessage } from "@darkview/contracts/zod";
 
+import { MAX_TEXT_BYTES } from "@/link/protocol";
+
 /**
  * How long a silent client stays subscribed.
  *
@@ -42,6 +44,12 @@ export type ParsedClientMessage =
  * every other subscriber on the mission is reading.
  */
 export function parseClientMessage(raw: string): ParsedClientMessage {
+  // The same bound the agent link parses under, for the same reason. A browser
+  // sends CLIENT_SUBSCRIBE and CLIENT_PING and nothing else; neither is close.
+  if (Buffer.byteLength(raw, "utf8") > MAX_TEXT_BYTES) {
+    return { ok: false, reason: `over ${MAX_TEXT_BYTES} bytes` };
+  }
+
   let candidate: unknown;
   try {
     candidate = JSON.parse(raw);
