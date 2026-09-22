@@ -167,6 +167,7 @@ mount reachable. What is missing is the qualification path, not the transport.
 | DV-123 | Agent installer and guided first-run setup, exercised against SimMount and SimCamera | L | no |
 | DV-124 | Qualification procedure run end to end on the first-party instrument | L | **yes -- DV-034 first** |
 | DV-125 | `CameraDriver` implementations beyond ZWO | L | **yes** |
+| DV-126 | The agent's unattended posture (ADR-024, PROPOSED): design first, then one implementation issue, on the simulator | L | no |
 
 DV-120 through DV-123 are buildable before any hardware exists. DV-124 is the gate:
 a stranger's telescope cannot be certified with a procedure Darkview has never run on
