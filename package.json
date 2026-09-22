@@ -31,7 +31,8 @@
     "restore": "node scripts/restore.mjs",
     "contracts:generate": "node scripts/contracts-generate.mjs",
     "contracts:check": "node scripts/contracts-check.mjs",
-    "postinstall": "npm run db:generate"
+    "postinstall": "npm run db:generate",
+    "storage:orphans": "npm run orphans --workspace @darkview/realtime --"
   },
   "devDependencies": {
     "eslint": "9.39.5",

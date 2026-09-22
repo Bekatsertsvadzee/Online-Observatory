@@ -6,7 +6,8 @@
   "exports": {
     "./config": "./config.ts",
     "./keys": "./keys.ts",
-    "./presign": "./presign.ts"
+    "./presign": "./presign.ts",
+    "./objects": "./objects.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

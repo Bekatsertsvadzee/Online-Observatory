@@ -13,6 +13,9 @@ import { PROTOCOL_VERSION } from "@/link/protocol";
 import type { ObservatoryRecord } from "@/link/store";
 import { RecordingBroadcast } from "@/mission/fake-broadcast";
 import { FAKE_STORAGE } from "@/link/fake-storage";
+import { sweepOrphans } from "@/ops/orphan-sweep";
+import { databaseDependencies } from "@/ops/orphan-sweep-database";
+import { captureObjectKey } from "@darkview/storage/keys";
 
 /**
  * Issues #25, #26 and #27 against a real PostgreSQL instance.
@@ -360,6 +363,76 @@ describe("the posture an agent reports", () => {
       select: { agentPosture: true, agentDisarmReason: true },
     });
     expect(row).toEqual({ agentPosture: "ATTENDED", agentDisarmReason: null });
+  });
+});
+
+/**
+ * #141. The orphan sweep's two questions of the real database: which keys a
+ * CaptureAsset names, and the audit row each deletion leaves.
+ */
+describe("the orphan sweep", () => {
+  it("keeps what a capture names, deletes the rest, and audits each deletion", async () => {
+    const commandId = randomUUID();
+    const kept = captureObjectKey({
+      observatoryId: observatory.id,
+      missionId,
+      commandId,
+      kind: "IMAGE",
+    });
+    const orphan = captureObjectKey({
+      observatoryId: observatory.id,
+      missionId,
+      commandId: randomUUID(),
+      kind: "IMAGE",
+    });
+
+    await database.capture.create({
+      data: {
+        id: randomUUID(),
+        userId: ownerId,
+        missionId,
+        targetId,
+        observatoryId: observatory.id,
+        telescopeId,
+        commandId,
+        capturedAt: NOW,
+        imagingProfile: "GLOBULAR_CLUSTER",
+        opticalConfig: "F10_NATIVE",
+        exposureMilliseconds: 4000,
+        gain: 250,
+        framesStacked: 40,
+        integrationSeconds: 160,
+        processingPreset: "NATURAL",
+        assets: { create: { kind: "IMAGE", storageKey: kept } },
+      },
+    });
+
+    const old = new Date(NOW.getTime() - 48 * 3_600_000);
+    const removed: string[] = [];
+    const report = await sweepOrphans(
+      {
+        ...databaseDependencies(database),
+        list: async function* () {
+          yield { key: kept, size: 10, lastModified: old };
+          yield { key: orphan, size: 20, lastModified: old };
+        },
+        remove: async (key) => {
+          removed.push(key);
+        },
+        now: NOW,
+        graceHours: 24,
+      },
+      { remove: true },
+    );
+
+    expect(report.referenced).toBe(1);
+    expect(removed).toEqual([orphan]);
+
+    const rows = await database.auditLog.findMany({
+      where: { action: "CAPTURE_OBJECT_DELETED" },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].metadata).toMatchObject({ key: orphan, bytes: 20, missionId });
   });
 });
 

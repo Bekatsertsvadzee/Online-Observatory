@@ -152,7 +152,10 @@ export type AuditAction =
   | "AGENT_HELLO_REFUSED"
   // ADR-024: the agent reported a different posture -- armed, disarmed, or back to
   // attended after a restart. Written on change only, never per heartbeat.
-  | "AGENT_POSTURE_CHANGED";
+  | "AGENT_POSTURE_CHANGED"
+  // MISSION (#141): the operator's orphan sweep deleted a capture object no row
+  // named. The detail carries the key, which names the mission.
+  | "CAPTURE_OBJECT_DELETED";
 
 export type AuditEntry = {
   category: AuditCategory;

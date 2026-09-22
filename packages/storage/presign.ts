@@ -33,7 +33,10 @@ import type { StorageConfiguration } from "./config.ts";
 export const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 export const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;
 
-function signerFor(configuration: StorageConfiguration) {
+export function signerFor(
+  configuration: StorageConfiguration,
+  { applyChecksum = false }: { applyChecksum?: boolean } = {},
+) {
   return new SignatureV4({
     service: "s3",
     region: configuration.S3_REGION,
@@ -46,7 +49,10 @@ function signerFor(configuration: StorageConfiguration) {
     // most AWS services and produces a signature S3 rejects for any key with a
     // character needing escape.
     uriEscapePath: false,
-    applyChecksum: false,
+    // Presigned URLs carry no payload hash. A request signed in its headers, which
+    // is what `objects.ts` sends, must: S3 refuses one without
+    // x-amz-content-sha256.
+    applyChecksum,
   });
 }
 
@@ -58,11 +64,12 @@ function signerFor(configuration: StorageConfiguration) {
  * signature -- so getting this wrong is a refused request rather than a subtle
  * one.
  */
-function requestFor(
+export function requestFor(
   configuration: StorageConfiguration,
-  method: "PUT" | "GET",
+  method: "PUT" | "GET" | "DELETE",
   key: string,
   extraHeaders: Record<string, string> = {},
+  query: Record<string, string> = {},
 ) {
   const endpoint = new URL(configuration.S3_ENDPOINT);
   const encodedKey = key.split("/").map(encodeURIComponent).join("/");
@@ -81,6 +88,7 @@ function requestFor(
     port: endpoint.port ? Number(endpoint.port) : undefined,
     method,
     path,
+    query,
     headers: {
       host: endpoint.port ? `${hostname}:${endpoint.port}` : hostname,
       ...extraHeaders,
@@ -88,7 +96,7 @@ function requestFor(
   });
 }
 
-function urlOf(signed: HttpRequest) {
+export function urlOf(signed: HttpRequest) {
   const query = Object.entries(signed.query ?? {})
     .flatMap(([name, value]) =>
       (Array.isArray(value) ? value : [value]).map(
