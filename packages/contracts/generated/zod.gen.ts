@@ -238,6 +238,37 @@ export const zTonightTargetList = z.strictObject({
 export const zObservatoryMode = z.enum(['SIMULATED', 'REAL']);
 
 /**
+ * Who the agent believes is at the instrument, decided by the agent alone (ADR-024).
+ * A process starts SIMULATED, or ATTENDED when it was started with the attended flag;
+ * it never starts UNATTENDED. UNATTENDED is armed by a local operator act from
+ * ATTENDED, for that process only, and the daylight override is refused in it. On
+ * real drivers arming is refused until a sky sensor is fitted. DISARMED is an
+ * UNATTENDED agent that latched off on a fault, a suspension or a local disarm; it
+ * refuses every command but PARK and ABORT until an operator restarts it attended and
+ * arms it again. Read it beside ObservatoryMode, which says whether the drivers are
+ * real. The cloud may disarm an agent and never arm one.
+ *
+ */
+export const zAgentPosture = z.enum([
+    'SIMULATED',
+    'ATTENDED',
+    'UNATTENDED',
+    'DISARMED'
+]);
+
+/**
+ * Why an UNATTENDED agent moved to DISARMED (ADR-024 §4).
+ */
+export const zDisarmReason = z.enum([
+    'HARDWARE_FAULT',
+    'PARK_FAILED',
+    'LINK_LOST',
+    'APPROVAL_WITHDRAWN',
+    'LOCAL_DISARM',
+    'SKY_SENSOR_STALE'
+]);
+
+/**
  * ONLINE = agent connected and heartbeating. DEGRADED = connected but a heartbeat
  * or device check is late. OFFLINE = no agent connection.
  *
@@ -1147,7 +1178,8 @@ export const zCommandRejectionReason = z.enum([
     'DEVICE_UNAVAILABLE',
     'MODE_NOT_PERMITTED',
     'WEATHER_HOLD_ACTIVE',
-    'OBSERVATORY_OFFLINE'
+    'OBSERVATORY_OFFLINE',
+    'UNATTENDED_DISARMED'
 ]);
 
 export const zMissionCommandAccepted = z.strictObject({
@@ -1302,6 +1334,8 @@ export const zNetworkNode = z.strictObject({
     timezone: z.string(),
     safetyEnvelopeMeasured: z.boolean(),
     capabilities: z.array(z.string()),
+    agentPosture: zAgentPosture.nullable(),
+    agentDisarmReason: zDisarmReason.nullable(),
     approvedAt: z.iso.datetime().nullish(),
     createdAt: z.iso.datetime()
 });
@@ -1498,20 +1532,27 @@ export const zAgentHello = z.strictObject({
     observatoryId: z.uuid(),
     agentVersion: z.string(),
     mode: zObservatoryMode,
+    posture: zAgentPosture,
+    disarmReason: zDisarmReason.nullish(),
     bootedAt: z.iso.datetime(),
     safetyEnvelopeConfigured: z.boolean().optional(),
     resumeMissionId: z.uuid().nullish()
 });
 
 /**
- * Sent every 5 seconds. Its absence is what triggers the watchdog.
+ * Sent every 5 seconds. Its absence is what triggers the watchdog. Carries the
+ * agent's posture, so a disarm reaches the cloud within one interval rather than at
+ * the next reconnect (ADR-024 §5, correction of 2026-09-22).
+ *
  */
 export const zAgentHeartbeat = z.strictObject({
     type: z.enum(['AGENT_HEARTBEAT']),
     messageId: z.uuid(),
     sentAt: z.iso.datetime(),
     sequence: z.int().gte(0),
-    uptimeSeconds: z.int().gte(0)
+    uptimeSeconds: z.int().gte(0),
+    posture: zAgentPosture,
+    disarmReason: zDisarmReason.nullish()
 });
 
 /**
@@ -1760,6 +1801,21 @@ export const zCloudWeatherUpdate = z.strictObject({
     weather: zWeatherState
 });
 
+/**
+ * The observatory's network node approval status, as the cloud holds it (ADR-024
+ * §3). Sent on every reconnect and whenever the status changes. It can only ever
+ * make the agent safer: any status but APPROVED moves an UNATTENDED agent to
+ * DISARMED, and APPROVED never arms one. Arming is a local act at the observatory.
+ *
+ */
+export const zCloudOperatingUpdate = z.strictObject({
+    type: z.enum(['CLOUD_OPERATING_UPDATE']),
+    messageId: z.uuid(),
+    sentAt: z.iso.datetime(),
+    observatoryId: z.uuid(),
+    approvalStatus: zNetworkNodeApprovalStatus
+});
+
 export const zCloudError = z.strictObject({
     type: z.enum(['CLOUD_ERROR']),
     messageId: z.uuid(),
@@ -1810,6 +1866,7 @@ export const zCloudToAgentMessage = z.discriminatedUnion('type', [
     zCloudSafetyEnvelopeUpdate.extend({ type: z.literal('CLOUD_SAFETY_ENVELOPE_UPDATE') }),
     zCloudUploadGrant.extend({ type: z.literal('CLOUD_UPLOAD_GRANT') }),
     zCloudWeatherUpdate.extend({ type: z.literal('CLOUD_WEATHER_UPDATE') }),
+    zCloudOperatingUpdate.extend({ type: z.literal('CLOUD_OPERATING_UPDATE') }),
     zCloudError.extend({ type: z.literal('CLOUD_ERROR') })
 ]);
 

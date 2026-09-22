@@ -224,6 +224,7 @@ def build_agent(
     mount: SimMount | None = None,
     uploader=None,
     observing_seconds: float = 4.0,
+    sustained_link_loss_seconds: float | None = None,
 ) -> Agent:
     """Assemble one agent. Passing the same `state_path` twice is a restart.
 
@@ -273,6 +274,7 @@ def build_agent(
         now=wall,
         uploader=uploader,
         observing_seconds=observing_seconds,
+        sustained_link_loss_seconds=sustained_link_loss_seconds,
     )
     # Before the first pump, because the hello that pump sends is where a
     # recovered mission is reported.

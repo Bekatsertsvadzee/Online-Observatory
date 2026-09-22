@@ -20,6 +20,12 @@ import type { LocalWindow } from "@/lib/slots/availability";
  * names which one. `primaryTelescopeId` is set at registration and nulled only if
  * the telescope row is deleted; a node that has lost it has nothing to sell.
  *
+ * **And an agent that has not disarmed** (ADR-024 §5). A DISARMED agent refuses
+ * everything but Park until an operator re-arms it in person, so its hours cannot be
+ * delivered. Written as "not DISARMED" rather than a list of good postures: null is
+ * an agent that has never connected, which is every observatory before first light
+ * and is already governed by the rules above.
+ *
  * Every surface that answers "may this be booked?" reads this filter. Before
  * DV-066 the slot list and the reservation each resolved the observatory with
  * `findFirst` and each read the node separately, which is two chances to disagree
@@ -28,6 +34,11 @@ import type { LocalWindow } from "@/lib/slots/availability";
 const BOOKABLE = {
   approvalStatus: "APPROVED",
   primaryTelescopeId: { not: null },
+  // Null spelled out: SQL's <> is never true for NULL, and a bare "not DISARMED"
+  // would make every observatory whose agent has not yet connected unbookable.
+  observatory: {
+    OR: [{ agentPosture: null }, { agentPosture: { not: "DISARMED" } }],
+  },
 } satisfies Prisma.ObservatoryNetworkNodeWhereInput;
 
 export type BookableObservatory = {

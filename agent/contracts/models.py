@@ -300,6 +300,37 @@ class ObservatoryMode(StrEnum):
     real = 'REAL'
 
 
+class AgentPosture(StrEnum):
+    """
+    Who the agent believes is at the instrument, decided by the agent alone (ADR-024).
+    A process starts SIMULATED, or ATTENDED when it was started with the attended flag;
+    it never starts UNATTENDED. UNATTENDED is armed by a local operator act from
+    ATTENDED, for that process only, and the daylight override is refused in it. On
+    real drivers arming is refused until a sky sensor is fitted. DISARMED is an
+    UNATTENDED agent that latched off on a fault, a suspension or a local disarm; it
+    refuses every command but PARK and ABORT until an operator restarts it attended and
+    arms it again. Read it beside ObservatoryMode, which says whether the drivers are
+    real. The cloud may disarm an agent and never arm one.
+
+    """
+    simulated = 'SIMULATED'
+    attended = 'ATTENDED'
+    unattended = 'UNATTENDED'
+    disarmed = 'DISARMED'
+
+
+class DisarmReason(StrEnum):
+    """
+    Why an UNATTENDED agent moved to DISARMED (ADR-024 §4).
+    """
+    hardware_fault = 'HARDWARE_FAULT'
+    park_failed = 'PARK_FAILED'
+    link_lost = 'LINK_LOST'
+    approval_withdrawn = 'APPROVAL_WITHDRAWN'
+    local_disarm = 'LOCAL_DISARM'
+    sky_sensor_stale = 'SKY_SENSOR_STALE'
+
+
 class ObservatoryLinkState(StrEnum):
     """
     ONLINE = agent connected and heartbeating. DEGRADED = connected but a heartbeat
@@ -1301,6 +1332,7 @@ class CommandRejectionReason(StrEnum):
     mode_not_permitted = 'MODE_NOT_PERMITTED'
     weather_hold_active = 'WEATHER_HOLD_ACTIVE'
     observatory_offline = 'OBSERVATORY_OFFLINE'
+    unattended_disarmed = 'UNATTENDED_DISARMED'
 
 
 class MissionCommandAccepted(BaseModel):
@@ -1450,6 +1482,8 @@ class NetworkNode(BaseModel):
     timezone: str
     safety_envelope_measured: bool = Field(..., alias='safetyEnvelopeMeasured', description='Whether a measured altitude limit exists for this instrument. Reported\nrather than asserted: it is the condition approval checks for itself,\nbecause the database knows the answer and a checkbox would let an\nunmeasured telescope be approved by clicking.\n')
     capabilities: list[str] = Field(..., description='Populated at qualification. Empty at registration.')
+    agent_posture: AgentPosture | None = Field(..., alias='agentPosture', description="The posture the node's agent last reported (ADR-024). Null until an agent\nhas ever connected. Kept after the link drops, so a node that disarmed\nreads DISARMED until an agent reports otherwise.\n")
+    agent_disarm_reason: DisarmReason | None = Field(..., alias='agentDisarmReason', description='Set only while agentPosture is DISARMED.')
     approved_at: AwareDatetime | None = Field(None, alias='approvedAt')
     created_at: AwareDatetime = Field(..., alias='createdAt')
 
@@ -1639,6 +1673,8 @@ class AgentHello(BaseModel):
     observatory_id: UUID = Field(..., alias='observatoryId')
     agent_version: str = Field(..., alias='agentVersion')
     mode: ObservatoryMode
+    posture: AgentPosture
+    disarm_reason: DisarmReason | None = Field(None, alias='disarmReason', description='Set only while posture is DISARMED.')
     booted_at: AwareDatetime = Field(..., alias='bootedAt')
     safety_envelope_configured: bool | None = Field(None, alias='safetyEnvelopeConfigured', description='False while maxAltitudeDegrees is unmeasured. The cloud must not schedule a mission against an agent reporting false.')
     resume_mission_id: UUID | None = Field(None, alias='resumeMissionId', description='Set when the agent restarts holding a mission recovered from its local state store.')
@@ -1646,7 +1682,10 @@ class AgentHello(BaseModel):
 
 class AgentHeartbeat(BaseModel):
     """
-    Sent every 5 seconds. Its absence is what triggers the watchdog.
+    Sent every 5 seconds. Its absence is what triggers the watchdog. Carries the
+    agent's posture, so a disarm reaches the cloud within one interval rather than at
+    the next reconnect (ADR-024 §5, correction of 2026-09-22).
+
     """
     model_config = ConfigDict(
         extra='forbid',
@@ -1656,6 +1695,8 @@ class AgentHeartbeat(BaseModel):
     sent_at: AwareDatetime = Field(..., alias='sentAt')
     sequence: int = Field(..., ge=0)
     uptime_seconds: int = Field(..., alias='uptimeSeconds', ge=0)
+    posture: AgentPosture
+    disarm_reason: DisarmReason | None = Field(None, alias='disarmReason', description='Set only while posture is DISARMED.')
 
 
 class AgentCommandAck(BaseModel):
@@ -1931,6 +1972,24 @@ class CloudWeatherUpdate(BaseModel):
     weather: WeatherState
 
 
+class CloudOperatingUpdate(BaseModel):
+    """
+    The observatory's network node approval status, as the cloud holds it (ADR-024
+    §3). Sent on every reconnect and whenever the status changes. It can only ever
+    make the agent safer: any status but APPROVED moves an UNATTENDED agent to
+    DISARMED, and APPROVED never arms one. Arming is a local act at the observatory.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    type: Literal['CLOUD_OPERATING_UPDATE']
+    message_id: UUID = Field(..., alias='messageId')
+    sent_at: AwareDatetime = Field(..., alias='sentAt')
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    approval_status: NetworkNodeApprovalStatus = Field(..., alias='approvalStatus')
+
+
 class CloudError(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -1976,8 +2035,8 @@ class CloudUploadGrant(BaseModel):
     expires_at: AwareDatetime = Field(..., alias='expiresAt')
 
 
-class CloudToAgentMessage(RootModel[CloudWelcome | CloudCommand | CloudHeartbeatAck | CloudSessionUpdate | CloudSafetyEnvelopeUpdate | CloudUploadGrant | CloudWeatherUpdate | CloudError]):
-    root: CloudWelcome | CloudCommand | CloudHeartbeatAck | CloudSessionUpdate | CloudSafetyEnvelopeUpdate | CloudUploadGrant | CloudWeatherUpdate | CloudError = Field(..., description='Every message the cloud may send down the agent link.', discriminator='type')
+class CloudToAgentMessage(RootModel[CloudWelcome | CloudCommand | CloudHeartbeatAck | CloudSessionUpdate | CloudSafetyEnvelopeUpdate | CloudUploadGrant | CloudWeatherUpdate | CloudOperatingUpdate | CloudError]):
+    root: CloudWelcome | CloudCommand | CloudHeartbeatAck | CloudSessionUpdate | CloudSafetyEnvelopeUpdate | CloudUploadGrant | CloudWeatherUpdate | CloudOperatingUpdate | CloudError = Field(..., description='Every message the cloud may send down the agent link.', discriminator='type')
 
 
 class MissionStateUpdate(BaseModel):

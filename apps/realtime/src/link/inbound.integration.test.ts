@@ -66,6 +66,7 @@ function hello(overrides: Record<string, unknown> = {}) {
     observatoryId: observatory.id,
     agentVersion: "0.1.0",
     mode: "SIMULATED",
+    posture: "SIMULATED",
     bootedAt: NOW.toISOString(),
     safetyEnvelopeConfigured: true,
     resumeMissionId: null,
@@ -310,6 +311,58 @@ describe("an agent that restarted mid-mission", () => {
 });
 
 // #27 criterion 6
+/**
+ * ADR-024 §5. The posture reaches the Observatory row, which is what the booking
+ * filter and the operator's node view read, with one audit row per change.
+ */
+describe("the posture an agent reports", () => {
+  it("is written to the observatory, with the reason it disarmed", async () => {
+    const link = makeLink();
+    await link.receive(hello({ posture: "UNATTENDED" }));
+    await link.receive(
+      JSON.stringify({
+        type: "AGENT_HEARTBEAT",
+        messageId: randomUUID(),
+        sentAt: NOW.toISOString(),
+        sequence: 1,
+        uptimeSeconds: 5,
+        posture: "DISARMED",
+        disarmReason: "LINK_LOST",
+      }),
+    );
+
+    const row = await database.observatory.findUniqueOrThrow({
+      where: { id: observatory.id },
+      select: { agentPosture: true, agentDisarmReason: true },
+    });
+    expect(row).toEqual({ agentPosture: "DISARMED", agentDisarmReason: "LINK_LOST" });
+
+    const changes = await database.auditLog.findMany({
+      where: { action: "AGENT_POSTURE_CHANGED", entityId: observatory.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(changes.map((change) => (change.metadata as { to: string }).to)).toEqual([
+      "UNATTENDED",
+      "DISARMED",
+    ]);
+  });
+
+  it("clears the disarm reason when a restarted agent reports ATTENDED", async () => {
+    await database.observatory.update({
+      where: { id: observatory.id },
+      data: { agentPosture: "DISARMED", agentDisarmReason: "HARDWARE_FAULT" },
+    });
+
+    await makeLink().receive(hello({ posture: "ATTENDED" }));
+
+    const row = await database.observatory.findUniqueOrThrow({
+      where: { id: observatory.id },
+      select: { agentPosture: true, agentDisarmReason: true },
+    });
+    expect(row).toEqual({ agentPosture: "ATTENDED", agentDisarmReason: null });
+  });
+});
+
 describe("a command the agent refuses", () => {
   it("carries the refusal and its reason back onto the cloud's row", async () => {
     const session = await database.missionSession.create({

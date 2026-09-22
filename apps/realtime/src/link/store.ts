@@ -1,8 +1,11 @@
 import type { CaptureAssetKind, ObservatoryCommandStatus } from "@darkview/db/enums";
 
 import type {
+  AgentPosture,
   Capture,
+  DisarmReason,
   ImagingProfile,
+  NetworkNodeApprovalStatus,
   OpticalConfig,
   SafetyEnvelopeConfig,
   CommandAcceptanceStatus,
@@ -238,6 +241,26 @@ export interface LinkStore {
 
   markLinkUp(observatoryId: string): Promise<void>;
   markLinkLost(observatoryId: string, at: Date): Promise<void>;
+
+  /**
+   * Record the posture the agent reported (ADR-024), with an audit row.
+   *
+   * Called only when it differs from what this link last recorded, so a heartbeat
+   * every five seconds does not become a write every five seconds.
+   */
+  recordPosture(input: {
+    observatoryId: string;
+    posture: AgentPosture;
+    disarmReason: DisarmReason | null;
+  }): Promise<void>;
+
+  /**
+   * The observatory's network node approval status, for CLOUD_OPERATING_UPDATE.
+   *
+   * DRAFT when the observatory has no node: no node is no approval, and the agent
+   * reads anything but APPROVED as a reason to disarm.
+   */
+  loadApprovalStatus(observatoryId: string): Promise<NetworkNodeApprovalStatus>;
 
   /** One minted command, by its commandId. Null when it is gone or not ours. */
   loadCommand(commandId: string): Promise<RelayableCommand | null>;

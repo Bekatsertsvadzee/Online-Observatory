@@ -47,6 +47,7 @@ describe("generated validators enforce what the contract declares", () => {
       observatoryId: "22222222-2222-4222-8222-222222222222",
       agentVersion: "0.1.0",
       mode: "SIMULATED",
+      posture: "SIMULATED",
       bootedAt: "2026-12-15T19:00:00.000Z",
     };
 

@@ -74,6 +74,7 @@ function hello(overrides: Record<string, unknown> = {}) {
     observatoryId: observatory.id,
     agentVersion: "0.1.0",
     mode: "SIMULATED",
+    posture: "SIMULATED",
     bootedAt: new Date(now).toISOString(),
     safetyEnvelopeConfigured: false,
     resumeMissionId: null,

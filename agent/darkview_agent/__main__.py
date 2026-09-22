@@ -34,7 +34,7 @@ import sys
 import threading
 from types import FrameType
 
-from darkview_agent import runtime, setup
+from darkview_agent import arming, runtime, setup
 from darkview_agent.config import (
     AgentConfig,
     ConfigurationError,
@@ -126,6 +126,8 @@ def main(arguments: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if arguments is None else arguments
     if arguments[:1] == ["setup"]:
         return setup.main(arguments[1:])
+    if arguments[:1] in ([arming.ARM], [arming.DISARM]):
+        return arming.main(arguments[0], arguments[1:])
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"

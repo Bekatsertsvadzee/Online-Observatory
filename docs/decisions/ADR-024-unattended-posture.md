@@ -265,3 +265,24 @@ The maintainer approved this record with these answers to its open questions.
 If restarts or brief link outages prove frequent enough that every one costing a visit
 makes unattended operation useless, §2 and §4 are revisited — with evidence from the
 attended runs about what a restart does to the mount, not before.
+
+## Correction, 2026-09-22 — where the posture travels
+
+§5 and the implementation section said the posture rides on `AgentHello` and
+`ObservatoryTelemetry`. The agent never sends `ObservatoryTelemetry`: the
+`AGENT_STATE_DELTA` that carries it has a cloud-side handler and no sender, so a disarm
+would have reached the cloud only at the next reconnect.
+
+The maintainer chose, on 2026-09-22, to carry it on `AgentHello` and `AgentHeartbeat`
+instead. The heartbeat is sent every five seconds, so a disarm reaches the cloud within
+one interval, with no new message type. `ObservatoryTelemetry` is unchanged.
+
+Two smaller things the build settled:
+
+- **The operator sees the posture on `NetworkNode`**, as `agentPosture` and
+  `agentDisarmReason`. `OperatorObservatoryState` is assembled from telemetry the agent
+  does not yet send, so it could not have shown it.
+- **The simulator can be armed; real drivers cannot.** A process starts `ATTENDED`
+  whenever it was started with the attended flag, simulated or not, which is what lets
+  every rule above be tested without hardware. On real drivers arming is refused until a
+  sky sensor is fitted (§6).

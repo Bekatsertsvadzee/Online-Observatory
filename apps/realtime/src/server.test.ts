@@ -87,6 +87,7 @@ describe("what a heartbeat costs", () => {
       observatoryId: realObservatory.id,
       agentVersion: "0.1.0",
       mode: "REAL",
+      posture: "ATTENDED",
       bootedAt: new Date().toISOString(),
       safetyEnvelopeConfigured: false,
       resumeMissionId: null,
@@ -101,6 +102,7 @@ describe("what a heartbeat costs", () => {
       sentAt: new Date().toISOString(),
       sequence,
       uptimeSeconds: sequence * 5,
+      posture: "SIMULATED",
     });
   }
 
@@ -380,6 +382,7 @@ describe("a frame from the observatory to a customer", () => {
         observatoryId: realObservatory.id,
         agentVersion: "0.1.0",
         mode: "REAL",
+        posture: "ATTENDED",
         bootedAt: new Date().toISOString(),
         safetyEnvelopeConfigured: false,
         resumeMissionId: null,

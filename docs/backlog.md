@@ -869,6 +869,26 @@ in. The plausible answers are a single throttled latest-telemetry row, or the
 realtime service exposing it on its own HTTP surface the way it now serves the live
 view. **This is a maintainer decision and is not made here.**
 
+## What DV-126 built: the agent's unattended posture (ADR-024)
+
+The agent now knows whether anybody is at the instrument, and only ever moves towards
+less. A process starts `SIMULATED` or `ATTENDED`, never `UNATTENDED`. An operator
+arms it with `python -m darkview_agent arm-unattended --operator NAME` on the
+observatory machine, which appends a request naming the running process to the local
+store. A restart ends it. Unattended refuses the daylight override and nothing else.
+
+`DISARMED` latches on a device fault, a failed Park, `HARDWARE_ERROR`, a suspended or
+unreadable approval, a local `disarm`, or a dead link: past the sustained-loss limit
+when one is set, on the watchdog's own Park when none is. Nothing but a new arming from
+`ATTENDED` undoes it. The posture rides on the hello and every heartbeat; the cloud
+records it on the Observatory row, takes a disarmed node off sale, shows it on
+`NetworkNode`, and sends `CLOUD_OPERATING_UPDATE` on reconnect and whenever an operator
+approves or suspends a node.
+
+**Still not set:** the sustained-loss limit (DV-037) and the sky sensor with its
+staleness limit. Until both exist, arming is refused on real drivers and
+`SKY_SENSOR_STALE` has no writer.
+
 ## What DV-039 built, in two parts
 
 A weather hold now reaches the mission that is already running, **and** the

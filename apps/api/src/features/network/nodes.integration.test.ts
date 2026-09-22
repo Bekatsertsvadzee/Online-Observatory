@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { PrismaPg } from "@prisma/adapter-pg";
+import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PrismaClient } from "@darkview/db";
@@ -116,19 +117,45 @@ async function measureEnvelope(observatoryId: string, maxAltitude: number | null
   });
 }
 
+let listener: Client;
+let notifications: string[] = [];
+
+/**
+ * The OPERATING notifications this observatory was sent (ADR-024 §3).
+ *
+ * Heard on a real LISTEN connection, as the weather and envelope suites do: a line
+ * that says `pg_notify` proves nothing until another connection hears it. Given a
+ * moment to arrive, then read, so a test can also assert that none came.
+ */
+async function operatingNotificationsFor(observatoryId: string, settleMs = 300) {
+  await new Promise((resolve) => setTimeout(resolve, settleMs));
+  return notifications
+    .map((raw) => JSON.parse(raw) as { kind?: string; observatoryId?: string })
+    .filter((parsed) => parsed.kind === "OPERATING" && parsed.observatoryId === observatoryId);
+}
+
 beforeAll(async () => {
   database = new PrismaClient({
     adapter: new PrismaPg({ connectionString: CONNECTION_STRING }),
   });
   testDatabase.current = database;
   await database.$queryRaw`SELECT 1`;
+
+  listener = new Client({ connectionString: CONNECTION_STRING });
+  await listener.connect();
+  await listener.query("LISTEN darkview_agent");
+  listener.on("notification", (message) => {
+    if (message.payload) notifications.push(message.payload);
+  });
 });
 
 afterAll(async () => {
+  await listener.end();
   await database.$disconnect();
 });
 
 beforeEach(async () => {
+  notifications = [];
   await database.capture.deleteMany();
   await database.auditLog.deleteMany();
   await database.missionEvent.deleteMany();
@@ -395,6 +422,43 @@ describe("taking a qualification away", () => {
     if (!result.ok) return;
     expect(result.node.approvalStatus).toBe("SUSPENDED");
     expect(result.node.approvedAt).toBeNull();
+  });
+
+  it("tells the agent, so an unattended one disarms and parks (ADR-024 §3)", async () => {
+    const node = await approvedNode();
+    notifications = [];
+
+    await suspendNetworkNode({
+      nodeId: node.nodeId,
+      request: { reason: "owner reports a slipping clutch" },
+      operatorId,
+      now: NOW,
+    });
+
+    expect(await operatingNotificationsFor(node.observatoryId)).toEqual([
+      { kind: "OPERATING", observatoryId: node.observatoryId },
+    ]);
+  });
+
+  it("reports the posture the node's agent last gave, and why it disarmed", async () => {
+    const node = await approvedNode();
+    await database.observatory.update({
+      where: { id: node.observatoryId },
+      data: { agentPosture: "DISARMED", agentDisarmReason: "PARK_FAILED" },
+    });
+
+    const result = await suspendNetworkNode({
+      nodeId: node.nodeId,
+      request: { reason: "park failed overnight" },
+      operatorId,
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.node.agentPosture).toBe("DISARMED");
+    expect(result.node.agentDisarmReason).toBe("PARK_FAILED");
+    expect(() => zNetworkNode.parse(result.node)).not.toThrow();
   });
 
   it("suspends a node that was never approved, without complaint", async () => {

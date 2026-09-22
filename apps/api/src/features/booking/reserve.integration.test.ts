@@ -1297,6 +1297,50 @@ describe("listing bookable telescopes", () => {
   });
 });
 
+/**
+ * ADR-024 §5. A DISARMED agent refuses everything but Park until an operator
+ * re-arms it in person, so its hours cannot be delivered and are not sold.
+ */
+describe("an agent that has disarmed", () => {
+  async function reportPosture(posture: "ATTENDED" | "UNATTENDED" | "DISARMED" | null) {
+    await database.observatory.update({
+      where: { id: observatoryId },
+      data: {
+        agentPosture: posture,
+        agentDisarmReason: posture === "DISARMED" ? "HARDWARE_FAULT" : null,
+      },
+    });
+  }
+
+  it("takes the observatory off the list and refuses its slots", async () => {
+    await reportPosture("DISARMED");
+
+    expect((await listBookableObservatories()).items).toEqual([]);
+    expect(await listSlotsForDate(observatoryId, NIGHT, NOW)).toBeNull();
+
+    const result = await reserve({ slotStartAt: firstSlotStartAt() });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(404);
+  });
+
+  it("keeps selling an observatory whose agent is armed or attended", async () => {
+    for (const posture of ["UNATTENDED", "ATTENDED"] as const) {
+      await reportPosture(posture);
+      const list = await listBookableObservatories();
+      expect(list.items.map((item) => item.id)).toEqual([observatoryId]);
+    }
+  });
+
+  it("keeps selling one whose agent has never connected", async () => {
+    await reportPosture(null);
+
+    const result = await reserve({ slotStartAt: firstSlotStartAt() });
+
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe("retrying a booking", () => {
   /**
    * DV-055 acceptance criterion 5.

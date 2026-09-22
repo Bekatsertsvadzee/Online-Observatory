@@ -21,7 +21,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
-from contracts.models import ObservatoryMode
+from contracts.models import AgentPosture, DisarmReason, ObservatoryMode
 from darkview_agent.clock import Clock, SystemClock, wire_timestamp
 from darkview_agent.link.queue import OutboundQueue
 from darkview_agent.link.transport import Transport, TransportError
@@ -111,6 +111,8 @@ class LinkSession:
 
         self._safety_envelope_configured = False
         self._resume_mission_id: uuid.UUID | None = None
+        self._posture: AgentPosture = AgentPosture.simulated
+        self._disarm_reason: DisarmReason | None = None
         self._received: list[dict] = []
 
     # ------------------------------------------------------------------
@@ -172,6 +174,12 @@ class LinkSession:
 
     def set_resume_mission(self, mission_id: uuid.UUID | None) -> None:
         self._resume_mission_id = mission_id
+
+    def set_posture(self, posture: AgentPosture, disarm_reason: DisarmReason | None) -> None:
+        """Reported in the hello and every heartbeat, so a disarm reaches the cloud
+        within one interval rather than at the next reconnect (ADR-024 §5)."""
+        self._posture = posture
+        self._disarm_reason = disarm_reason
 
     def drop(self, reason: str) -> None:
         """Close the current connection and re-dial after the usual backoff.
@@ -300,6 +308,8 @@ class LinkSession:
             "observatoryId": str(self._observatory_id),
             "agentVersion": self._agent_version,
             "mode": self._mode.value,
+            "posture": self._posture.value,
+            "disarmReason": self._disarm_reason.value if self._disarm_reason else None,
             "bootedAt": wire_timestamp(self._booted_at),
             "safetyEnvelopeConfigured": self._safety_envelope_configured,
             "resumeMissionId": (
@@ -430,6 +440,8 @@ class LinkSession:
             "sentAt": wire_timestamp(),
             "sequence": self._heartbeat_sequence,
             "uptimeSeconds": int(now - self._booted_monotonic),
+            "posture": self._posture.value,
+            "disarmReason": self._disarm_reason.value if self._disarm_reason else None,
         }
         assert self._transport is not None
         self._transport.send(json.dumps(heartbeat, separators=(",", ":")))

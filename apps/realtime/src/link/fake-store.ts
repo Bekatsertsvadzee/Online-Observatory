@@ -3,10 +3,13 @@ import type { ObservatoryCommandStatus } from "@darkview/db/enums";
 import { randomUUID } from "node:crypto";
 
 import type {
+  AgentPosture,
   Capture,
+  DisarmReason,
   MissionEventSource,
   MissionFailureReason,
   MissionState,
+  NetworkNodeApprovalStatus,
   ObservatoryMode,
   SafetyEnvelopeConfig,
   WeatherState,
@@ -95,6 +98,12 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   readonly recorded: InboundMessageRecord[] = [];
   readonly linkUp: string[] = [];
   readonly linkLost: { observatoryId: string; at: Date }[] = [];
+  readonly postures: {
+    observatoryId: string;
+    posture: AgentPosture;
+    disarmReason: DisarmReason | null;
+  }[] = [];
+  private readonly approvals = new Map<string, NetworkNodeApprovalStatus>();
 
   readonly relayed = new Map<string, Date>();
   readonly missions = new Map<string, FakeMission>();
@@ -546,6 +555,26 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   async loadSafetyEnvelope(observatoryId: string): Promise<SafetyEnvelopeConfig | null> {
     this.envelopeReads.push(observatoryId);
     return this.envelopes.get(observatoryId) ?? null;
+  }
+
+  async recordPosture(input: {
+    observatoryId: string;
+    posture: AgentPosture;
+    disarmReason: DisarmReason | null;
+  }) {
+    this.postures.push(input);
+    this.audit("AGENT_LINK", "AGENT_POSTURE_CHANGED", {
+      entityId: input.observatoryId,
+      detail: { to: input.posture, disarmReason: input.disarmReason },
+    });
+  }
+
+  setApprovalStatus(observatoryId: string, status: NetworkNodeApprovalStatus) {
+    this.approvals.set(observatoryId, status);
+  }
+
+  async loadApprovalStatus(observatoryId: string): Promise<NetworkNodeApprovalStatus> {
+    return this.approvals.get(observatoryId) ?? "DRAFT";
   }
 
   setWeather(observatoryId: string, weather: WeatherState | null) {

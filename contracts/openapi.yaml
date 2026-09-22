@@ -2547,6 +2547,31 @@ components:
         only through an explicit, attended operator action.
       enum: [SIMULATED, REAL]
 
+    AgentPosture:
+      type: string
+      description: |
+        Who the agent believes is at the instrument, decided by the agent alone (ADR-024).
+        A process starts SIMULATED, or ATTENDED when it was started with the attended flag;
+        it never starts UNATTENDED. UNATTENDED is armed by a local operator act from
+        ATTENDED, for that process only, and the daylight override is refused in it. On
+        real drivers arming is refused until a sky sensor is fitted. DISARMED is an
+        UNATTENDED agent that latched off on a fault, a suspension or a local disarm; it
+        refuses every command but PARK and ABORT until an operator restarts it attended and
+        arms it again. Read it beside ObservatoryMode, which says whether the drivers are
+        real. The cloud may disarm an agent and never arm one.
+      enum: [SIMULATED, ATTENDED, UNATTENDED, DISARMED]
+
+    DisarmReason:
+      type: string
+      description: Why an UNATTENDED agent moved to DISARMED (ADR-024 §4).
+      enum:
+        - HARDWARE_FAULT
+        - PARK_FAILED
+        - LINK_LOST
+        - APPROVAL_WITHDRAWN
+        - LOCAL_DISARM
+        - SKY_SENSOR_STALE
+
     ObservatoryLinkState:
       type: string
       description: |
@@ -4350,6 +4375,7 @@ components:
         - MODE_NOT_PERMITTED
         - WEATHER_HOLD_ACTIVE
         - OBSERVATORY_OFFLINE
+        - UNATTENDED_DISARMED
 
     MissionCommandAccepted:
       type: object
@@ -4557,7 +4583,8 @@ components:
       additionalProperties: false
       required:
         [nodeId, observatoryId, ownerId, kind, approvalStatus, siteName, city,
-         countryCode, timezone, safetyEnvelopeMeasured, capabilities, createdAt]
+         countryCode, timezone, safetyEnvelopeMeasured, capabilities, agentPosture,
+         agentDisarmReason, createdAt]
       properties:
         nodeId:
           type: string
@@ -4594,6 +4621,19 @@ components:
           items:
             type: string
           description: Populated at qualification. Empty at registration.
+        agentPosture:
+          oneOf:
+            - $ref: "#/components/schemas/AgentPosture"
+            - type: "null"
+          description: |
+            The posture the node's agent last reported (ADR-024). Null until an agent
+            has ever connected. Kept after the link drops, so a node that disarmed
+            reads DISARMED until an agent reports otherwise.
+        agentDisarmReason:
+          oneOf:
+            - $ref: "#/components/schemas/DisarmReason"
+            - type: "null"
+          description: Set only while agentPosture is DISARMED.
         approvedAt:
           type: [string, "null"]
           format: date-time
@@ -4964,6 +5004,7 @@ components:
           observatoryId,
           agentVersion,
           mode,
+          posture,
           bootedAt,
         ]
       properties:
@@ -4985,6 +5026,13 @@ components:
           type: string
         mode:
           $ref: "#/components/schemas/ObservatoryMode"
+        posture:
+          $ref: "#/components/schemas/AgentPosture"
+        disarmReason:
+          oneOf:
+            - $ref: "#/components/schemas/DisarmReason"
+            - type: "null"
+          description: Set only while posture is DISARMED.
         bootedAt:
           type: string
           format: date-time
@@ -4998,9 +5046,12 @@ components:
 
     AgentHeartbeat:
       type: object
-      description: Sent every 5 seconds. Its absence is what triggers the watchdog.
+      description: |
+        Sent every 5 seconds. Its absence is what triggers the watchdog. Carries the
+        agent's posture, so a disarm reaches the cloud within one interval rather than at
+        the next reconnect (ADR-024 §5, correction of 2026-09-22).
       additionalProperties: false
-      required: [type, messageId, sentAt, sequence, uptimeSeconds]
+      required: [type, messageId, sentAt, sequence, uptimeSeconds, posture]
       properties:
         type:
           type: string
@@ -5017,6 +5068,13 @@ components:
         uptimeSeconds:
           type: integer
           minimum: 0
+        posture:
+          $ref: "#/components/schemas/AgentPosture"
+        disarmReason:
+          oneOf:
+            - $ref: "#/components/schemas/DisarmReason"
+            - type: "null"
+          description: Set only while posture is DISARMED.
 
     AgentCommandAck:
       type: object
@@ -5542,6 +5600,31 @@ components:
         weather:
           $ref: "#/components/schemas/WeatherState"
 
+    CloudOperatingUpdate:
+      type: object
+      description: |
+        The observatory's network node approval status, as the cloud holds it (ADR-024
+        §3). Sent on every reconnect and whenever the status changes. It can only ever
+        make the agent safer: any status but APPROVED moves an UNATTENDED agent to
+        DISARMED, and APPROVED never arms one. Arming is a local act at the observatory.
+      additionalProperties: false
+      required: [type, messageId, sentAt, observatoryId, approvalStatus]
+      properties:
+        type:
+          type: string
+          enum: [CLOUD_OPERATING_UPDATE]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        observatoryId:
+          type: string
+          format: uuid
+        approvalStatus:
+          $ref: "#/components/schemas/NetworkNodeApprovalStatus"
+
     CloudError:
       type: object
       additionalProperties: false
@@ -5650,6 +5733,7 @@ components:
         - $ref: "#/components/schemas/CloudSafetyEnvelopeUpdate"
         - $ref: "#/components/schemas/CloudUploadGrant"
         - $ref: "#/components/schemas/CloudWeatherUpdate"
+        - $ref: "#/components/schemas/CloudOperatingUpdate"
         - $ref: "#/components/schemas/CloudError"
       discriminator:
         propertyName: type
@@ -5661,6 +5745,7 @@ components:
           CLOUD_SAFETY_ENVELOPE_UPDATE: "#/components/schemas/CloudSafetyEnvelopeUpdate"
           CLOUD_UPLOAD_GRANT: "#/components/schemas/CloudUploadGrant"
           CLOUD_WEATHER_UPDATE: "#/components/schemas/CloudWeatherUpdate"
+          CLOUD_OPERATING_UPDATE: "#/components/schemas/CloudOperatingUpdate"
           CLOUD_ERROR: "#/components/schemas/CloudError"
 
     # ---------------------------------------------------------------------------

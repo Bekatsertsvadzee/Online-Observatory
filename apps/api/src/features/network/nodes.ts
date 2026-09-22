@@ -41,6 +41,8 @@ const NODE_COLUMNS = {
       city: true,
       countryCode: true,
       timezone: true,
+      agentPosture: true,
+      agentDisarmReason: true,
       safetyEnvelope: { select: { maxAltitudeDegrees: true } },
     },
   },
@@ -64,6 +66,8 @@ export function toContractNode(row: NodeRow): NetworkNode {
     // instrument until somebody measures where its optical train meets its mount.
     safetyEnvelopeMeasured: row.observatory.safetyEnvelope?.maxAltitudeDegrees != null,
     capabilities: row.capabilities,
+    agentPosture: row.observatory.agentPosture,
+    agentDisarmReason: row.observatory.agentDisarmReason,
     approvedAt: row.approvedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };

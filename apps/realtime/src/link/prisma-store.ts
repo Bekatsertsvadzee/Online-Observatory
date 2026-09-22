@@ -97,6 +97,44 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       });
     },
 
+    async recordPosture({ observatoryId, posture, disarmReason }): Promise<void> {
+      await database.$transaction(async (tx) => {
+        const previous = await tx.observatory.findUnique({
+          where: { id: observatoryId },
+          select: { agentPosture: true, agentDisarmReason: true },
+        });
+        await tx.observatory.update({
+          where: { id: observatoryId },
+          data: {
+            agentPosture: posture,
+            agentDisarmReason: posture === "DISARMED" ? disarmReason : null,
+          },
+        });
+        await recordAuditEvent(
+          {
+            category: "AGENT_LINK",
+            action: "AGENT_POSTURE_CHANGED",
+            entityType: "Observatory",
+            entityId: observatoryId,
+            detail: {
+              from: previous?.agentPosture ?? null,
+              to: posture,
+              disarmReason: posture === "DISARMED" ? disarmReason : null,
+            },
+          },
+          tx,
+        );
+      });
+    },
+
+    async loadApprovalStatus(observatoryId: string) {
+      const node = await database.observatoryNetworkNode.findUnique({
+        where: { observatoryId },
+        select: { approvalStatus: true },
+      });
+      return node?.approvalStatus ?? "DRAFT";
+    },
+
     async markLinkLost(observatoryId: string, at: Date): Promise<void> {
       await database.$transaction(async (tx) => {
         await tx.observatory.update({
