@@ -334,6 +334,56 @@ export const ObservatoryMode = { SIMULATED: 'SIMULATED', REAL: 'REAL' } as const
 export type ObservatoryMode = typeof ObservatoryMode[keyof typeof ObservatoryMode];
 
 /**
+ * Who the agent believes is at the instrument, decided by the agent alone (ADR-024).
+ * A process starts SIMULATED, or ATTENDED when it was started with the attended flag;
+ * it never starts UNATTENDED. UNATTENDED is armed by a local operator act from
+ * ATTENDED, for that process only, and the daylight override is refused in it. On
+ * real drivers arming is refused until a sky sensor is fitted. DISARMED is an
+ * UNATTENDED agent that latched off on a fault, a suspension or a local disarm; it
+ * refuses every command but PARK and ABORT until an operator restarts it attended and
+ * arms it again. Read it beside ObservatoryMode, which says whether the drivers are
+ * real. The cloud may disarm an agent and never arm one.
+ *
+ */
+export const AgentPosture = {
+    SIMULATED: 'SIMULATED',
+    ATTENDED: 'ATTENDED',
+    UNATTENDED: 'UNATTENDED',
+    DISARMED: 'DISARMED'
+} as const;
+
+/**
+ * Who the agent believes is at the instrument, decided by the agent alone (ADR-024).
+ * A process starts SIMULATED, or ATTENDED when it was started with the attended flag;
+ * it never starts UNATTENDED. UNATTENDED is armed by a local operator act from
+ * ATTENDED, for that process only, and the daylight override is refused in it. On
+ * real drivers arming is refused until a sky sensor is fitted. DISARMED is an
+ * UNATTENDED agent that latched off on a fault, a suspension or a local disarm; it
+ * refuses every command but PARK and ABORT until an operator restarts it attended and
+ * arms it again. Read it beside ObservatoryMode, which says whether the drivers are
+ * real. The cloud may disarm an agent and never arm one.
+ *
+ */
+export type AgentPosture = typeof AgentPosture[keyof typeof AgentPosture];
+
+/**
+ * Why an UNATTENDED agent moved to DISARMED (ADR-024 §4).
+ */
+export const DisarmReason = {
+    HARDWARE_FAULT: 'HARDWARE_FAULT',
+    PARK_FAILED: 'PARK_FAILED',
+    LINK_LOST: 'LINK_LOST',
+    APPROVAL_WITHDRAWN: 'APPROVAL_WITHDRAWN',
+    LOCAL_DISARM: 'LOCAL_DISARM',
+    SKY_SENSOR_STALE: 'SKY_SENSOR_STALE'
+} as const;
+
+/**
+ * Why an UNATTENDED agent moved to DISARMED (ADR-024 §4).
+ */
+export type DisarmReason = typeof DisarmReason[keyof typeof DisarmReason];
+
+/**
  * ONLINE = agent connected and heartbeating. DEGRADED = connected but a heartbeat
  * or device check is late. OFFLINE = no agent connection.
  *
@@ -1670,7 +1720,8 @@ export const CommandRejectionReason = {
     DEVICE_UNAVAILABLE: 'DEVICE_UNAVAILABLE',
     MODE_NOT_PERMITTED: 'MODE_NOT_PERMITTED',
     WEATHER_HOLD_ACTIVE: 'WEATHER_HOLD_ACTIVE',
-    OBSERVATORY_OFFLINE: 'OBSERVATORY_OFFLINE'
+    OBSERVATORY_OFFLINE: 'OBSERVATORY_OFFLINE',
+    UNATTENDED_DISARMED: 'UNATTENDED_DISARMED'
 } as const;
 
 /**
@@ -1866,6 +1917,17 @@ export type NetworkNode = {
      * Populated at qualification. Empty at registration.
      */
     capabilities: Array<string>;
+    /**
+     * The posture the node's agent last reported (ADR-024). Null until an agent
+     * has ever connected. Kept after the link drops, so a node that disarmed
+     * reads DISARMED until an agent reports otherwise.
+     *
+     */
+    agentPosture: AgentPosture | null;
+    /**
+     * Set only while agentPosture is DISARMED.
+     */
+    agentDisarmReason: DisarmReason | null;
     approvedAt?: string | null;
     createdAt: string;
 };
@@ -2108,6 +2170,11 @@ export type AgentHello = {
     observatoryId: string;
     agentVersion: string;
     mode: ObservatoryMode;
+    posture: AgentPosture;
+    /**
+     * Set only while posture is DISARMED.
+     */
+    disarmReason?: DisarmReason | null;
     bootedAt: string;
     /**
      * False while maxAltitudeDegrees is unmeasured. The cloud must not schedule a mission against an agent reporting false.
@@ -2120,7 +2187,10 @@ export type AgentHello = {
 };
 
 /**
- * Sent every 5 seconds. Its absence is what triggers the watchdog.
+ * Sent every 5 seconds. Its absence is what triggers the watchdog. Carries the
+ * agent's posture, so a disarm reaches the cloud within one interval rather than at
+ * the next reconnect (ADR-024 §5, correction of 2026-09-22).
+ *
  */
 export type AgentHeartbeat = {
     type: 'AGENT_HEARTBEAT';
@@ -2128,6 +2198,11 @@ export type AgentHeartbeat = {
     sentAt: string;
     sequence: number;
     uptimeSeconds: number;
+    posture: AgentPosture;
+    /**
+     * Set only while posture is DISARMED.
+     */
+    disarmReason?: DisarmReason | null;
 };
 
 /**
@@ -2446,6 +2521,21 @@ export type CloudWeatherUpdate = {
     weather: WeatherState;
 };
 
+/**
+ * The observatory's network node approval status, as the cloud holds it (ADR-024
+ * §3). Sent on every reconnect and whenever the status changes. It can only ever
+ * make the agent safer: any status but APPROVED moves an UNATTENDED agent to
+ * DISARMED, and APPROVED never arms one. Arming is a local act at the observatory.
+ *
+ */
+export type CloudOperatingUpdate = {
+    type: 'CLOUD_OPERATING_UPDATE';
+    messageId: string;
+    sentAt: string;
+    observatoryId: string;
+    approvalStatus: NetworkNodeApprovalStatus;
+};
+
 export type CloudError = {
     type: 'CLOUD_ERROR';
     messageId: string;
@@ -2525,6 +2615,8 @@ export type CloudToAgentMessage = ({
 } & CloudUploadGrant) | ({
     type: 'CLOUD_WEATHER_UPDATE';
 } & CloudWeatherUpdate) | ({
+    type: 'CLOUD_OPERATING_UPDATE';
+} & CloudOperatingUpdate) | ({
     type: 'CLOUD_ERROR';
 } & CloudError);
 

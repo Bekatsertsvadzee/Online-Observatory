@@ -5,6 +5,7 @@ import type {
   CaptureAssetKind,
   CloudCommand,
   CloudError,
+  CloudOperatingUpdate,
   CloudSafetyEnvelopeUpdate,
   CloudSessionUpdate,
   CloudToAgentMessage,
@@ -13,6 +14,7 @@ import type {
   CloudWelcome,
   CommandEnvelope,
   ErrorCode,
+  NetworkNodeApprovalStatus,
   SafetyEnvelopeConfig,
   WeatherState,
 } from "@darkview/contracts";
@@ -215,6 +217,22 @@ export function cloudWeatherUpdate(
   weather: WeatherState,
 ): CloudWeatherUpdate {
   return { type: "CLOUD_WEATHER_UPDATE", ...messageHeader(), observatoryId, weather };
+}
+
+/**
+ * The node's approval status, for the agent to disarm on (ADR-024 §3). Only ever
+ * makes the agent safer: anything but APPROVED disarms, and APPROVED arms nothing.
+ */
+export function cloudOperatingUpdate(
+  observatoryId: string,
+  approvalStatus: NetworkNodeApprovalStatus,
+): CloudOperatingUpdate {
+  return {
+    type: "CLOUD_OPERATING_UPDATE",
+    ...messageHeader(),
+    observatoryId,
+    approvalStatus,
+  };
 }
 
 export type Send = (message: CloudToAgentMessage) => void;

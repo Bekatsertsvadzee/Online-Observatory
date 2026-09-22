@@ -45,7 +45,10 @@ from contracts.models import (
     CommandAcceptanceStatus,
     CommandEnvelope,
     CommandRejectionReason,
+    DisarmReason,
     MissionFailureReason,
+    MissionState,
+    NetworkNodeApprovalStatus,
     SafetyEnvelopeConfig,
     WeatherState,
 )
@@ -71,8 +74,9 @@ from darkview_agent.mission.solver import PlateSolver, SimSolver
 from darkview_agent.runtime import FAULT_REASONS, Devices, faulted_device
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
 from darkview_agent.safety.envelope import SafetyEnvelope, normalise_azimuth
+from darkview_agent.safety.posture import PostureLatch, initial_posture
 from darkview_agent.safety.watchdog import Watchdog, WatchdogAction, WatchdogTrigger
-from darkview_agent.state.store import StateStore, StoredMission, StoredOwnership
+from darkview_agent.state.store import StateStore, StoredMission, StoredOwnership, StoredRun
 from darkview_agent.stream.mjpeg import LiveView, StreamSettings
 
 logger = logging.getLogger("darkview.agent.supervisor")
@@ -172,6 +176,7 @@ class Supervisor:
         now: Callable[[], datetime] | None = None,
         frames: list[tuple[str | None, Frame]] | None = None,
         live_view: LiveView | None = None,
+        sustained_link_loss_seconds: float | None = None,
     ) -> None:
         self._config = config
         self._devices = devices
@@ -218,6 +223,22 @@ class Supervisor:
         self._weather: WeatherState | None = None
         self._link.set_safety_envelope_configured(envelope.is_measured)
 
+        # Who the agent believes is at the instrument (ADR-024). A new run id per
+        # process is what makes an arming die with the process that received it.
+        self._run_id = uuid.uuid4()
+        self._started_at = self._now()
+        self._posture = PostureLatch(
+            initial_posture(config), real_drivers=not config.is_simulated
+        )
+        # Arm and disarm requests already in the file were written for earlier
+        # runs. Starting past them means a restart can never act on one.
+        self._posture_requests_seen = store.last_posture_request_id() if store else 0
+        # How long an unattended agent tolerates a dead link before disarming.
+        # None, which is every real deployment until DV-037 measures it, means
+        # the watchdog's own Park on a dead link disarms: the conservative end.
+        self._sustained_link_loss_seconds = sustained_link_loss_seconds
+        self._link.set_posture(self._posture.posture, None)
+
     # ------------------------------------------------------------------
     # Observable state
     # ------------------------------------------------------------------
@@ -255,6 +276,14 @@ class Supervisor:
         """The sky as the cloud last described it, or None if it never has."""
         return self._weather
 
+    @property
+    def posture(self) -> PostureLatch:
+        return self._posture
+
+    @property
+    def run_id(self) -> uuid.UUID:
+        return self._run_id
+
     # ------------------------------------------------------------------
     # Coming back
     # ------------------------------------------------------------------
@@ -286,6 +315,8 @@ class Supervisor:
         if self._store is None:
             return
 
+        # First, so the arming command line can see this run as soon as it exists.
+        self._save_run()
         now = self._now()
         self._store.prune(now)
         self._restore_ownership(now)
@@ -386,6 +417,8 @@ class Supervisor:
         for message in self._link.take_received():
             self._handle(message, at_time)
 
+        self._take_posture_requests()
+        self._check_sustained_link_loss()
         self._expire_owner(at_time)
 
         with self._watchdog.device_lock:
@@ -396,7 +429,15 @@ class Supervisor:
 
         # Outside the lock, deliberately. See `_outbox`.
         while self._outbox:
-            self._link.send(self._outbox.pop(0).to_message())
+            event = self._outbox.pop(0)
+            if event.state is MissionState.hardware_error:
+                # The runner's terminal path has already parked.
+                self._disarm(
+                    DisarmReason.hardware_fault,
+                    f"mission {event.mission_id} entered HARDWARE_ERROR",
+                    park=False,
+                )
+            self._link.send(event.to_message())
 
         if self._frames:
             mission_id, frame = self._frames[-1]
@@ -439,6 +480,8 @@ class Supervisor:
             self._handle_envelope_update(message)
         elif message_type == "CLOUD_WEATHER_UPDATE":
             self._handle_weather_update(message)
+        elif message_type == "CLOUD_OPERATING_UPDATE":
+            self._handle_operating_update(message)
         elif message_type == "CLOUD_UPLOAD_GRANT":
             self._handle_upload_grant(message)
         elif message_type == "CLOUD_ERROR":
@@ -534,7 +577,26 @@ class Supervisor:
                 self._runner.cancel(at_time, _failure_reason_for(action))
             elif action.stopped_capture:
                 self._runner.suspend_capture()
+            self._disarm_for(action)
         self._watchdog_actions_seen = len(actions)
+
+    def _disarm_for(self, action: WatchdogAction) -> None:
+        """The watchdog's findings that end unattended operation (ADR-024 §4).
+
+        The watchdog has already stopped capture and parked, so none of these
+        parks again. A brief outage is not here: the watchdog parks on a dead
+        link, and only a loss past the sustained limit disarms -- unless no limit
+        has been measured, in which case the Park on a dead link is the limit.
+        """
+        if action.park_failure is not None:
+            self._disarm(DisarmReason.park_failed, action.detail, park=False)
+        elif action.trigger is WatchdogTrigger.device_fault:
+            self._disarm(DisarmReason.hardware_fault, action.detail, park=False)
+        elif (
+            action.trigger is WatchdogTrigger.link_dead
+            and self._sustained_link_loss_seconds is None
+        ):
+            self._disarm(DisarmReason.link_lost, action.detail, park=False)
 
     def _expire_owner(self, at_time: datetime) -> None:
         """Drop an owner whose session has run out, without waiting to be told.
@@ -650,6 +712,41 @@ class Supervisor:
                 "WEATHER_HOLD_CLEARED",
                 detail=f"weather hold cleared by {source}",
                 context={"status": weather.status.value},
+            )
+
+    def _handle_operating_update(self, message: dict) -> None:
+        """Take the cloud's approval status, in the one direction it is trusted.
+
+        Anything but APPROVED disarms an unattended agent. APPROVED does nothing:
+        arming is a local act, and a cloud that could arm the agent would be a
+        cloud whose compromise became the mount's (ADR-024 §3).
+        """
+        observatory_id = _parse_uuid(message.get("observatoryId"))
+        if observatory_id is not None and observatory_id != self._config.observatory_id:
+            logger.warning(
+                "discarding a CLOUD_OPERATING_UPDATE addressed to observatory %s",
+                observatory_id,
+            )
+            return
+
+        try:
+            status = NetworkNodeApprovalStatus(message.get("approvalStatus"))
+        except ValueError:
+            # Unreadable is treated as withdrawn. The two ways to fail are staying
+            # armed on a status nobody could read, or disarming; only one of them
+            # leaves a telescope moving.
+            self._disarm(
+                DisarmReason.approval_withdrawn,
+                "an unreadable approval status arrived from the cloud",
+                park=True,
+            )
+            return
+
+        if status is not NetworkNodeApprovalStatus.approved:
+            self._disarm(
+                DisarmReason.approval_withdrawn,
+                f"the cloud reports this node {status.value}",
+                park=True,
             )
 
     def _handle_cloud_error(self, message: dict) -> None:
@@ -1285,6 +1382,110 @@ class Supervisor:
             )
         )
 
+    # ------------------------------------------------------------------
+    # Posture (ADR-024)
+    # ------------------------------------------------------------------
+
+    def _take_posture_requests(self) -> None:
+        """Act on what the operator wrote with `arm-unattended` or `disarm`."""
+        if self._store is None:
+            return
+
+        for request in self._store.posture_requests_after(self._posture_requests_seen):
+            self._posture_requests_seen = request.id
+            if request.run_id != self._run_id:
+                # Written for a process that no longer exists. An arming must
+                # never outlive the run an operator looked at.
+                self._audit_event(
+                    "POSTURE_REQUEST_IGNORED",
+                    detail=f"{request.action} by {request.operator} named another run",
+                    context={"runId": str(request.run_id)},
+                )
+                continue
+
+            if request.action == "DISARM":
+                if not self._disarm(
+                    DisarmReason.local_disarm,
+                    f"disarmed at the observatory by {request.operator}",
+                    park=True,
+                ):
+                    self._audit_event(
+                        "POSTURE_DISARM_NOT_NEEDED",
+                        detail=f"{request.operator} asked to disarm an agent that is "
+                        f"{self._posture.posture.value}",
+                    )
+                continue
+
+            refusal = self._posture.arm()
+            if refusal is not None:
+                logger.warning("arming refused: %s", refusal)
+                self._audit_event(
+                    "POSTURE_ARM_REFUSED",
+                    detail=f"{request.operator}: {refusal}",
+                    context={"operator": request.operator},
+                )
+                continue
+
+            self._validator.set_attended(False)
+            self._publish_posture()
+            logger.warning("armed for unattended operation by %s", request.operator)
+            self._audit_event(
+                "POSTURE_ARMED",
+                detail=f"armed for unattended operation by {request.operator}",
+                context={"operator": request.operator, "runId": str(self._run_id)},
+            )
+
+    def _check_sustained_link_loss(self) -> None:
+        limit = self._sustained_link_loss_seconds
+        if limit is None:
+            return
+        elapsed = self._watchdog.seconds_since_online()
+        if elapsed >= limit:
+            self._disarm(
+                DisarmReason.link_lost,
+                f"link lost for {elapsed:.0f}s (sustained limit {limit:.0f}s)",
+                park=True,
+            )
+
+    def _disarm(self, reason: DisarmReason, detail: str, *, park: bool) -> bool:
+        """Latch an unattended agent off. True if it was unattended until now.
+
+        Nothing reverses this but a new local arming, and arming is accepted only
+        from ATTENDED -- so in practice, an operator restarting the agent in person.
+        """
+        if not self._posture.disarm(reason):
+            return False
+
+        self._validator.set_disarmed(True)
+        self._validator.set_attended(False)
+        self._publish_posture()
+        logger.error("unattended operation disarmed (%s): %s", reason.value, detail)
+        self._audit_event(
+            "POSTURE_DISARMED",
+            detail=detail,
+            reason=reason.value,
+            context={"runId": str(self._run_id)},
+        )
+        if park:
+            self._watchdog.unattended_disarmed(detail)
+        return True
+
+    def _publish_posture(self) -> None:
+        self._link.set_posture(self._posture.posture, self._posture.disarm_reason)
+        self._save_run()
+
+    def _save_run(self) -> None:
+        if self._store is None:
+            return
+        self._store.save_run(
+            StoredRun(
+                run_id=self._run_id,
+                posture=self._posture.posture,
+                disarm_reason=self._posture.disarm_reason,
+                started_at=self._started_at,
+            )
+        )
+
     def _audit_event(self, kind: str, **fields) -> None:
         self.audit.record(AuditEvent(occurred_at=self._now(), kind=kind, **fields))
 
@@ -1322,6 +1523,7 @@ def build_supervisor(
     stream_settings: StreamSettings | None = None,
     uploader: Uploader | None = None,
     observing_seconds: float | None = None,
+    sustained_link_loss_seconds: float | None = None,
 ) -> Supervisor:
     """Assemble a supervisor from configuration. The only place the wiring lives.
 
@@ -1415,6 +1617,7 @@ def build_supervisor(
         now=now,
         frames=frames,
         live_view=live_view,
+        sustained_link_loss_seconds=sustained_link_loss_seconds,
     )
 
 
@@ -1423,7 +1626,7 @@ def _failure_reason_for(action: WatchdogAction) -> MissionFailureReason:
         return MissionFailureReason.agent_link_lost
     if action.trigger is WatchdogTrigger.weather_unsafe:
         return MissionFailureReason.weather_unsafe
-    if action.trigger is WatchdogTrigger.operator_abort:
+    if action.trigger in (WatchdogTrigger.operator_abort, WatchdogTrigger.unattended_disarmed):
         return MissionFailureReason.operator_abort
     if action.device is not None:
         return FAULT_REASONS[action.device]

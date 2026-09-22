@@ -53,6 +53,7 @@ class WatchdogTrigger(StrEnum):
     device_fault = "DEVICE_FAULT"
     operator_abort = "OPERATOR_ABORT"
     weather_unsafe = "WEATHER_UNSAFE"
+    unattended_disarmed = "UNATTENDED_DISARMED"
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,10 @@ class Watchdog:
 
     def weather_unsafe(self, detail: str = "weather unsafe") -> None:
         self._raise(WatchdogTrigger.weather_unsafe, detail)
+
+    def unattended_disarmed(self, detail: str) -> None:
+        """An unattended agent latched off (ADR-024): stop capture and Park."""
+        self._raise(WatchdogTrigger.unattended_disarmed, detail)
 
     def _raise(self, trigger: WatchdogTrigger, detail: str) -> None:
         with self._lock:

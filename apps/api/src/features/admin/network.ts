@@ -16,6 +16,7 @@ import { cancelMissionAsOperator } from "@/features/admin/missions";
 import { LIVE_MISSION_STATES } from "@/features/missions/session";
 import { toContractNode } from "@/features/network/nodes";
 import { getDatabase } from "@/lib/db/client";
+import { notifyAgent } from "@/lib/observatory/relay";
 
 /**
  * Qualifying a partner observatory, and un-qualifying it (ADR-013).
@@ -44,6 +45,8 @@ const NODE_COLUMNS = {
       city: true,
       countryCode: true,
       timezone: true,
+      agentPosture: true,
+      agentDisarmReason: true,
       safetyEnvelope: { select: { maxAltitudeDegrees: true } },
     },
   },
@@ -174,6 +177,10 @@ export async function approveNetworkNode(input: {
       tx,
     );
 
+    // The agent is told, and an approval arms nothing there: arming is a local act
+    // at the observatory (ADR-024 §3). It is sent so the agent's view is current.
+    await notifyAgent(tx, { kind: "OPERATING", observatoryId: node.observatoryId });
+
     return updated;
   });
 
@@ -253,6 +260,10 @@ export async function suspendNetworkNode(input: {
       },
       tx,
     );
+
+    // An unattended agent disarms and Parks on this, on its own, and stays
+    // disarmed if the link drops before the cancel below reaches it (ADR-024 §3).
+    await notifyAgent(tx, { kind: "OPERATING", observatoryId: node.observatoryId });
 
     return updated;
   });

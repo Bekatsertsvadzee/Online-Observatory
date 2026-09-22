@@ -45,6 +45,7 @@ function hello(overrides: Record<string, unknown> = {}) {
     observatoryId: observatory.id,
     agentVersion: "0.1.0",
     mode: "SIMULATED",
+    posture: "SIMULATED",
     bootedAt: new Date(now).toISOString(),
     safetyEnvelopeConfigured: false,
     resumeMissionId: null,
@@ -59,6 +60,7 @@ function heartbeat(messageId = randomUUID(), sequence = 1) {
     sentAt: new Date(now).toISOString(),
     sequence,
     uptimeSeconds: 60,
+    posture: "SIMULATED",
   });
 }
 
@@ -133,6 +135,7 @@ describe("malformed input", () => {
         sentAt: new Date().toISOString(),
         sequence: 1,
         uptimeSeconds: 1,
+        posture: "SIMULATED",
       }),
     ],
   ])("answers %s with CLOUD_ERROR and keeps serving", async (_label, raw) => {
@@ -176,6 +179,7 @@ describe("replay after an outage", () => {
         sentAt: occurredDuringOutage,
         sequence: 3,
         uptimeSeconds: 10,
+        posture: "SIMULATED",
       }),
     );
 
@@ -280,5 +284,70 @@ describe("one connection per observatory", () => {
     expect(registry.get(observatory.id)).toBeUndefined();
     expect(closedWith).toEqual(["heartbeat lost"]);
     expect(registry.admit(observatory.id, makeLink())).toEqual({ admitted: true });
+  });
+});
+
+/**
+ * ADR-024 §5. The agent reports its posture in the hello and every heartbeat, and
+ * the cloud records it on change, so a node that disarmed stops being bookable.
+ */
+describe("posture", () => {
+  function heartbeatReporting(posture: string, disarmReason: string | null = null) {
+    return JSON.stringify({
+      type: "AGENT_HEARTBEAT",
+      messageId: randomUUID(),
+      sentAt: new Date(now).toISOString(),
+      sequence: 1,
+      uptimeSeconds: 60,
+      posture,
+      disarmReason,
+    });
+  }
+
+  it("records the posture the hello reports", async () => {
+    const link = makeLink();
+    await link.receive(hello({ posture: "ATTENDED" }));
+
+    expect(store.postures).toEqual([
+      { observatoryId: observatory.id, posture: "ATTENDED", disarmReason: null },
+    ]);
+  });
+
+  it("records a disarm from a heartbeat, with its reason", async () => {
+    const link = makeLink();
+    await link.receive(hello({ posture: "UNATTENDED" }));
+    await link.receive(heartbeatReporting("DISARMED", "HARDWARE_FAULT"));
+
+    expect(store.postures.at(-1)).toEqual({
+      observatoryId: observatory.id,
+      posture: "DISARMED",
+      disarmReason: "HARDWARE_FAULT",
+    });
+  });
+
+  it("writes nothing for a heartbeat that repeats the posture", async () => {
+    const link = makeLink();
+    await link.receive(hello({ posture: "UNATTENDED" }));
+    await link.receive(heartbeatReporting("UNATTENDED"));
+    await link.receive(heartbeatReporting("UNATTENDED"));
+
+    expect(store.postures).toHaveLength(1);
+  });
+
+  it("refuses a heartbeat with no posture", async () => {
+    const link = makeLink();
+    await link.receive(hello());
+    await link.receive(
+      JSON.stringify({
+        type: "AGENT_HEARTBEAT",
+        messageId: randomUUID(),
+        sentAt: new Date(now).toISOString(),
+        sequence: 1,
+        uptimeSeconds: 60,
+      }),
+    );
+
+    expect(sent.at(-1)).toMatchObject({ type: "CLOUD_ERROR", code: "BAD_REQUEST" });
+    expect(store.postures).toHaveLength(1);
   });
 });

@@ -55,6 +55,12 @@ export type AgentNotification =
    */
   | { kind: "WEATHER"; observatoryId: string }
   /**
+   * The node's approval status changed (ADR-024 §3). Carries no status: the agent
+   * disarms on anything but APPROVED, so it is read from the row by the service that
+   * owns the socket, like the envelope and the weather.
+   */
+  | { kind: "OPERATING"; observatoryId: string }
+  /**
    * The device token was rotated or revoked (ADR-020). A link authenticated with
    * the old one is closed; a token is checked only at the handshake, so without
    * this a revoked agent would stay connected until it next dropped.

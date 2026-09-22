@@ -242,6 +242,24 @@ enum ObservatoryMode {
   REAL
 }
 
+/// Contract: AgentPosture (ADR-024). Reported by the agent; the cloud only records it.
+enum AgentPosture {
+  SIMULATED
+  ATTENDED
+  UNATTENDED
+  DISARMED
+}
+
+/// Contract: DisarmReason (ADR-024 §4).
+enum DisarmReason {
+  HARDWARE_FAULT
+  PARK_FAILED
+  LINK_LOST
+  APPROVAL_WITHDRAWN
+  LOCAL_DISARM
+  SKY_SENSOR_STALE
+}
+
 /// Contract: WeatherStatus.
 enum WeatherStatus {
   CLEAR
@@ -446,6 +464,12 @@ model Observatory {
   deviceTokenHash     String?                 @unique
   /// Set when the agent link drops or misses heartbeats past the threshold.
   linkLostAt          DateTime?
+  /// The posture the agent last reported, in its hello or a heartbeat (ADR-024).
+  /// Null until an agent has ever connected. Kept after the link drops: a node
+  /// that disarmed stays unbookable until an agent reports otherwise.
+  agentPosture        AgentPosture?
+  /// Why it disarmed. Set only while agentPosture is DISARMED.
+  agentDisarmReason   DisarmReason?
   isDemo              Boolean                 @default(false)
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt

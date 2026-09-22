@@ -149,7 +149,10 @@ export type AuditAction =
   // AGENT_LINK
   | "AGENT_LINK_UP"
   | "AGENT_LINK_LOST"
-  | "AGENT_HELLO_REFUSED";
+  | "AGENT_HELLO_REFUSED"
+  // ADR-024: the agent reported a different posture -- armed, disarmed, or back to
+  // attended after a restart. Written on change only, never per heartbeat.
+  | "AGENT_POSTURE_CHANGED";
 
 export type AuditEntry = {
   category: AuditCategory;

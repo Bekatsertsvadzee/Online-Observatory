@@ -1,6 +1,7 @@
 import type { AgentLinkRegistry } from "@/link/registry";
 import {
   cloudCommand,
+  cloudOperatingUpdate,
   cloudSafetyEnvelopeUpdate,
   cloudSessionUpdate,
   cloudWeatherUpdate,
@@ -30,6 +31,7 @@ export type NotificationPayload =
     }
   | { kind: "ENVELOPE"; observatoryId: string }
   | { kind: "WEATHER"; observatoryId: string }
+  | { kind: "OPERATING"; observatoryId: string }
   | { kind: "CREDENTIAL"; observatoryId: string };
 
 export type RelayOutcome = "SENT" | "NO_LINK" | "NOT_FOUND" | "MALFORMED";
@@ -71,6 +73,9 @@ export class AgentRelay {
     }
     if (notification?.kind === "WEATHER") {
       return this.relayWeather(notification.observatoryId);
+    }
+    if (notification?.kind === "OPERATING") {
+      return this.relayOperating(notification.observatoryId);
     }
     if (notification?.kind === "CREDENTIAL") {
       return this.closeForCredentialChange(notification.observatoryId);
@@ -183,6 +188,21 @@ export class AgentRelay {
   }
 
   /**
+   * Hand the agent the node's approval status (ADR-024 §3).
+   *
+   * Always sent, never NOT_FOUND: an observatory with no node is reported DRAFT,
+   * because no node is no approval. The agent can only be made safer by this -- any
+   * status but APPROVED disarms an unattended agent, and APPROVED arms nothing.
+   */
+  async relayOperating(observatoryId: string): Promise<RelayOutcome> {
+    const link = this.registry.get(observatoryId);
+    if (!link) return "NO_LINK";
+
+    const status = await this.store.loadApprovalStatus(observatoryId);
+    return link.dispatch(cloudOperatingUpdate(observatoryId, status)) ? "SENT" : "NO_LINK";
+  }
+
+  /**
    * Everything an agent needs after it has just come online.
    *
    * Run once, on the transition to ONLINE -- not on every message. It used to run
@@ -212,6 +232,11 @@ export class AgentRelay {
     // would take the next command it is sent, and the operator who called the
     // weather unsafe has no way of knowing it came back deaf to that.
     await this.relayWeather(observatoryId);
+
+    // Then whether it may still run unattended. An agent that was armed, lost its
+    // link and came back to a node suspended while it was away must hear so
+    // before it is handed an owner.
+    await this.relayOperating(observatoryId);
 
     const owner = await this.store.activeSession(observatoryId, now);
     if (owner !== null) {

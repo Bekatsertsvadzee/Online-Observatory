@@ -12,6 +12,7 @@ import * as db from "@darkview/db/enums";
  * cannot store, or the reverse, discovered at runtime instead of in CI.
  */
 const SHARED_ENUMS = [
+  "AgentPosture",
   "AuditCategory",
   "BookingLossCause",
   "BookingStatus",
@@ -19,6 +20,7 @@ const SHARED_ENUMS = [
   "CaptureVisibility",
   "CommandType",
   "Currency",
+  "DisarmReason",
   "ForecastSource",
   "ImagingProfile",
   "LoyaltyEntryKind",

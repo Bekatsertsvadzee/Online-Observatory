@@ -1,6 +1,8 @@
 import type {
+  AgentPosture,
   AgentToCloudMessage,
   CloudToAgentMessage,
+  DisarmReason,
   ObservatoryTelemetry,
 } from "@darkview/contracts";
 import type { CaptureAssetKind } from "@darkview/db/enums";
@@ -71,6 +73,11 @@ export class AgentLink {
    * produced it.
    */
   private telemetry: ObservatoryTelemetry | null = null;
+  /**
+   * The posture last recorded for this link (ADR-024), as `posture|reason`. The
+   * agent repeats it in every heartbeat; it is written only when it changes.
+   */
+  private recordedPosture: string | null = null;
   /**
    * The live-frame header whose pixels have not arrived yet.
    *
@@ -226,7 +233,13 @@ export class AgentLink {
         return;
 
       // AGENT_HEARTBEAT is liveness, and `lastActivityAt` above is what consumes
-      // it. AGENT_LIVE_FRAME never reaches here -- it is taken in `receive` before
+      // that. It also carries the posture, so a disarm reaches the cloud within one
+      // interval (ADR-024 §5).
+      case "AGENT_HEARTBEAT":
+        await this.applyPosture(message.posture, message.disarmReason ?? null);
+        return;
+
+      // AGENT_LIVE_FRAME never reaches here -- it is taken in `receive` before
       // the record step, because its pixels are a separate frame on the wire.
       // AGENT_ERROR is diagnostic and is recorded; DV-063 gives it a reader.
       default:
@@ -587,6 +600,20 @@ export class AgentLink {
    * The message never distinguishes "not yours" from "does not exist", for the
    * same reason `startMissionSession` returns 404 to a stranger probing ids.
    */
+  private async applyPosture(
+    posture: AgentPosture,
+    disarmReason: DisarmReason | null,
+  ): Promise<void> {
+    const key = `${posture}|${disarmReason ?? ""}`;
+    if (key === this.recordedPosture) return;
+    this.recordedPosture = key;
+    await this.store.recordPosture({
+      observatoryId: this.observatory.id,
+      posture,
+      disarmReason,
+    });
+  }
+
   private refuse(detail: string): void {
     this.send(cloudError("FORBIDDEN", detail));
   }
@@ -618,6 +645,7 @@ export class AgentLink {
     await this.record(message);
     this.state = "ONLINE";
     await this.store.markLinkUp(this.observatory.id);
+    await this.applyPosture(message.posture, message.disarmReason ?? null);
 
     // resumeMissionId is the agent telling us what it recovered from its local
     // state store (DV-027). It has already parked the mount, because it lost the

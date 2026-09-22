@@ -54,6 +54,7 @@ async function connect(record: ObservatoryRecord): Promise<AgentLink> {
       observatoryId: record.id,
       agentVersion: "0.1.0",
       mode: "SIMULATED",
+      posture: "SIMULATED",
       bootedAt: NOW.toISOString(),
       safetyEnvelopeConfigured: false,
       resumeMissionId: null,

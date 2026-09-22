@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from contracts.models import SafetyEnvelopeConfig, WeatherState
+from contracts.models import AgentPosture, DisarmReason, SafetyEnvelopeConfig, WeatherState
 from darkview_agent.command.audit import AuditEvent
 
 logger = logging.getLogger("darkview.agent.state")
@@ -90,12 +90,31 @@ CREATE TABLE IF NOT EXISTS agent_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Arm and disarm requests from the operator's command line (ADR-024). The file is
+-- the channel: the observatory accepts no inbound connection, not even from its
+-- own machine. Append-only for the audit log's reason -- who armed a telescope
+-- nobody was watching is not something anyone may revise afterwards.
+CREATE TABLE IF NOT EXISTS posture_request (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    requested_at TEXT NOT NULL,
+    run_id       TEXT NOT NULL,
+    action       TEXT NOT NULL CHECK (action IN ('ARM', 'DISARM')),
+    operator     TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS posture_request_is_append_only
+BEFORE UPDATE ON posture_request
+BEGIN
+    SELECT RAISE(ABORT, 'posture requests are append-only');
+END;
 """
 
 OWNERSHIP_KEY = "ownership"
 MISSION_KEY = "mission"
 ENVELOPE_KEY = "safety_envelope"
 WEATHER_KEY = "weather"
+RUN_KEY = "run"
 
 
 @dataclass(frozen=True)
@@ -126,10 +145,44 @@ class StoredMission:
     recorded_at: datetime
 
 
+@dataclass(frozen=True)
+class StoredRun:
+    """The running agent process, as the arming command line needs to see it.
+
+    Written by the agent, read by `arm-unattended` and `disarm`. An arming names a
+    run id, and a restarted agent has a new one, so an arming can never outlive
+    the process it was made for.
+    """
+
+    run_id: uuid.UUID
+    posture: AgentPosture
+    disarm_reason: DisarmReason | None
+    started_at: datetime
+
+
+@dataclass(frozen=True)
+class PostureRequest:
+    """One ARM or DISARM, as the operator wrote it."""
+
+    id: int
+    requested_at: datetime
+    run_id: uuid.UUID | None
+    action: str
+    operator: str
+
+
 class StateStore:
     """The agent's durable memory. One SQLite file, opened for the process."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, maintain: bool = True) -> None:
+        """Open the file. `maintain=False` is for a second process on a running agent.
+
+        The start-up maintenance forgets commands decided but never carried out,
+        which is right for the process that is starting and wrong for anybody
+        else: run beside a live agent, it would delete the row of a command that
+        agent is carrying out at that moment. The arming command line opens with
+        `maintain=False`.
+        """
         self._path = str(path)
         # check_same_thread=False with an explicit lock: the watchdog thread
         # audits what it is about to do, from a thread that did not open this.
@@ -142,8 +195,9 @@ class StateStore:
             self._connection.execute("PRAGMA synchronous=FULL")
             self._connection.execute("PRAGMA foreign_keys=ON")
             self._connection.executescript(SCHEMA)
-            self._add_missing_columns()
-            self._forget_unexecuted_commands()
+            if maintain:
+                self._add_missing_columns()
+                self._forget_unexecuted_commands()
             self._connection.commit()
 
     def _add_missing_columns(self) -> None:
@@ -405,6 +459,68 @@ class StateStore:
             return None
 
     # ------------------------------------------------------------------
+    # Posture (ADR-024)
+    # ------------------------------------------------------------------
+
+    def save_run(self, run: StoredRun) -> None:
+        self._put(
+            RUN_KEY,
+            {
+                "runId": str(run.run_id),
+                "posture": run.posture.value,
+                "disarmReason": run.disarm_reason.value if run.disarm_reason else None,
+                "startedAt": _iso(run.started_at),
+            },
+        )
+
+    def load_run(self) -> StoredRun | None:
+        stored = self._get(RUN_KEY)
+        if stored is None:
+            return None
+        try:
+            started_at = _parse(stored["startedAt"])
+            assert started_at is not None
+            reason = stored.get("disarmReason")
+            return StoredRun(
+                run_id=uuid.UUID(stored["runId"]),
+                posture=AgentPosture(stored["posture"]),
+                disarm_reason=DisarmReason(reason) if reason else None,
+                started_at=started_at,
+            )
+        except (AssertionError, KeyError, TypeError, ValueError):
+            # Only the command line reads this, and an unreadable run is a run it
+            # cannot arm. Nothing is discarded: the agent rewrites it on its next
+            # posture change, and a fabricated one could only be wrong.
+            logger.error("the stored run is unreadable")
+            return None
+
+    def append_posture_request(
+        self, run_id: uuid.UUID, action: str, operator: str, at: datetime
+    ) -> None:
+        with self._lock:
+            self._connection.execute(
+                "INSERT INTO posture_request (requested_at, run_id, action, operator) "
+                "VALUES (?, ?, ?, ?)",
+                (_iso(at), str(run_id), action, operator),
+            )
+            self._connection.commit()
+
+    def posture_requests_after(self, last_id: int) -> list[PostureRequest]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM posture_request WHERE id > ? ORDER BY id", (last_id,)
+            ).fetchall()
+        return [_to_posture_request(row) for row in rows]
+
+    def last_posture_request_id(self) -> int:
+        """Where a starting agent begins reading. Earlier rows were for earlier runs."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM posture_request"
+            ).fetchone()
+        return int(row[0])
+
+    # ------------------------------------------------------------------
     # Retention
     # ------------------------------------------------------------------
 
@@ -487,4 +603,20 @@ def _to_audit_event(row: sqlite3.Row) -> AuditEvent:
         reason=row["reason"],
         detail=row["detail"],
         context=json.loads(row["context"]),
+    )
+
+
+def _to_posture_request(row: sqlite3.Row) -> PostureRequest:
+    requested_at = _parse(row["requested_at"])
+    assert requested_at is not None
+    try:
+        run_id: uuid.UUID | None = uuid.UUID(row["run_id"])
+    except ValueError:
+        run_id = None
+    return PostureRequest(
+        id=int(row["id"]),
+        requested_at=requested_at,
+        run_id=run_id,
+        action=row["action"],
+        operator=row["operator"],
     )

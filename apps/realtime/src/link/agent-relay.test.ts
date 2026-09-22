@@ -109,6 +109,7 @@ async function connectAgent(): Promise<AgentLink> {
       observatoryId: observatory.id,
       agentVersion: "0.1.0",
       mode: "SIMULATED",
+      posture: "SIMULATED",
       bootedAt: NOW.toISOString(),
       safetyEnvelopeConfigured: false,
       resumeMissionId: null,
@@ -127,6 +128,14 @@ beforeEach(() => {
   relay = new AgentRelay(store, registry, () => NOW);
   sent = [];
 });
+
+/**
+ * What a sweep sent besides the approval status, which it sends every time
+ * (ADR-024 §3). The tests below are about commands and sessions.
+ */
+function besidesOperating(): CloudToAgentMessage[] {
+  return sent.filter((message) => message.type !== "CLOUD_OPERATING_UPDATE");
+}
 
 describe("relaying a command", () => {
   it("sends the envelope the orchestrator minted, unaltered", async () => {
@@ -315,7 +324,7 @@ describe("sweeping what the notification missed", () => {
     const sentCount = await relay.sweep(observatory.id);
 
     expect(sentCount).toBe(2);
-    expect(sent).toHaveLength(2);
+    expect(besidesOperating()).toHaveLength(2);
   });
 
   it("skips one that has already gone", async () => {
@@ -327,7 +336,7 @@ describe("sweeping what the notification missed", () => {
     sent.length = 0;
 
     expect(await relay.sweep(observatory.id)).toBe(0);
-    expect(sent).toHaveLength(0);
+    expect(besidesOperating()).toHaveLength(0);
   });
 
   it("skips an expired command rather than relaying a refusal", async () => {
@@ -339,7 +348,7 @@ describe("sweeping what the notification missed", () => {
     // The agent would refuse it as COMMAND_EXPIRED. Sending it would produce an
     // ack that reads like a fault when it is only the sweep being late.
     expect(await relay.sweep(observatory.id)).toBe(0);
-    expect(sent).toHaveLength(0);
+    expect(besidesOperating()).toHaveLength(0);
   });
 
   it("leaves everything pending when the agent is not there", async () => {
@@ -361,10 +370,11 @@ describe("sweeping what the notification missed", () => {
     // forgotten it and would refuse the command below with NO_ACTIVE_MISSION.
     // The order is the point: told who owns it, then given the command.
     expect(sent.map((message) => message.type)).toEqual([
+      "CLOUD_OPERATING_UPDATE",
       "CLOUD_SESSION_UPDATE",
       "CLOUD_COMMAND",
     ]);
-    expect(sent[0]).toMatchObject({ sessionId: SESSION_ID, userId: USER_ID });
+    expect(sent[1]).toMatchObject({ sessionId: SESSION_ID, userId: USER_ID });
   });
 
   it("says nothing about ownership when no session is live", async () => {
@@ -374,7 +384,7 @@ describe("sweeping what the notification missed", () => {
 
     // Not a revocation. The agent came back holding no owner, and there is
     // nothing to revoke.
-    expect(sent).toHaveLength(0);
+    expect(besidesOperating()).toHaveLength(0);
   });
 
   it("does not re-assert a session that has already lapsed", async () => {
@@ -386,7 +396,7 @@ describe("sweeping what the notification missed", () => {
 
     await relay.sweep(observatory.id);
 
-    expect(sent).toHaveLength(0);
+    expect(besidesOperating()).toHaveLength(0);
   });
 });
 
@@ -508,6 +518,7 @@ describe("relaying the safety envelope", () => {
     // Order matters: limits first, then who owns the mount, then the commands.
     expect(sent.map((message) => message.type)).toEqual([
       "CLOUD_SAFETY_ENVELOPE_UPDATE",
+      "CLOUD_OPERATING_UPDATE",
       "CLOUD_SESSION_UPDATE",
       "CLOUD_COMMAND",
     ]);
@@ -601,7 +612,53 @@ describe("relaying the weather", () => {
     expect(sent.map((message) => message.type)).toEqual([
       "CLOUD_SAFETY_ENVELOPE_UPDATE",
       "CLOUD_WEATHER_UPDATE",
+      "CLOUD_OPERATING_UPDATE",
       "CLOUD_SESSION_UPDATE",
     ]);
+  });
+});
+
+/**
+ * ADR-024 §3. The node's approval status reaches the agent, which disarms on
+ * anything but APPROVED and is never armed by it.
+ */
+describe("relaying the approval status", () => {
+  it("sends the stored status", async () => {
+    await connectAgent();
+    store.setApprovalStatus(observatory.id, "SUSPENDED");
+
+    expect(await relay.relayOperating(observatory.id)).toBe("SENT");
+    expect(sent.at(-1)).toMatchObject({
+      type: "CLOUD_OPERATING_UPDATE",
+      observatoryId: observatory.id,
+      approvalStatus: "SUSPENDED",
+    });
+  });
+
+  it("reports DRAFT for an observatory with no node, rather than sending nothing", async () => {
+    await connectAgent();
+
+    await relay.relayOperating(observatory.id);
+
+    expect(sent.at(-1)).toMatchObject({
+      type: "CLOUD_OPERATING_UPDATE",
+      approvalStatus: "DRAFT",
+    });
+  });
+
+  it("acts on an OPERATING notification, reading the row", async () => {
+    await connectAgent();
+    store.setApprovalStatus(observatory.id, "APPROVED");
+
+    const outcome = await relay.handle(
+      JSON.stringify({ kind: "OPERATING", observatoryId: observatory.id }),
+    );
+
+    expect(outcome).toBe("SENT");
+    expect(sent.at(-1)).toMatchObject({ approvalStatus: "APPROVED" });
+  });
+
+  it("does not send to an observatory with no link", async () => {
+    expect(await relay.relayOperating(observatory.id)).toBe("NO_LINK");
   });
 });

@@ -188,6 +188,9 @@ class CommandValidator:
         # the agent forgot across a restart would be a hold the observatory
         # stopped enforcing the moment it most needed to.
         self._weather_hold = False
+        # Whether an unattended agent has latched off (ADR-024). Set by the
+        # supervisor, never by a message: nothing from the cloud may clear it.
+        self._disarmed = False
 
     # ------------------------------------------------------------------
     # State the agent holds
@@ -231,6 +234,27 @@ class CommandValidator:
         refusing after the cloud has stopped talking.
         """
         self._weather_hold = active
+
+    @property
+    def attended(self) -> bool:
+        return self._attended
+
+    def set_attended(self, attended: bool) -> None:
+        """Follow the posture. Arming leaves ATTENDED, and nothing returns to it.
+
+        The daylight override reads this. An agent armed for unattended operation
+        must refuse it whatever the cloud claims about an operator, because the
+        operator the override exists for has gone home.
+        """
+        self._attended = attended
+
+    @property
+    def disarmed(self) -> bool:
+        return self._disarmed
+
+    def set_disarmed(self, disarmed: bool) -> None:
+        """Refuse everything but PARK and ABORT, as a weather hold does."""
+        self._disarmed = disarmed
 
     def set_nudge_offset(self, degrees: float) -> None:
         """Restore an allowance already spent, after a restart.
@@ -351,6 +375,16 @@ class CommandValidator:
                 envelope,
                 CommandRejectionReason.weather_hold_active,
                 "an operator weather hold is in force at this observatory",
+            )
+
+        # 8. An unattended agent that latched off. Same shape as the hold: the
+        # telescope is Parked and waiting for a person, and only the commands that
+        # keep it that way are obeyed.
+        if self._disarmed:
+            return self._reject(
+                envelope,
+                CommandRejectionReason.unattended_disarmed,
+                "this unattended observatory has disarmed and needs an operator to re-arm it",
             )
 
         if command_type in POINTING_COMMANDS:
