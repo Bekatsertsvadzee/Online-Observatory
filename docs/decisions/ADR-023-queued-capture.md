@@ -1,13 +1,18 @@
 # ADR-023 — Queued Capture, and what commands a telescope when nobody is watching
 
 - **Date:** 2026-09-21
+- **Revised:** 2026-09-22 — the agent enforces unattended operation itself; pre-emption
+  expressed in ADR-004's states; a scheduler role of its own; weather sensing added to the
+  qualification; a delivery threshold for §5
 - **Status:** PROPOSED
 - **Decided by:** not yet decided — this record is a draft for the maintainer
 - **Relates to:** `ADR-015` (booking model and the two flows), `ADR-013` (partner
   observatories), `ADR-003` (Phase 1 scope boundary), `ADR-004` (mission state machine),
-  `ADR-012` (capture storage and upload), `ADR-022` (subscriptions), issue #97
+  `ADR-010` (agent local state store), `ADR-012` (capture storage and upload), `ADR-022`
+  (subscriptions), issue #97
 - **Blocks:** any Flow B implementation, and the `CLAUDE.md` amendment it needs
-- **Blocked by:** DV-036, the first real mission. Nothing here is built before it.
+- **Blocked by:** DV-038, the attended evidence run, and a fitted sky sensor (§3). Nothing
+  here is built before both.
 
 ## Context
 
@@ -39,6 +44,13 @@ requires an explicit, attended operator action outside the normal test workflow.
 because nothing had ever been measured. It is the correct resting state for an instrument
 whose optical train has not been characterised.
 
+The agent enforces that rule itself, not only the cloud. `load_config` refuses to start
+with `DARKVIEW_AGENT_DRIVER_MODE=REAL` unless `DARKVIEW_AGENT_ATTENDED` is also set, and
+refuses a config file that carries either (`agent/darkview_agent/config.py`). The same
+attended flag is what lets an operator lift the daylight lock
+(`CommandValidator.operator_override`): the cloud's `issuedByOperatorId` is a necessary
+condition, never a sufficient one.
+
 **ADR-013 already broke the assumption once**, and did it well. A partner node may operate
 unattended while `APPROVED`, and approval is a *procedure*: a measured envelope,
 sky-verified coordinates, a recorded horizon mask, a supervised first light, and Park
@@ -47,68 +59,112 @@ holding.
 
 So the project has already decided that "attended" can be replaced by "qualified", for a
 machine somebody else owns. The question this record answers is whether the same
-substitution is allowed for a first-party machine, and under what conditions.
+substitution is allowed for a first-party machine, under what conditions, and — because
+the attended flag is local — where that substitution is enforced.
 
 ## Decision
 
-### 1. Queued Capture is a mission, not a new machine
+### 1. Queued Capture is a mission, and the agent knows when nobody is there
 
 A queued request produces a `Mission` and runs the ADR-004 state machine unchanged.
 It slews, solves, centres, observes, captures, processes and completes, and every
 transition writes a `MissionEvent` exactly as a live mission does.
 
-Nothing about the agent changes. The agent does not learn that nobody is watching, for the
-same reason it never learns an observer exists (ADR-007 and `docs/architecture.md` §7): a
-fact the agent does not know cannot affect mount safety, command validation or session
-ownership.
+**The agent is told it is unattended, and it is told locally.** Running the real mount
+with nobody present leaves only two possibilities today, and both are wrong:
 
-**What differs is who owns the session.** A live mission's session owner is a customer. A
-queued mission's session owner is the scheduler, acting as a system principal with an
-`OPERATOR`-equivalent role and no `NUDGE` capability at all. Flow B has no steering, so the
-one command that exists to move a telescope on a human's judgement is simply absent from
-its command set.
+- Start the agent with `DARKVIEW_AGENT_ATTENDED` set while nobody is there. The flag
+  becomes false, and it also arms the daylight-lock override that exists only for an
+  operator standing at the instrument.
+- Keep the approval only in a cloud row and let the agent run as it does now. The agent
+  can then no longer check the one fact that decides whether it may move at all, and a
+  compromised or buggy cloud could drive the mount with nobody present. That is exactly
+  the trust the double-validation design withholds.
+
+So the agent gains a third operating posture beside simulated and attended:
+**unattended**. It differs from attended in what it *removes*, never in what it adds:
+
+- `operator_override` is always false. The daylight lock cannot be lifted.
+- `NUDGE` is refused. The one command that moves a telescope on a human's judgement has no
+  human behind it.
+- Every other rule — envelope, horizon mask, Sun avoidance, session ownership, expiry,
+  duplicate rejection, weather hold, emergency Park — applies unchanged.
+
+The unattended posture is armed by a local record, not by an environment variable and not
+by the cloud (§3). The agent refuses a command in unattended posture unless **both** its
+local record is armed **and** the cloud's command carries a queued session. Either side
+alone is not enough, which is the same shape as `DRIVER_MODE` and `ATTENDED` today.
+
+This is a reversal of the earlier draft, which said the agent should stay ignorant. The
+agent is kept ignorant of *observers* (ADR-007) because an observer cannot change what the
+mount may do. Whether a person is present *does* change what the mount may do, and the
+agent already knows it through the attended flag. The honest answer is a third value, not
+a flag that lies.
 
 ### 2. Live bookings always win, and a queued mission never holds the instrument
 
 A queued request is **not** a booking and never occupies a slot. It runs only in the gaps.
 
 - The scheduler considers an instrument only when it has no `CONFIRMED` booking overlapping
-  the window it wants, plus a margin for slew, solve, centre and Park.
-- A queued mission is **pre-emptible**. If a live booking is confirmed for a window a
+  the window it wants, **plus a margin that covers stopping capture and Parking** before
+  the next live slot starts — not only the slew, solve and centre at the beginning.
+- A queued mission is **pre-emptible**. When a live booking is confirmed for a window a
   queued mission is running in, the queued mission is stopped at the next safe boundary,
-  Parks, and returns to the queue with whatever it had already captured kept.
-- Pre-emption is a normal outcome, not a failure. A queued request that is pre-empted six
-  times and completes on the seventh delivered exactly what it promised.
+  Parks, and ends.
+
+**The request returns to the queue; the mission does not.** ADR-004 has no transition
+back to `SCHEDULED`, and every path out of a failure or hold ends at Park. A pre-empted
+mission ends in `CANCELLED` with a new `MissionFailureReason`, `PREEMPTED`. The captures
+it already made stay attached to it. The queued request stays open and produces a new
+`Mission` the next time the scheduler finds a gap. `PREEMPTED` is a contract change; no
+new mission state is added.
+
+**Session ownership moves only through Park.** One active session owner at a time: the
+queued session is closed when its mission reaches `CANCELLED` and the mount has reported
+Parked, and the live booking's session opens after that. The margin above exists so that
+this handover finishes before the live slot starts, not during it.
+
+Pre-emption is a normal outcome, not a failure. A queued request that is pre-empted six
+times and completes on the seventh delivered exactly what it promised.
 
 This is what makes Flow B sellable without capacity planning: it consumes only time
 nothing else wanted.
 
-### 3. Unattended first-party operation requires a qualification, not a promise
+### 3. Unattended first-party operation requires a qualification, enforced in two places
 
 **Proposed:** amend the first-party rule to match ADR-013's shape rather than to remove it.
 A first-party instrument may run a queued mission unattended only while **all** of the
-following hold, each verifiable from a database row:
+following hold:
 
 | Condition | Where it comes from |
 | --- | --- |
-| `MAX_ALT_SAFE` measured on the assembled optical train | DV-034 |
-| Horizon mask surveyed at the installation site | ADR-005, DV-034 |
-| Sky-verified coordinates | DV-034 |
-| Camera first light and optical train verified | DV-035 |
-| A supervised first real mission completed | DV-036 |
+| The DV-124 qualification procedure passed on this instrument — the same procedure ADR-013 applies to partners: measured `MAX_ALT_SAFE`, sky-verified coordinates, horizon mask, supervised first light, Park proven commanded and on link loss | DV-034, DV-035, DV-036, DV-124 |
 | Park proven from every failure path | DV-037 |
 | An accumulated evidence run with no unexplained fault | DV-038 |
-| An operator has switched the node to unattended, as a named act | new, this record |
-| No unacknowledged `HARDWARE_ERROR` since that switch | new, this record |
+| **A sky sensor fitted, and its readings reaching the agent fresh** | new, this record |
+| An operator has armed unattended operation, as a named act at the observatory | new, this record |
+| No unacknowledged `HARDWARE_ERROR` since it was armed | new, this record |
 
-The final two are the ones that do not exist yet. The rest is the attended backlog, which
-is why **this record cannot be implemented before DV-038** — the qualification it depends
-on is the qualification that has not been run.
+**Weather is the fault an attended operator exists to catch.** Phase 1 has no sky sensor:
+an operator at a window is the only thing that can declare the weather unsafe (DV-039).
+With nobody at the window, nothing notices rain or cloud building mid-run. Unattended
+operation therefore requires a fitted sensor whose readings arrive at the agent as
+`WeatherState` with `source: SENSOR`. **Stale sensor data is a weather hold**: the agent
+treats a missed reading as unsafe, Parks, and refuses everything but `PARK` and `ABORT`,
+exactly as it does for an operator's hold today. Which sensor, and what staleness means in
+seconds, is DV-035's kind of measurement, not this record's.
 
-**It fails closed and it latches.** Any condition ceasing to hold returns the node to
-refusing every unattended mission, and it does not return on its own: an operator switches
-it back, having looked. A `HARDWARE_ERROR` on a queued mission suspends unattended
-operation for that instrument until acknowledged.
+**The cloud holds the approval; the agent holds the arming.** The cloud row records who
+approved the node, when, and against which evidence, and the scheduler reads it before
+creating any queued mission. The agent's arming is persisted in the ADR-010 local state
+store, written only by a local operator action on the observatory machine, and it is what
+the agent checks on every command. Neither can arm the other.
+
+**It fails closed and it latches, on the agent.** Any `HARDWARE_ERROR`, any failed Park,
+any loss of sky-sensor data during an unattended mission disarms the local record. The
+agent does not re-arm on its own, on reconnect, or on a cloud message: an operator re-arms
+it, having looked. The cloud mirrors the disarm so the scheduler stops creating missions,
+but the agent's latch is the one that holds after the link is gone.
 
 **Nothing here touches attended operation.** A live mission with an operator present is
 unchanged, and remains the only way a first-party instrument runs before this
@@ -133,14 +189,18 @@ as a live observation.
 ### 5. Weather refunds run on a window count, not a calendar
 
 A queued request has a **lifetime** — a number of nights, set when it is sold — and it
-refunds if that lifetime passes without a completed capture.
+refunds if that lifetime passes without a delivery.
 
-- **Expired unfilled: full refund**, automatic, on DV-111's engine and its existing
-  money-return rules.
-- **Partially delivered: no refund.** Frames were delivered; the request completed less
-  than it hoped, not nothing. The customer may re-queue.
+- **A delivery has a floor.** A request counts as delivered only when its captures meet a
+  minimum — total integration time, and a capture that plate-solved on the target — set
+  per target from DV-035's measurements. A single frame through cloud is not a delivery.
+- **Expired below the floor: full refund**, automatic, on DV-111's engine and its existing
+  money-return rules. Frames taken below the floor are still delivered to the Collection;
+  they do not cost the customer the refund.
+- **Delivered at or above the floor: no refund.** The customer may re-queue.
 - **A refund returns what was spent.** If the request was bought with subscription
-  minutes, minutes come back, not money — the rule ADR-022 §7 already establishes.
+  minutes, minutes come back, not money — the rule ADR-022 §7 already establishes for a
+  credit-paid booking.
 
 The lifetime is what makes this decidable without predicting weather. A request that
 cannot be filled in its lifetime is a request the sky refused, and the customer is not
@@ -151,28 +211,31 @@ charged for the sky.
 The Hardware safety section gains a third case beside first-party and partner:
 
 > A **queued capture** on a first-party observatory may run unattended only while the node
-> is `UNATTENDED_APPROVED` under ADR-023, which requires the full DV-034 to DV-038
-> qualification, an operator's named switch, and no unacknowledged hardware error. It
-> returns to refusing everything the moment any of those stops holding.
+> is `UNATTENDED_APPROVED` under ADR-023 **and** the agent's local unattended arming is
+> set. Approval requires the DV-124 qualification, DV-037 and DV-038, and a fitted sky
+> sensor; arming is a named operator act at the observatory. The agent enforces it
+> locally, refuses the daylight override and `NUDGE` while unattended, and disarms itself
+> on any hardware error or loss of sky data until an operator re-arms it.
 
 The existing sentence — "No autonomous or background session may command the real mount or
 camera" — is **not** deleted. It is qualified, in the same way ADR-013 qualified the
-attended-operator rule, and it remains the resting state for everything that is not
-`UNATTENDED_APPROVED`.
+attended-operator rule, and it remains the resting state for everything that is not both
+approved and armed.
 
 ## Why this route
 
 - **It reuses the one qualification pattern the project has already approved.** ADR-013
-  decided that a procedure can replace a person. Inventing a second, different answer for
-  first-party nodes would mean maintaining two safety stories.
+  decided that a procedure can replace a person, and DV-124 is that procedure run on the
+  first-party instrument. Gating on DV-124 rather than a parallel list means one safety
+  story, not two.
+- **The rule is enforced where the mount is.** An approval that lives only in the cloud is
+  an approval the agent has to take on trust, and the agent exists to withhold that trust.
+  A local arming that latches off is the unattended equivalent of the attended flag.
 - **Pre-emption removes the scheduling argument entirely.** A queued mission that yields to
   every live booking cannot starve the product that pays for the telescope, so the
   scheduler needs no fairness policy, no priority tiers and no capacity model.
-- **The refund rule needs no weather model.** A lifetime in nights is a number the customer
-  understands and the system can evaluate exactly.
-- **The agent stays ignorant.** Every alternative that tells the agent "this is unattended"
-  creates a flag that can be wrong, and a flag that can be wrong on a mount is the thing
-  the whole double-validation design exists to avoid.
+- **The refund rule needs no weather model.** A lifetime in nights and a delivery floor are
+  numbers the customer understands and the system can evaluate exactly.
 
 ## Alternatives considered
 
@@ -185,6 +248,9 @@ attended-operator rule, and it remains the resting state for everything that is 
   makes the first-party instrument the *least* capable node on the network, and because
   DV-124 already establishes that Darkview does not ask a partner to do what it has not
   done itself.
+- **Keep the agent ignorant, with the approval only in the cloud** — the earlier draft of
+  this record. Rejected: it either sets the attended flag with nobody present, or asks the
+  agent to trust a cloud claim about whether it may move at all (§1).
 - **A queued request holds a real slot** — sell it as a booking nobody attends. Rejected:
   it competes with live bookings for exactly the inventory that is worth the most, and it
   reintroduces every capacity question §2 removes.
@@ -193,28 +259,41 @@ attended-operator rule, and it remains the resting state for everything that is 
 
 ## Consequences
 
-- **Nothing is built before DV-038.** The qualification this depends on is the attended
-  backlog, and that backlog is blocked on hardware that does not exist yet.
-- **New state exists on an observatory:** an unattended-approval status, who switched it,
-  when, and the acknowledgement state of the last hardware error. One row, operator-written.
+- **Nothing is built before DV-038, and nothing runs without a sky sensor.** The
+  qualification this depends on is the attended backlog, and that backlog is blocked on
+  hardware that does not exist yet. The sensor is a hardware purchase this record adds.
+- **The agent gains an unattended posture**: a local arming record in the ADR-010 store, a
+  local operator command that writes it, the removal of `operator_override` and `NUDGE`
+  under it, and a latch that disarms on hardware error, failed Park or stale sky data.
+- **The scheduler is a principal of its own.** `UserRole` today is `USER` and `OPERATOR`;
+  the scheduler gets a third role, `SCHEDULER`, with the minimal command set a queued
+  mission needs and no `NUDGE`, and a seeded system user whose id fills `userId` on its
+  `CommandEnvelope`s. It is not an `OPERATOR`, because the operator role carries the
+  daylight override and the scheduler must never have it. This is a contract change.
+- **`MissionFailureReason` gains `PREEMPTED`.** No mission state is added; ADR-004 stands.
+- **New state exists on an observatory in the cloud:** an unattended-approval status, who
+  approved it, when, against which evidence, and the mirrored arming state. One row,
+  operator-written.
 - **The scheduler is a new always-on component**, and it is the first thing in Darkview
   that *initiates* a mission without a human act. It belongs beside the DV-111 and ADR-022
   sweeps, in the realtime service, not in a serverless function.
 - **The contract gains a queued-request surface** — create, list, cancel, and the states a
   request moves through. It is a contract change, made here and released, per the
   repository boundary rule.
-- **Operator work grows.** Acknowledging a hardware error is now a gate on revenue, not
-  just hygiene.
+- **Operator work grows.** Re-arming after a hardware error is now a gate on revenue, not
+  just hygiene, and it is done at the observatory.
 - **The target filter of ADR-015 §2 applies differently.** A queued request is not bounded
   by a slot length, so the catalogue it may choose from is wider — but DV-035 still decides
-  what a capture actually costs, and the queue's per-request time budget comes from that
-  measurement, not from this record.
+  what a capture actually costs, and both the queue's per-request time budget and §5's
+  delivery floor come from that measurement, not from this record.
 
 ## What this record deliberately does not decide
 
 - **Price, and whether a queued request is sold for money, minutes or both.**
 - **The lifetime in nights.** §5 needs a number; the number is a product decision and
   wants at least one season of real weather data at the site.
+- **The delivery floor per target**, beyond its shape in §5. It comes from DV-035.
+- **Which sky sensor, and its staleness limit.** Measured, not chosen here.
 - **How many queued requests one customer may hold at once**, and whether that scales with
   a subscription tier.
 - **Queue ordering between two customers** whose requests are both fillable tonight.
@@ -230,17 +309,20 @@ These block approval, not implementation — the record cannot be approved as wr
 they are answered.
 
 1. **Is the §3 substitution acceptable at all** — may a procedure replace an attended
-   operator on a *first-party* instrument, as it already may on a partner one?
-2. **Is DV-038 the right gate**, or should unattended first-party operation wait for a
-   longer evidence period than the one DV-038 defines?
+   operator on a *first-party* instrument, as it already may on a partner one, given that
+   the agent enforces it locally?
+2. **Is DV-038 the right gate**, or should unattended first-party operation also wait for a
+   minimum number of attended real missions, set after DV-037's failure drills?
 3. **Does the §6 amendment wording preserve what the original sentence was protecting?**
    It is the maintainer's sentence and the maintainer's call.
-4. **Lifetime in nights** — a number, or a decision to defer it to measurement.
-5. **Money or minutes** for §5's refund, if a queued request can be bought with either.
+4. **Must re-arming happen at the observatory**, as §3 proposes, or may an operator re-arm
+   remotely after reviewing the fault? At the observatory is the conservative answer, and
+   it makes every hardware error cost a site visit.
+5. **Lifetime in nights** — a number, or a decision to defer it to measurement.
 
 ## When this would be revisited
 
 If DV-037's failure drills or DV-038's evidence run show any fault mode that a present
 operator would catch and an unattended node would not, §3 is wrong as written and the
-condition table needs that fault in it. That is the finding this record most expects and
-most wants.
+condition table needs that fault in it. Weather was the first such fault, and this record
+now names it; the drills are expected to find others.
