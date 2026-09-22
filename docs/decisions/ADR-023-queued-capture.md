@@ -3,12 +3,14 @@
 - **Date:** 2026-09-21
 - **Revised:** 2026-09-22 — the agent enforces unattended operation itself; pre-emption
   expressed in ADR-004's states; a scheduler role of its own; weather sensing added to the
-  qualification; a delivery threshold for §5
+  qualification; a delivery threshold for §5. Same day: the agent's posture is ADR-024's,
+  and `NUDGE` is removed by the scheduler's role, not by the posture
 - **Status:** PROPOSED
 - **Decided by:** not yet decided — this record is a draft for the maintainer
 - **Relates to:** `ADR-015` (booking model and the two flows), `ADR-013` (partner
   observatories), `ADR-003` (Phase 1 scope boundary), `ADR-004` (mission state machine),
-  `ADR-010` (agent local state store), `ADR-012` (capture storage and upload), `ADR-022`
+  `ADR-010` (agent local state store), `ADR-024` (the agent's unattended posture, draft),
+  `ADR-012` (capture storage and upload), `ADR-022`
   (subscriptions), issue #97
 - **Blocks:** any Flow B implementation, and the `CLAUDE.md` amendment it needs
 - **Blocked by:** DV-038, the attended evidence run, and a fitted sky sensor (§3). Nothing
@@ -82,18 +84,21 @@ with nobody present leaves only two possibilities today, and both are wrong:
   the trust the double-validation design withholds.
 
 So the agent gains a third operating posture beside simulated and attended:
-**unattended**. It differs from attended in what it *removes*, never in what it adds:
+**unattended**, defined once for partner and first-party nodes alike in ADR-024. It
+differs from attended in what it *removes*, never in what it adds: `operator_override` is
+always false, so the daylight lock cannot be lifted, and every other rule — envelope,
+horizon mask, Sun avoidance, session ownership, expiry, duplicate rejection, weather hold,
+emergency Park — applies unchanged.
 
-- `operator_override` is always false. The daylight lock cannot be lifted.
-- `NUDGE` is refused. The one command that moves a telescope on a human's judgement has no
-  human behind it.
-- Every other rule — envelope, horizon mask, Sun avoidance, session ownership, expiry,
-  duplicate rejection, weather hold, emergency Park — applies unchanged.
+**`NUDGE` is removed by who owns the session, not by the posture.** A queued mission's
+session owner is the scheduler, whose role has no `NUDGE` (Consequences). The posture
+keeps `NUDGE`, because on an unattended partner node the live customer is present on the
+feed (ADR-024 §1).
 
-The unattended posture is armed by a local record, not by an environment variable and not
-by the cloud (§3). The agent refuses a command in unattended posture unless **both** its
-local record is armed **and** the cloud's command carries a queued session. Either side
-alone is not enough, which is the same shape as `DRIVER_MODE` and `ATTENDED` today.
+The unattended posture is armed by a local act from an attended agent, for that process
+only, and never by an environment variable or the cloud (ADR-024 §2). The cloud may disarm
+it and never arm it (ADR-024 §3). Either side alone is not enough, which is the same shape
+as `DRIVER_MODE` and `ATTENDED` today.
 
 This is a reversal of the earlier draft, which said the agent should stay ignorant. The
 agent is kept ignorant of *observers* (ADR-007) because an observer cannot change what the
@@ -214,7 +219,7 @@ The Hardware safety section gains a third case beside first-party and partner:
 > is `UNATTENDED_APPROVED` under ADR-023 **and** the agent's local unattended arming is
 > set. Approval requires the DV-124 qualification, DV-037 and DV-038, and a fitted sky
 > sensor; arming is a named operator act at the observatory. The agent enforces it
-> locally, refuses the daylight override and `NUDGE` while unattended, and disarms itself
+> locally, refuses the daylight override while unattended, and disarms itself
 > on any hardware error or loss of sky data until an operator re-arms it.
 
 The existing sentence — "No autonomous or background session may command the real mount or
@@ -262,9 +267,10 @@ approved and armed.
 - **Nothing is built before DV-038, and nothing runs without a sky sensor.** The
   qualification this depends on is the attended backlog, and that backlog is blocked on
   hardware that does not exist yet. The sensor is a hardware purchase this record adds.
-- **The agent gains an unattended posture**: a local arming record in the ADR-010 store, a
-  local operator command that writes it, the removal of `operator_override` and `NUDGE`
-  under it, and a latch that disarms on hardware error, failed Park or stale sky data.
+- **The agent gains an unattended posture**, specified in ADR-024: a local arming record
+  in the ADR-010 store, a local operator command that writes it, the removal of
+  `operator_override` under it, and a latch that disarms on hardware error, failed Park or,
+  under this record, stale sky data.
 - **The scheduler is a principal of its own.** `UserRole` today is `USER` and `OPERATOR`;
   the scheduler gets a third role, `SCHEDULER`, with the minimal command set a queued
   mission needs and no `NUDGE`, and a seeded system user whose id fills `userId` on its
