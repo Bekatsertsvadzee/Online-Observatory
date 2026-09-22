@@ -426,6 +426,9 @@ describe("taking a qualification away", () => {
 
   it("tells the agent, so an unattended one disarms and parks (ADR-024 §3)", async () => {
     const node = await approvedNode();
+    // The approval rang too. Let it arrive before clearing, or it lands after the
+    // clear and reads as a second notification from the suspension.
+    await operatingNotificationsFor(node.observatoryId);
     notifications = [];
 
     await suspendNetworkNode({
