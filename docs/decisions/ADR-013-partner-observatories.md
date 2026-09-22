@@ -214,3 +214,22 @@ with:
 `MAX_ALT_SAFE` is **unchanged and unweakened**: measured from the physical optical
 train, never guessed, never defaulted — on a partner's instrument exactly as on
 Darkview's own.
+
+## Amendment, 2026-09-22 — ADR-024
+
+Approved by the maintainer with ADR-024.
+
+This record said an `APPROVED` partner may operate unattended, and that nothing about the
+command path changes. The agent as built could not do the first without a false
+`DARKVIEW_AGENT_ATTENDED` flag, which also arms the daylight override (issue #137).
+
+Two things change:
+
+- **An unattended partner runs in ADR-024's `UNATTENDED` posture**, armed by the owner at
+  the observatory from an attended agent, for that process only, and latched to `DISARMED`
+  on any fault. The cloud's approval is necessary; it is never sufficient, and it can
+  disarm the agent but never arm it.
+- **The condition table gains a fitted sky sensor** whose readings reach the agent, with
+  stale readings treated as a weather hold. Nobody is at the window on an unattended node.
+
+`CLAUDE.md` and `docs/ENGINEERING.md` § Hardware safety are amended to match.
