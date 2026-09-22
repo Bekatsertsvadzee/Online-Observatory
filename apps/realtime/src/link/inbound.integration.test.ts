@@ -394,7 +394,9 @@ describe("the orphan sweep", () => {
         targetId,
         observatoryId: observatory.id,
         telescopeId,
-        commandId,
+        // No command row: the sweep asks only whether a key is named, and
+        // Capture.commandId is a foreign key this test has no reason to satisfy.
+        commandId: null,
         capturedAt: NOW,
         imagingProfile: "GLOBULAR_CLUSTER",
         opticalConfig: "F10_NATIVE",
