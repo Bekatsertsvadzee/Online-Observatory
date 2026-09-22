@@ -1,15 +1,16 @@
 # ADR-024 — The agent's unattended posture
 
 - **Date:** 2026-09-22
-- **Status:** PROPOSED
-- **Decided by:** not yet decided — this record is a draft for the maintainer
+- **Status:** APPROVED
+- **Decided by:** project maintainer
+- **Approved:** 2026-09-22, with the answers recorded at the end
 - **Issue:** DV-126 (#137)
 - **Relates to:** `ADR-013` (partner observatories), `ADR-023` (Queued Capture, draft),
   `ADR-010` (agent local state store), `ADR-020` (device token issuance), DV-039 (weather
   hold enforced by the agent)
 - **Blocks:** unattended real-hardware operation on any node — partner under ADR-013, or
   first-party under ADR-023
-- **Buildable:** now, against `SimMount` and `SimCamera`. Nothing here needs hardware.
+- **Buildable:** now, against `SimMount` and `SimCamera`, except the sky sensor (§6).
 
 ## Context
 
@@ -122,10 +123,14 @@ An `UNATTENDED` agent moves to `DISARMED`, audits why, and Parks when any of the
 
 - a mission enters `HARDWARE_ERROR`, or any device reports a fault
 - a Park fails or times out
-- the cloud link is lost past the watchdog's deadline
+- the cloud link stays lost past a **sustained-loss limit**, longer than the watchdog's
+  deadline. A shorter outage Parks the mount through the watchdog, as today, and does not
+  disarm: once the link returns, the mount is Parked and the agent is still armed. The limit
+  is measured during DV-037's failure drills; until then it is not set, and no partner runs
+  unattended without it.
 - a `CLOUD_OPERATING_UPDATE` no longer permits unattended operation
 - a local `disarm`
-- once ADR-023's condition is adopted, sky-sensor readings go stale (§6)
+- sky-sensor readings go stale (§6)
 
 `DISARMED` is persisted in the local store under the same run id, so a disarmed agent that
 reconnects is still disarmed. **Nothing returns it to `UNATTENDED` except a new local
@@ -154,11 +159,14 @@ Phase 1 has no sky sensor, and `POST /admin/observatory/weather-hold` is the onl
 that can call the weather unsafe (DV-039). On an unattended node, nobody is at the window
 to do it.
 
-This record **proposes** that ADR-013's condition table gains the requirement ADR-023 §3
-places on first-party nodes: a fitted sky sensor whose readings reach the agent as
-`WeatherState` with `source: SENSOR`, and stale readings treated as a hold. It does not
-build it: no sensor is chosen and none is fitted. Until the maintainer decides, the latch in
-§4 has no weather trigger, and an unattended partner is as blind to rain as it is today.
+**An unattended node, partner or first-party, must have a fitted sky sensor**, whose
+readings reach the agent as `WeatherState` with `source: SENSOR`. Stale readings are a
+weather hold and a latch trigger (§4). This is the requirement ADR-023 §3 places on
+first-party nodes, applied to partners too: rain does not check who owns the telescope.
+
+No sensor is chosen and none is fitted. Arming (§2) is therefore refused on real hardware
+until one is, and the staleness limit is measured, not chosen here. Everything else in this
+record is buildable before then.
 
 ## Implementation, once approved
 
@@ -225,9 +233,9 @@ build it: no sensor is chosen and none is fitted. Until the maintainer decides, 
 
 ## Consequences
 
-- **ADR-013 is amended**, in the commit that approves this record: its "Nothing about the
-  command path changes" paragraph gains that an unattended partner runs in the posture
-  this record defines, and §6's weather condition if the maintainer adopts it.
+- **ADR-013 is amended**, in the commit that approves this record: an unattended partner
+  runs in the posture this record defines, and its condition table gains §6's sky sensor.
+  `CLAUDE.md` and `docs/ENGINEERING.md` § Hardware safety are amended to match.
 - **The ADR-023 draft is corrected** to cite this record for §1 and §3, and to take
   `NUDGE`'s removal from the scheduler's role rather than from the posture.
 - **Every restart on an unattended node costs a visit.** For a partner that is the owner
@@ -236,20 +244,21 @@ build it: no sensor is chosen and none is fitted. Until the maintainer decides, 
 - **A disarm strands confirmed bookings**, and DV-111 needs a rule for them before any
   partner is sold unattended hours.
 
-## Open questions for the maintainer
+## Answers, 2026-09-22
 
-1. **Should `NUDGE` stay available to a live customer on an unattended partner node** (§1),
-   or should unattended mean no steering at all?
-2. **Adopt §6 for partners** — must an unattended partner have a sky sensor, as ADR-023
-   proposes for first-party?
-3. **Is "every restart costs a visit" acceptable for partners**, or does a partner need a
-   documented path to re-arm remotely after reviewing the audit?
-4. **Link loss as a latch trigger** (§4): the watchdog already Parks on it. Should a brief
-   outage, once recovered, still require a visit?
-5. **What "at the machine" proves.** Running the arming CLI proves a shell on the
-   observatory machine, not a person beside the telescope; remote desktop satisfies it. That
-   is already true of `DARKVIEW_AGENT_ATTENDED` today. Is that acceptable, or does arming
-   need a physical act — a button, a key on the enclosure?
+The maintainer approved this record with these answers to its open questions.
+
+1. **`NUDGE` stays available to a live customer on an unattended partner node.** The
+   customer is on the feed, and the nudge budget and the landing check still apply.
+2. **An unattended partner needs a sky sensor**, as a first-party node does under ADR-023.
+   §6 is written accordingly.
+3. **Every restart costing a visit is accepted for now**, for partners as for first-party.
+   Revisited with evidence from real partner nodes, as below.
+4. **A brief, recovered link outage does not require a visit.** The watchdog Parks; only a
+   loss past the sustained-loss limit disarms. §4 is written accordingly.
+5. **A shell on the observatory machine is sufficient to arm in Phase 1.** It is the trust
+   `DARKVIEW_AGENT_ATTENDED` already rests on. A physical act is added if the audit ever
+   shows an arming by somebody who was not there.
 
 ## When this would be revisited
 
