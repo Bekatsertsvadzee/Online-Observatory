@@ -305,6 +305,7 @@ describe("a customer's booking, from sign-in to their Collection", () => {
       observatoryId,
       agentVersion: "0.1.0",
       mode: "SIMULATED",
+      posture: "SIMULATED",
       bootedAt: clock.toISOString(),
       safetyEnvelopeConfigured: true,
       resumeMissionId: null,
