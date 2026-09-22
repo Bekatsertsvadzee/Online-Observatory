@@ -548,7 +548,7 @@ contract change. See the open question below.
 
 **Orphaned objects are now possible**, as ADR-012 said they would be: an agent that
 uploads and loses the link before reporting leaves an object no row names. The sweep
-for unreferenced keys belongs with operator tooling and does not exist.
+for them now exists as operator tooling -- see *The orphan sweep* below (#141).
 
 **Verified by removing each protection and confirming a named test fails:** the
 download's ownership scope, its asset-kind scope, the grant's observatory check, the
@@ -669,6 +669,10 @@ nothing else.
 and a header convention that has to agree with whatever a customer opens it in.
 `fitsStorageKey` stays null.
 
+**Resolved by DV-065 (correction, 2026-09-22): `thumbnailStorageKey` exists.** The
+paragraph below was written before DV-065 added the field and was not updated when it
+did. Kept as it was for the record.
+
 **Open contract question: there is no `thumbnailStorageKey`.** THUMBNAIL is a
 `CaptureAssetKind` the cloud can store and the agent has no way to announce.
 Until `AGENT_CAPTURE_READY` gains the field, `thumbnailUrl` cannot become non-null
@@ -690,6 +694,27 @@ marking, and the refusal of a second capture once the run has started. The
 query-string half of the scrub was found to be unheld on the first pass -- the
 whole-URL replacement was catching every case the test tried -- and has its own
 test now.
+
+## The orphan sweep (#141)
+
+`npm run storage:orphans` lists every object under `captures/` and reports the ones no
+`CaptureAsset` names. Run by hand; nothing schedules it.
+
+An object is an orphan only if its key has exactly the derived shape, no row names it,
+and it is older than the grace period (24 hours, ADR-012's figure; `--older-than`
+lengthens it and cannot shorten it). Anything else under the prefix is reported as
+unrecognised and never deleted.
+
+`--delete --confirm <bucket>` deletes what the report lists. Each key is checked
+against the database again just before its delete, so a capture reported during the
+sweep keeps its image, and each deletion writes a `CAPTURE_OBJECT_DELETED` audit row
+naming the key and the mission. `CaptureAsset.storageKey` gained an index for it.
+
+`packages/storage/objects.ts` signs the list and delete with the bucket credential, in
+the headers. Nothing on an agent's or a customer's path uses it.
+
+**Not yet run against a real bucket**, because there is none. The signing is the same
+signer the presigned URLs use; the request shape is tested against a local stand-in.
 
 ## What DV-114 can prove, and what it cannot
 

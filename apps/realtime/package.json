@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "orphans": "tsx src/ops/orphan-sweep-cli.ts"
   },
   "dependencies": {
     "@darkview/contracts": "*",

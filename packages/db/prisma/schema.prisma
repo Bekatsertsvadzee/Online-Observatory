@@ -1082,6 +1082,9 @@ model CaptureAsset {
   capture     Capture          @relation(fields: [captureId], references: [id], onDelete: Cascade)
 
   @@unique([captureId, kind])
+  /// The orphan sweep asks "does any row name this key?" for every object in the
+  /// bucket (#141).
+  @@index([storageKey])
 }
 
 model CaptureAccess {
