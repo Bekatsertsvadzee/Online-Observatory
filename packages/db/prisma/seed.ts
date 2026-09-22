@@ -502,6 +502,7 @@ async function seedDevelopmentDatabase() {
         userId: DEMO_IDS.observer,
         plan: "EXPLORER",
         status: "TRIALING",
+        priceMinor: 0,
         startsAt: new Date("2026-08-01T00:00:00.000Z"),
         endsAt: new Date("2026-09-01T00:00:00.000Z"),
         isDemo: true,
