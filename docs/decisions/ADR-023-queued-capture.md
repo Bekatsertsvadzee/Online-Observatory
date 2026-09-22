@@ -5,11 +5,12 @@
   expressed in ADR-004's states; a scheduler role of its own; weather sensing added to the
   qualification; a delivery threshold for §5. Same day: the agent's posture is ADR-024's,
   and `NUDGE` is removed by the scheduler's role, not by the posture
-- **Status:** PROPOSED
-- **Decided by:** not yet decided — this record is a draft for the maintainer
+- **Status:** APPROVED — nothing is built from it before DV-038 and a fitted sky sensor
+- **Decided by:** project maintainer
+- **Approved:** 2026-09-22, with the answers recorded at the end
 - **Relates to:** `ADR-015` (booking model and the two flows), `ADR-013` (partner
   observatories), `ADR-003` (Phase 1 scope boundary), `ADR-004` (mission state machine),
-  `ADR-010` (agent local state store), `ADR-024` (the agent's unattended posture, draft),
+  `ADR-010` (agent local state store), `ADR-024` (the agent's unattended posture),
   `ADR-012` (capture storage and upload), `ADR-022`
   (subscriptions), issue #97
 - **Blocks:** any Flow B implementation, and the `CLAUDE.md` amendment it needs
@@ -146,6 +147,7 @@ following hold:
 | The DV-124 qualification procedure passed on this instrument — the same procedure ADR-013 applies to partners: measured `MAX_ALT_SAFE`, sky-verified coordinates, horizon mask, supervised first light, Park proven commanded and on link loss | DV-034, DV-035, DV-036, DV-124 |
 | Park proven from every failure path | DV-037 |
 | An accumulated evidence run with no unexplained fault | DV-038 |
+| A minimum number of attended real missions, the number set after DV-037's failure drills | maintainer, 2026-09-22 |
 | **A sky sensor fitted, and its readings reaching the agent fresh** | new, this record |
 | An operator has armed unattended operation, as a named act at the observatory | new, this record |
 | No unacknowledged `HARDWARE_ERROR` since it was armed | new, this record |
@@ -211,7 +213,7 @@ The lifetime is what makes this decidable without predicting weather. A request 
 cannot be filled in its lifetime is a request the sky refused, and the customer is not
 charged for the sky.
 
-### 6. `CLAUDE.md` is amended, in the commit that approves this record
+### 6. `CLAUDE.md` and `docs/ENGINEERING.md` are amended, in the commit that approves this record
 
 The Hardware safety section gains a third case beside first-party and partner:
 
@@ -309,22 +311,19 @@ approved and armed.
 - **Whether a queued capture may enter a public gallery.** ADR-013 lists the same question
   for partner captures; they should be answered together.
 
-## Open questions for the maintainer
+## Answers, 2026-09-22
 
-These block approval, not implementation — the record cannot be approved as written until
-they are answered.
+The maintainer approved this record with these answers to its open questions.
 
-1. **Is the §3 substitution acceptable at all** — may a procedure replace an attended
-   operator on a *first-party* instrument, as it already may on a partner one, given that
-   the agent enforces it locally?
-2. **Is DV-038 the right gate**, or should unattended first-party operation also wait for a
-   minimum number of attended real missions, set after DV-037's failure drills?
-3. **Does the §6 amendment wording preserve what the original sentence was protecting?**
-   It is the maintainer's sentence and the maintainer's call.
-4. **Must re-arming happen at the observatory**, as §3 proposes, or may an operator re-arm
-   remotely after reviewing the fault? At the observatory is the conservative answer, and
-   it makes every hardware error cost a site visit.
-5. **Lifetime in nights** — a number, or a decision to defer it to measurement.
+1. **The §3 substitution is accepted** on ADR-024's terms: the agent enforces unattended
+   operation locally, and the cloud can disarm it but never arm it.
+2. **DV-038 is necessary but not sufficient.** Unattended first-party operation also waits
+   for a minimum number of attended real missions; the number is set after DV-037's
+   failure drills. §3's table carries it.
+3. **The §6 wording is accepted.** The original sentence stays; the amendment qualifies it.
+4. **Re-arming happens at the observatory**, as ADR-024 §2 and §4 specify.
+5. **The lifetime in nights is deferred** to at least one season of weather data at the
+   site. §5 cannot be sold until it is set.
 
 ## When this would be revisited
 

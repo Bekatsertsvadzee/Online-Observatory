@@ -173,6 +173,13 @@ rejected after `expiresAt`, and rejected if the session is not the current owner
   recorded horizon mask, a supervised first light and Park proven on that
   hardware. It returns to refusing everything the moment any of those stops
   holding, and an operator can suspend it or revoke its token in one row.
+- A **queued capture** on a first-party observatory may run unattended only
+  while the node is `UNATTENDED_APPROVED` under ADR-023 **and** the agent's
+  local unattended arming is set (ADR-024). Approval requires the DV-124
+  qualification, DV-037, DV-038, a minimum number of attended real missions
+  and a fitted sky sensor; arming is a named operator act at the observatory. The agent enforces it locally, refuses the
+  daylight override while unattended, and disarms itself on any hardware error
+  or loss of sky data until an operator re-arms it.
 - The cloud validates commands; the local agent validates them **again**. A
   cloud-approved command that fails local safety is refused.
 - Safety covers: altitude envelope, horizon mask, Sun avoidance, session
