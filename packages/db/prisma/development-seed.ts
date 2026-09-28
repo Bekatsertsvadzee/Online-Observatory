@@ -14,6 +14,13 @@ export const DEMO_IDS = {
   liveParticipant: "00000000-0000-4000-8000-000000000025",
   liveCaptureAccess: "00000000-0000-4000-8000-000000000026",
   networkNode: "00000000-0000-4000-8000-000000000027",
+  // The night-side simulator (#146): a second SIMULATED demo observatory, so a
+  // simulated mission can run while it is daytime in Tbilisi.
+  nightObservatory: "00000000-0000-4000-8000-000000000040",
+  nightTelescope: "00000000-0000-4000-8000-000000000041",
+  nightCamera: "00000000-0000-4000-8000-000000000042",
+  nightSafetyEnvelope: "00000000-0000-4000-8000-000000000043",
+  nightNetworkNode: "00000000-0000-4000-8000-000000000044",
   collections: {
     solarSystem: "00000000-0000-4000-8000-000000000031",
     messier: "00000000-0000-4000-8000-000000000032",
@@ -30,6 +37,51 @@ export const DEMO_IDS = {
  * only its SHA-256 is ever written to the database.
  */
 export const DEMO_AGENT_DEVICE_TOKEN = "DEMO-DEVICE-TOKEN-NOT-FOR-ANY-REAL-OBSERVATORY";
+
+/** Device token for the night-side demo observatory's agent. Same rules as above. */
+export const DEMO_NIGHT_AGENT_DEVICE_TOKEN =
+  "DEMO-NIGHT-DEVICE-TOKEN-NOT-FOR-ANY-REAL-OBSERVATORY";
+
+/**
+ * The night-side demo site (#146): Mauna Kea, where it is night during Tbilisi's
+ * working day. Coordinates and timezone agree, so every safety rule -- the daylight
+ * lock, Sun avoidance, the slot grid -- runs as written against a sky that is
+ * simply dark. An agent run against this observatory must be given the same site
+ * in DARKVIEW_AGENT_SITE_*.
+ */
+export const DEMO_NIGHT_SITE = {
+  latitude: 19.8207,
+  longitude: -155.4681,
+  timezone: "Pacific/Honolulu",
+} as const;
+
+/**
+ * The demo accounts' password (#145). Development only, like everything here.
+ *
+ * Every demo account -- observer, operator, viewer -- signs in with it. The seed
+ * stores `DEMO_ACCOUNT_PASSWORD_HASH`, made by the API's own `hashPassword`, and a
+ * test verifies the two against each other with the API's `verifyPassword`.
+ */
+export const DEMO_ACCOUNT_PASSWORD = "darkview demo password";
+
+export const DEMO_ACCOUNT_PASSWORD_HASH =
+  "scrypt$65536$8$1$Qr9A1-Ji38Pb6EUBUpIw_QlK3WZhNtws6baHD6-pkJo$w4KlFQ3wyuCL_bawmlG4B27ZtDS5MLSmCPJ4s93t_nccFZbCDxtibXyyE_JIb2un8DqaCRvB3bKJWFzMGCd9sQ";
+
+export const DEMO_ACCOUNT_EMAILS = {
+  observer: "demo.observer@darkview.invalid",
+  operator: "demo.operator@darkview.invalid",
+  viewer: "demo.viewer@darkview.invalid",
+} as const;
+
+/**
+ * The simulator's stand-in for MAX_ALT_SAFE (ADR-031). NOT A MEASUREMENT.
+ *
+ * Written only onto SIMULATED demo observatories, under
+ * `SIMULATOR_ENVELOPE_MEASURER`, so a simulated mission can slew. The cloud's
+ * loaders and the agent both read a marked envelope as UNMEASURED on anything not
+ * SIMULATED, so this number never stands in front of a real mount.
+ */
+export const SIMULATOR_MAX_ALTITUDE_DEGREES = 78;
 
 import { PHASE1_TARGETS } from "./phase1-catalogue";
 
