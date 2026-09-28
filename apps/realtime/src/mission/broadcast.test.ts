@@ -167,7 +167,7 @@ describe("telemetry narrowing", () => {
     });
   });
 
-  it("drops device identity, driver state and pointing", async () => {
+  it("drops device identity, driver state and the precise pointing", async () => {
     // The contract calls MissionTelemetryUpdate "deliberately narrower than
     // ObservatoryTelemetry: no device identity, no driver state, no address".
     // This is that sentence as an assertion.
@@ -188,6 +188,127 @@ describe("telemetry narrowing", () => {
     ]) {
       expect(message).not.toHaveProperty(forbidden);
     }
+  });
+});
+
+describe("where the mount is pointing (#148)", () => {
+  /**
+   * A channel registered the way `server.ts` registers one -- before its subscribe
+   * is judged -- so a refused socket sits in the fan-out exactly as it would live.
+   */
+  async function watcher(
+    missionId: string,
+    userId: string,
+    sessionId: string | null,
+  ) {
+    const received: MissionChannelMessage[] = [];
+    const channel = new MissionChannel(
+      missionId,
+      { id: userId, role: "USER" },
+      store,
+      (message) => received.push(message),
+      () => {},
+      offers,
+      () => now,
+    );
+    registry.add(missionId, channel);
+    await channel.receive(
+      JSON.stringify({
+        type: "CLIENT_SUBSCRIBE",
+        messageId: randomUUID(),
+        sentAt: new Date(now).toISOString(),
+        missionId,
+        sessionId,
+      }),
+    );
+    received.length = 0;
+    return { channel, received };
+  }
+
+  function slewing(altitudeDegrees: number, azimuthDegrees: number) {
+    const delta = stateDelta(MISSION);
+    delta.missionState = "SLEWING";
+    delta.telemetry.pointingHorizontal = { altitudeDegrees, azimuthDegrees };
+    delta.telemetry.slewing = true;
+    return delta;
+  }
+
+  function pointingsOf(received: MissionChannelMessage[]) {
+    return received
+      .filter((message) => message.type === "MISSION_TELEMETRY")
+      .map((message) => (message as { pointing?: unknown }).pointing);
+  }
+
+  it("reaches the owner and a seated observer, and nobody else", async () => {
+    const owner = await subscriber(MISSION);
+    const observerId = randomUUID();
+    store.addObserverSeat(MISSION, observerId);
+    const observer = await watcher(MISSION, observerId, null);
+    const unseated = await watcher(MISSION, randomUUID(), null);
+    const borrowed = await watcher(MISSION, randomUUID(), randomUUID());
+    const elsewhere = await subscriber(OTHER_MISSION);
+
+    expect(observer.channel.currentState).toBe("SUBSCRIBED");
+    expect(unseated.channel.currentState).toBe("CLOSED");
+    expect(borrowed.channel.currentState).toBe("CLOSED");
+
+    relay.telemetryReported(MISSION, slewing(41.237, 120.04));
+
+    const expected = { altitudeDegrees: 41.2, azimuthDegrees: 120 };
+    expect(pointingsOf(owner.received)).toEqual([expected]);
+    expect(pointingsOf(observer.received)).toEqual([expected]);
+    expect(unseated.received).toEqual([]);
+    expect(borrowed.received).toEqual([]);
+    expect(elsewhere.received).toEqual([]);
+  });
+
+  it("stops reaching an observer once the controller closes the session to them", async () => {
+    const observerId = randomUUID();
+    store.addObserverSeat(MISSION, observerId);
+    store.closeToObservers(MISSION);
+    const observer = await watcher(MISSION, observerId, null);
+
+    relay.telemetryReported(MISSION, slewing(30, 90));
+
+    expect(observer.received).toEqual([]);
+  });
+
+  it("follows the mount through a slew, one sample per delta", async () => {
+    const owner = await subscriber(MISSION);
+
+    for (const [altitude, azimuth] of [
+      [20, 180],
+      [35.55, 200.04],
+      [56.662, 238.572],
+    ] as const) {
+      relay.telemetryReported(MISSION, slewing(altitude, azimuth));
+    }
+
+    expect(pointingsOf(owner.received)).toEqual([
+      { altitudeDegrees: 20, azimuthDegrees: 180 },
+      { altitudeDegrees: 35.6, azimuthDegrees: 200 },
+      { altitudeDegrees: 56.7, azimuthDegrees: 238.6 },
+    ]);
+  });
+
+  it("is null, not a guess, when the agent reported no position", async () => {
+    const owner = await subscriber(MISSION);
+    const delta = stateDelta(MISSION);
+    delta.telemetry.pointingHorizontal = null;
+
+    relay.telemetryReported(MISSION, delta);
+
+    expect(pointingsOf(owner.received)).toEqual([null]);
+  });
+
+  it("wraps an azimuth that rounds up to 360 back to north", async () => {
+    const owner = await subscriber(MISSION);
+
+    relay.telemetryReported(MISSION, slewing(45, 359.96));
+
+    expect(pointingsOf(owner.received)).toEqual([
+      { altitudeDegrees: 45, azimuthDegrees: 0 },
+    ]);
   });
 });
 

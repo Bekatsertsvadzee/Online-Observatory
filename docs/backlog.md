@@ -359,7 +359,7 @@ edit rather than the rewrite the stage list warns about.
 | Agent message | Reaches the client as |
 | --- | --- |
 | `AGENT_MISSION_EVENT` | `MISSION_STATE`, but only on `APPLIED`. A transition that arrived after a terminal state is an ordering artefact, not news about a telescope. |
-| `AGENT_STATE_DELTA` | `MISSION_TELEMETRY`, narrowed to the contract's client-safe fields. Device health, pointing, focuser position and agent version stop at the cloud. |
+| `AGENT_STATE_DELTA` | `MISSION_TELEMETRY`, narrowed to the contract's client-safe fields. Device health, equatorial pointing, focuser position and agent version stop at the cloud; the horizontal pointing passes as `pointing`, rounded to 0.1° (#148). |
 | `AGENT_COMMAND_ACK` | `MISSION_COMMAND_RESULT`, routed by the **minted command row**, never by the ack's own `missionId`. |
 
 **`MISSION_STREAM` was deferred here and is now built.** The contract describes two

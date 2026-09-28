@@ -2118,6 +2118,7 @@ class MissionTelemetryUpdate(BaseModel):
     residual_arcminutes: float | None = Field(None, alias='residualArcminutes')
     nudge_used_degrees: float | None = Field(None, alias='nudgeUsedDegrees', ge=0.0)
     ambient_temperature_c: float | None = Field(None, alias='ambientTemperatureC')
+    pointing: HorizontalCoordinates | None = Field(None, description='Where the mount is pointing, rounded to 0.1°. Null when the agent has not reported\na position. Sent only on the channel of the mission it belongs to. Read-only: no\nclient message addresses the mount, and this field does not change that.\n')
 
 
 class MissionStreamInfo(BaseModel):

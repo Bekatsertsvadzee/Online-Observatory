@@ -1950,7 +1950,8 @@ export const zMissionTelemetryUpdate = z.strictObject({
     centeringIteration: z.int().gte(0).nullish(),
     residualArcminutes: z.number().nullish(),
     nudgeUsedDegrees: z.number().gte(0).nullish(),
-    ambientTemperatureC: z.number().nullish()
+    ambientTemperatureC: z.number().nullish(),
+    pointing: zHorizontalCoordinates.nullish()
 });
 
 /**
