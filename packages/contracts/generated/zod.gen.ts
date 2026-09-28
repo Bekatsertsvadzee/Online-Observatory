@@ -1259,6 +1259,10 @@ export const zCaptureAssetKind = z.enum([
  */
 export const zCaptureVisibility = z.enum(['PRIVATE', 'GALLERY']);
 
+export const zSetCaptureVisibilityRequest = z.strictObject({
+    visibility: zCaptureVisibility
+});
+
 export const zCapture = z.strictObject({
     id: z.uuid(),
     missionId: z.uuid(),
@@ -2430,6 +2434,17 @@ export const zGetCapturePath = z.object({
  * The capture.
  */
 export const zGetCaptureResponse = zCapture;
+
+export const zSetCaptureVisibilityBody = zSetCaptureVisibilityRequest;
+
+export const zSetCaptureVisibilityPath = z.object({
+    captureId: z.uuid()
+});
+
+/**
+ * The capture.
+ */
+export const zSetCaptureVisibilityResponse = zCapture;
 
 export const zGetCaptureDownloadPath = z.object({
     captureId: z.uuid()

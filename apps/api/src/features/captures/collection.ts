@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { Capture, CapturePage } from "@darkview/contracts";
+import { recordAuditEvent } from "@darkview/db/audit";
 import { CAPTURE_CONTRACT_COLUMNS, toContractCapture } from "@darkview/db/capture";
 import { presignDownload } from "@darkview/storage/presign";
 
@@ -144,4 +145,89 @@ export async function getCapture(input: {
   });
 
   return row ? withSignedThumbnail(row, input.now) : null;
+}
+
+export type SetCaptureVisibilityResult =
+  | { ok: true; capture: Capture }
+  | { ok: false; status: 404 | 409; code: "NOT_FOUND" | "CONFLICT"; message: string };
+
+/**
+ * The owner publishes a capture to the gallery, or takes it back (#144).
+ *
+ * Scoped by userId exactly as `getCapture` is, so a capture belonging to anyone
+ * else -- an observer of the same mission included -- is "no such capture". ADR-007
+ * gives an observer no capture, and this is not a way to acquire one: it changes a
+ * flag on a row the caller already owns and grants nobody anything.
+ *
+ * GALLERY is refused for anything that is not REAL. A SIMULATED capture "is never
+ * presented as telescope output", and a public gallery is exactly that
+ * presentation. Taking a capture back to PRIVATE is always allowed, whatever its
+ * mode, so a customer can never be stuck with an image in public.
+ *
+ * Idempotent: asking for the visibility a capture already has writes nothing and
+ * audits nothing. The update is conditional on the visibility read, so two racing
+ * requests produce one change and one audit row, never two.
+ */
+export async function setCaptureVisibility(input: {
+  userId: string;
+  captureId: string;
+  visibility: Capture["visibility"];
+  now: Date;
+}): Promise<SetCaptureVisibilityResult> {
+  const { userId, captureId, visibility, now } = input;
+  const notFound = {
+    ok: false,
+    status: 404,
+    code: "NOT_FOUND",
+    message: "No such capture.",
+  } as const;
+
+  const row = await getDatabase().$transaction(async (tx) => {
+    const current = await tx.capture.findFirst({
+      where: { id: captureId, userId },
+      select: { ...CAPTURE_WITH_THUMBNAIL, isDemo: true },
+    });
+    if (!current || current.visibility === visibility) return current;
+
+    if (visibility === "GALLERY" && current.mode !== "REAL") return "SIMULATED" as const;
+
+    const changed = await tx.capture.updateMany({
+      where: { id: captureId, userId, visibility: current.visibility },
+      data: { visibility },
+    });
+    if (changed.count === 0) return current;
+
+    await recordAuditEvent(
+      {
+        category: "MISSION",
+        action: "CAPTURE_VISIBILITY_CHANGED",
+        actorUserId: userId,
+        missionId: current.missionId,
+        entityType: "Capture",
+        entityId: captureId,
+        detail: { from: current.visibility, to: visibility },
+        isDemo: current.isDemo,
+      },
+      tx,
+    );
+    return { ...current, visibility };
+  });
+
+  if (!row) return notFound;
+  if (row === "SIMULATED") {
+    return {
+      ok: false,
+      status: 409,
+      code: "CONFLICT",
+      message: "A simulated capture cannot be published to the gallery.",
+    };
+  }
+
+  // A lost race re-reads, so the answer is the row as it now stands.
+  if (row.visibility !== visibility) {
+    const capture = await getCapture({ userId, captureId, now });
+    return capture ? { ok: true, capture } : notFound;
+  }
+
+  return { ok: true, capture: await withSignedThumbnail(row, now) };
 }
