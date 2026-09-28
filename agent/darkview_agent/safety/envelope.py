@@ -91,7 +91,7 @@ def daylight_lock_altitude_degrees(config: SafetyEnvelopeConfig) -> float:
     return min(configured, MAX_DAYLIGHT_LOCK_ALTITUDE_DEGREES)
 
 
-#: `maxAltitudeMeasuredBy` on the development seed's simulator envelope (ADR-031).
+#: `maxAltitudeMeasuredBy` on the development seed's simulator envelope (ADR-032).
 #:
 #: The same string as `SIMULATOR_ENVELOPE_MEASURER` in
 #: `packages/db/simulator-envelope.ts`; a test holds the two equal. It is a
@@ -115,7 +115,7 @@ def is_simulator_marked(config: SafetyEnvelopeConfig | None) -> bool:
 def admit_envelope(
     config: SafetyEnvelopeConfig | None, *, simulated: bool
 ) -> SafetyEnvelopeConfig | None:
-    """The envelope as this agent may enforce it (ADR-031).
+    """The envelope as this agent may enforce it (ADR-032).
 
     On an agent driving anything but the simulator, a simulator-marked envelope
     loses its MAX_ALT_SAFE and is UNMEASURED: every slew refused. This is the

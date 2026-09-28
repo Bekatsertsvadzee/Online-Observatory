@@ -1,4 +1,4 @@
-"""ADR-031: the simulator's altitude limit never stands on real hardware.
+"""ADR-032: the simulator's altitude limit never stands on real hardware.
 
 The development seed gives SIMULATED demo observatories a MAX_ALT_SAFE recorded
 under `SIMULATOR_ENVELOPE_MEASURER`, because it was never measured. The cloud

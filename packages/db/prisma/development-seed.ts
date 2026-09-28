@@ -74,7 +74,7 @@ export const DEMO_ACCOUNT_EMAILS = {
 } as const;
 
 /**
- * The simulator's stand-in for MAX_ALT_SAFE (ADR-031). NOT A MEASUREMENT.
+ * The simulator's stand-in for MAX_ALT_SAFE (ADR-032). NOT A MEASUREMENT.
  *
  * Written only onto SIMULATED demo observatories, under
  * `SIMULATOR_ENVELOPE_MEASURER`, so a simulated mission can slew. The cloud's

@@ -1,4 +1,4 @@
-# ADR-031 — A simulator envelope for the development seed
+# ADR-032 — A simulator envelope for the development seed
 
 - **Date:** 2026-09-28
 - **Status:** APPROVED
@@ -9,7 +9,7 @@
 - **Amends:** the development seed's rule that it "must never set" `maxAltitudeDegrees`
   (`packages/db/prisma/seed.ts`, from DV-020/DV-034), and `docs/SAFETY.md` §2
 - **Relates to:** `ADR-013` (partner observatories), `ADR-024` (unattended posture)
-- **Numbering:** 031, not 025. `darkview-clients` already holds ADR-025 to ADR-030, and the
+- **Numbering:** 032, not 025. `darkview-clients` already holds ADR-025 to ADR-031, and the
   decision records are reconciled into one directory when the repositories merge.
 
 ## Context

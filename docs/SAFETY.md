@@ -59,7 +59,7 @@ Recording a measurement requires its provenance. `setSafetyEnvelope` refuses a
 `maxAltitudeMeasuredBy` — a number with no measurer is somebody's guess, and a guess here
 is how an optical train meets a fork arm.
 
-**The simulator's stand-in (ADR-031).** The development seed writes
+**The simulator's stand-in (ADR-032).** The development seed writes
 `SIMULATOR_MAX_ALTITUDE_DEGREES` onto its SIMULATED demo observatories, recorded by
 `SIMULATOR — NOT A MEASUREMENT`, so a simulated mission can slew. That is the clearly-named
 fake above, and it is held there four times over: the seed writes it only to a SIMULATED

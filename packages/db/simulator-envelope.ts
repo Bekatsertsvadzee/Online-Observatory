@@ -1,5 +1,5 @@
 /**
- * The simulator's stand-in for MAX_ALT_SAFE, and the guard that keeps it there (ADR-031).
+ * The simulator's stand-in for MAX_ALT_SAFE, and the guard that keeps it there (ADR-032).
  *
  * The development seed gives its SIMULATED demo observatories an altitude limit so a
  * simulated mission can slew at all. That number was never measured, so it is

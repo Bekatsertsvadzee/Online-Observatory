@@ -114,7 +114,7 @@ append-only credit ledger is only ever inserted into.
   `demo.operator@darkview.invalid` (OPERATOR) and `demo.viewer@darkview.invalid`, all with
   the password `darkview demo password` (`DEMO_ACCOUNT_PASSWORD`). Printed by the seed.
   Development only; a real database never has these accounts.
-- **Simulator envelope (ADR-031, #147).** Both demo observatories get
+- **Simulator envelope (ADR-032, #147).** Both demo observatories get
   `maxAltitudeDegrees = SIMULATOR_MAX_ALTITUDE_DEGREES` recorded by
   `SIMULATOR — NOT A MEASUREMENT`, so a simulated mission can slew. The seed writes it only
   to a SIMULATED demo observatory; the API and realtime loaders, the admin envelope route,

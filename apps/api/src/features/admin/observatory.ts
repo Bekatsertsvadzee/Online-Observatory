@@ -89,7 +89,7 @@ export async function setObservatoryMode(input: {
     return { ok: false, status: 404, code: "NOT_FOUND", message: "No such observatory." };
   }
 
-  // ADR-031. An observatory still carrying the simulator's stand-in altitude limit
+  // ADR-032. An observatory still carrying the simulator's stand-in altitude limit
   // has never been measured, and does not go onto real hardware with it. The
   // loaders would already read it as UNMEASURED under REAL; refusing the switch
   // makes the operator record a measurement (or clear the value) first.

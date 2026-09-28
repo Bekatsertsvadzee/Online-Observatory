@@ -253,7 +253,7 @@ describe("recording a measured maximum altitude", () => {
   });
 });
 
-describe("the simulator's stand-in limit (ADR-031)", () => {
+describe("the simulator's stand-in limit (ADR-032)", () => {
   const simulatorEnvelope = () =>
     envelopeFor(MEASURED, {
       maxAltitudeMeasuredAt: NOW.toISOString(),

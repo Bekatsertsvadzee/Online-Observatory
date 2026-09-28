@@ -309,7 +309,7 @@ describe("qualifying a node to operate unattended", () => {
     expect(result.code).toBe("SAFETY_NOT_CONFIGURED");
   });
 
-  it("refuses the simulator's stand-in limit, which is not a measurement (ADR-031)", async () => {
+  it("refuses the simulator's stand-in limit, which is not a measurement (ADR-032)", async () => {
     const node = await nodeIn("UNDER_REVIEW");
     await measureEnvelope(node.observatoryId, FAKE_MEASURED_MAX_ALTITUDE_DEGREES);
     await database.safetyEnvelope.update({

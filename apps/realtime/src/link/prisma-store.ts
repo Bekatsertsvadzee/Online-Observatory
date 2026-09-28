@@ -707,7 +707,7 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       // same reason as LIVE_MISSION_STATES: this service does not depend on the
       // Next.js app. If the contract changes, both change.
       //
-      // Admitted for the observatory's mode before it is relayed (ADR-031): the
+      // Admitted for the observatory's mode before it is relayed (ADR-032): the
       // agent is never sent the simulator's altitude limit for anything but a
       // SIMULATED observatory. The agent applies the same rule again on receipt.
       return admitEnvelopeFor(

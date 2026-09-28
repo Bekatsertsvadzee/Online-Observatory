@@ -13,7 +13,7 @@ import type { Site } from "@/lib/ephemeris/engine";
  * `maxAltitudeDegrees`: UNMEASURED, and nothing moves. An observatory with no
  * envelope is not an observatory with permissive defaults.
  *
- * Admitted for the observatory's current mode (ADR-031): a simulator-marked
+ * Admitted for the observatory's current mode (ADR-032): a simulator-marked
  * envelope on anything but a SIMULATED observatory is returned UNMEASURED.
  */
 export async function loadSafetyEnvelope(

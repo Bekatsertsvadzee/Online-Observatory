@@ -1643,7 +1643,7 @@ def _failure_reason_for(action: WatchdogAction) -> MissionFailureReason:
 
 
 def _drives_simulator(config: AgentConfig, devices: Devices) -> bool:
-    """Whether the simulator's altitude limit may stand here (ADR-031).
+    """Whether the simulator's altitude limit may stand here (ADR-032).
 
     Both the configured driver mode and the mount actually wired must say
     SIMULATED. Either one naming real hardware is enough to refuse it.

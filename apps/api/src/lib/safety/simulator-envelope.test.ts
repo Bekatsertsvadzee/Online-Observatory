@@ -16,7 +16,7 @@ function envelope(measuredBy: string | null) {
   };
 }
 
-describe("the simulator's stand-in limit (ADR-031)", () => {
+describe("the simulator's stand-in limit (ADR-032)", () => {
   it.each([SIMULATOR_ENVELOPE_MEASURER, "simulator - not a measurement", "  Simulator"])(
     "recognises %j as the simulator's",
     (measuredBy) => {

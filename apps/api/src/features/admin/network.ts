@@ -148,7 +148,7 @@ export async function approveNetworkNode(input: {
     };
   }
 
-  // ADR-031: the simulator's stand-in limit counts as no limit here, whatever the
+  // ADR-032: the simulator's stand-in limit counts as no limit here, whatever the
   // observatory's mode. Approval qualifies a telescope, and it is not measured.
   const envelope = node.observatory.safetyEnvelope;
   if (

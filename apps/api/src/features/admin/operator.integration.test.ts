@@ -287,7 +287,7 @@ describe("switching the observatory to real hardware", () => {
     });
   });
 
-  it("refuses REAL while the envelope is the simulator's stand-in (ADR-031)", async () => {
+  it("refuses REAL while the envelope is the simulator's stand-in (ADR-032)", async () => {
     await database.mission.update({
       where: { id: missionId },
       data: { state: "COMPLETE" },

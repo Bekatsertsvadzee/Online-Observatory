@@ -123,7 +123,7 @@ Mauna Kea (`DEMO_IDS.nightObservatory`, token `DEMO_NIGHT_AGENT_DEVICE_TOKEN`, #
 it is night during Tbilisi's working day. Run an agent against the night side with
 `DARKVIEW_AGENT_SITE_LATITUDE=19.8207 DARKVIEW_AGENT_SITE_LONGITUDE=-155.4681`, or the
 agent's own daylight lock will refuse every slew. Both carry the simulator's stand-in
-altitude limit (ADR-031), so simulated missions slew; it is never admitted on anything
+altitude limit (ADR-032), so simulated missions slew; it is never admitted on anything
 that is not SIMULATED.
 
 The demo accounts — `demo.observer`, `demo.operator` and `demo.viewer`, all

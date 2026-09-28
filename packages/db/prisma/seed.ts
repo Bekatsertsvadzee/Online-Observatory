@@ -27,7 +27,7 @@ function deviceTokenHashOf(token: string) {
 }
 
 /**
- * The simulator's safety envelope, for one SIMULATED demo observatory (ADR-031).
+ * The simulator's safety envelope, for one SIMULATED demo observatory (ADR-032).
  *
  * MAX_ALT_SAFE is MEASURED from the physical optical train (DV-034), and no
  * observatory with real hardware may carry a value nobody measured. This one is
@@ -66,7 +66,7 @@ async function seedSimulatorEnvelope(
     maxAltitudeMeasuredAt: new Date("2026-09-28T00:00:00.000Z"),
     maxAltitudeMeasuredBy: SIMULATOR_ENVELOPE_MEASURER,
     maxAltitudeMeasurementNote:
-      "Development seed, ADR-031. NOT A MEASUREMENT: nobody measured this. It lets the " +
+      "Development seed, ADR-032. NOT A MEASUREMENT: nobody measured this. It lets the " +
       "simulator slew, and is read as UNMEASURED on any observatory or agent that is " +
       "not SIMULATED.",
   };

@@ -64,7 +64,7 @@ export async function setSafetyEnvelope(input: {
     return { ok: false, status: 404, code: "NOT_FOUND", message: "No such observatory." };
   }
 
-  // ADR-031. The simulator's stand-in limit is not a measurement, and recording it
+  // ADR-032. The simulator's stand-in limit is not a measurement, and recording it
   // against an observatory that drives real hardware would put an unmeasured
   // number in front of a real mount. The loaders would read it as UNMEASURED
   // anyway; refusing here keeps it out of the row.

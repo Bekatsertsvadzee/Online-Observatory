@@ -960,7 +960,7 @@ describe("a capture reaching the Collection", () => {
   });
 });
 
-describe("the envelope relayed to the agent (ADR-031)", () => {
+describe("the envelope relayed to the agent (ADR-032)", () => {
   /** The simulator's stand-in limit, stated here rather than defaulted. */
   const SIMULATOR_LIMIT_DEGREES = 78;
 
