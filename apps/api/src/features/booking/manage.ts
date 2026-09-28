@@ -1,6 +1,7 @@
 import "server-only";
 
-import type { Booking, ErrorCode } from "@darkview/contracts";
+import type { Booking, BookingPage, ErrorCode } from "@darkview/contracts";
+import { zBookingId } from "@darkview/contracts/zod";
 
 import { getDatabase } from "@/lib/db/client";
 import {
@@ -23,6 +24,53 @@ export async function getMyBooking(input: {
     include: { entitlement: BOOKING_ENTITLEMENT_SELECT },
   });
   return row ? toContractBooking(row) : null;
+}
+
+/**
+ * The signed-in customer's bookings, latest slot first.
+ *
+ * Scoped by `userId` in the WHERE clause, as `GET /missions` and the Collection
+ * are, so another customer's booking is never fetched and cannot leak through a
+ * page edge. Ordered by `slotStartAt` -- when the observation is, which is what
+ * the customer is looking for -- with the id as the tiebreak a keyset cursor needs.
+ *
+ * The cursor is the last id of the previous page. One that is not one of the
+ * caller's bookings -- malformed, unknown, or somebody else's -- ends the list: an
+ * empty page, never an error that would tell a prober which ids exist.
+ */
+export async function listMyBookings(input: {
+  userId: string;
+  cursor?: string;
+  limit: number;
+}): Promise<BookingPage> {
+  const { userId, cursor, limit } = input;
+  const database = getDatabase();
+  const empty: BookingPage = { items: [], page: { hasMore: false, nextCursor: null } };
+
+  if (cursor !== undefined) {
+    if (!zBookingId.safeParse(cursor).success) return empty;
+    const owned = await database.booking.findFirst({
+      where: { id: cursor, userId },
+      select: { id: true },
+    });
+    if (!owned) return empty;
+  }
+
+  const rows = await database.booking.findMany({
+    where: { userId },
+    orderBy: [{ slotStartAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    include: { entitlement: BOOKING_ENTITLEMENT_SELECT },
+  });
+
+  const items = rows.slice(0, limit);
+  const hasMore = rows.length > limit;
+
+  return {
+    items: items.map(toContractBooking),
+    page: { hasMore, nextCursor: hasMore ? (items.at(-1)?.id ?? null) : null },
+  };
 }
 
 /**

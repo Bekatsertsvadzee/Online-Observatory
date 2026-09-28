@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const { meterRequest, getCurrentSession, requestHeaders, reserveSlot } = vi.hoisted(() => ({
+const { meterRequest, getCurrentSession, requestHeaders, reserveSlot, listMyBookings } = vi.hoisted(() => ({
+  listMyBookings: vi.fn(),
   meterRequest: vi.fn(),
   getCurrentSession: vi.fn(),
   requestHeaders: { origin: "https://darkview.test" as string | null },
@@ -23,10 +24,11 @@ vi.mock("@/lib/validation/env", () => ({
   getServerEnvironment: () => ({ APP_URL: "https://darkview.test" }),
 }));
 vi.mock("@/features/booking/reserve", () => ({ reserveSlot }));
+vi.mock("@/features/booking/manage", () => ({ listMyBookings }));
 
-import { zBookingWithPaymentIntent } from "@darkview/contracts/zod";
+import { zBookingPage, zBookingWithPaymentIntent } from "@darkview/contracts/zod";
 
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 const USER_ID = "6f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e0f";
 const OBSERVATORY_ID = "00000000-0000-4000-8000-000000000010";
@@ -313,5 +315,50 @@ describe("POST /bookings", () => {
 
     expect(response.status).toBe(201);
     expect(zBookingWithPaymentIntent.parse(await response.json())).toEqual(paidByVoucher);
+  });
+});
+
+describe("GET /bookings", () => {
+  const list = (query = "") => GET(new Request(`https://darkview.test/bookings${query}`));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getCurrentSession.mockResolvedValue(session);
+    listMyBookings.mockResolvedValue({ items: [], page: { hasMore: false, nextCursor: null } });
+  });
+
+  it("refuses an anonymous caller with 401 without reading anything", async () => {
+    getCurrentSession.mockResolvedValueOnce(null);
+    const response = await list();
+    expect(response.status).toBe(401);
+    expect(listMyBookings).not.toHaveBeenCalled();
+  });
+
+  it("asks only for the caller's own bookings, with the contract's default limit", async () => {
+    await list();
+    expect(listMyBookings).toHaveBeenCalledWith({ userId: USER_ID, cursor: undefined, limit: 20 });
+  });
+
+  it("ignores a userId in the query: the caller is the only owner it lists", async () => {
+    await list("?userId=00000000-0000-4000-8000-000000000999");
+    expect(listMyBookings).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }));
+  });
+
+  it("passes the cursor through and clamps the limit to the contract's 1..100", async () => {
+    await list(`?cursor=${reserved.booking.id}&limit=500`);
+    expect(listMyBookings).toHaveBeenCalledWith({ userId: USER_ID, cursor: reserved.booking.id, limit: 100 });
+    await list("?limit=0");
+    expect(listMyBookings).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 1 }));
+  });
+
+  it("returns a body the contract's BookingPage accepts", async () => {
+    listMyBookings.mockResolvedValueOnce({
+      items: [reserved.booking],
+      page: { hasMore: true, nextCursor: reserved.booking.id },
+    });
+    const response = await list();
+    expect(response.status).toBe(200);
+    const body: unknown = await response.json();
+    expect(() => zBookingPage.parse(body)).not.toThrow();
   });
 });
