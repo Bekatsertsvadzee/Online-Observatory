@@ -241,6 +241,26 @@ describe("POST /bookings", () => {
     });
   });
 
+  it("carries the reasons a target cannot be observed in the slot (#151)", async () => {
+    getCurrentSession.mockResolvedValueOnce(session);
+    reserveSlot.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      code: "TARGET_NOT_OBSERVABLE",
+      message: "Saturn cannot be observed from this telescope for the whole slot (BELOW_HORIZON).",
+      details: { blockReasons: ["BELOW_HORIZON"] },
+    });
+
+    const response = await POST(request({ body: validBody }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      code: "TARGET_NOT_OBSERVABLE",
+      message: "Saturn cannot be observed from this telescope for the whole slot (BELOW_HORIZON).",
+      details: { blockReasons: ["BELOW_HORIZON"] },
+    });
+  });
+
   it("refuses a request that names its own price", async () => {
     getCurrentSession.mockResolvedValueOnce(session);
 

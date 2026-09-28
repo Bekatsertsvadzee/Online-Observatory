@@ -24,6 +24,7 @@ export const zErrorCode = z.enum([
     'SESSION_NOT_OWNER',
     'MISSION_NOT_ACTIVE',
     'MISSION_NOT_OBSERVABLE',
+    'TARGET_NOT_OBSERVABLE',
     'OBSERVER_CAPACITY_REACHED',
     'OBSERVER_CANNOT_COMMAND',
     'OBSERVATORY_OFFLINE',
@@ -227,6 +228,27 @@ export const zTonightTargetList = z.strictObject({
     observatoryId: z.uuid(),
     items: z.array(zTonightTarget),
     evaluatedAt: z.iso.datetime()
+});
+
+/**
+ * One target judged across one slot (#151). Computed at request time.
+ */
+export const zSlotVisibility = z.strictObject({
+    observable: z.boolean(),
+    blockReasons: z.array(zVisibilityBlockReason),
+    atStart: zTargetVisibility
+});
+
+export const zSlotTarget = z.strictObject({
+    target: zTarget,
+    visibility: zSlotVisibility
+});
+
+export const zSlotTargetList = z.strictObject({
+    observatoryId: z.uuid(),
+    startAt: z.iso.datetime(),
+    durationMinutes: z.int().gt(0),
+    items: z.array(zSlotTarget)
 });
 
 /**
@@ -2122,6 +2144,17 @@ export const zListTonightTargetsQuery = z.object({
  * Targets with their current visibility assessment.
  */
 export const zListTonightTargetsResponse = zTonightTargetList;
+
+export const zListSlotTargetsQuery = z.object({
+    observatoryId: z.uuid(),
+    startAt: z.iso.datetime(),
+    durationMinutes: z.int().gte(1).lte(240)
+});
+
+/**
+ * Every catalogue target with its assessment across the slot.
+ */
+export const zListSlotTargetsResponse = zSlotTargetList;
 
 export const zGetTargetPath = z.object({
     slug: z.string().regex(/^[a-z0-9-]+$/)

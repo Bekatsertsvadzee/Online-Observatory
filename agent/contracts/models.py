@@ -42,6 +42,7 @@ class ErrorCode(StrEnum):
     session_not_owner = 'SESSION_NOT_OWNER'
     mission_not_active = 'MISSION_NOT_ACTIVE'
     mission_not_observable = 'MISSION_NOT_OBSERVABLE'
+    target_not_observable = 'TARGET_NOT_OBSERVABLE'
     observer_capacity_reached = 'OBSERVER_CAPACITY_REACHED'
     observer_cannot_command = 'OBSERVER_CANNOT_COMMAND'
     observatory_offline = 'OBSERVATORY_OFFLINE'
@@ -287,6 +288,36 @@ class TonightTargetList(BaseModel):
     observatory_id: UUID = Field(..., alias='observatoryId', description='The observatory every assessment in `items` was made at.')
     items: list[TonightTarget]
     evaluated_at: AwareDatetime = Field(..., alias='evaluatedAt')
+
+
+class SlotVisibility(BaseModel):
+    """
+    One target judged across one slot (#151). Computed at request time.
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    observable: bool = Field(..., description='True when no instant of the slot is blocked. `POST /bookings` refuses the target when false.')
+    block_reasons: list[VisibilityBlockReason] = Field(..., alias='blockReasons', description='Every reason found at any instant of the slot, in the order first met. Empty when observable.')
+    at_start: TargetVisibility = Field(..., alias='atStart')
+
+
+class SlotTarget(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    target: Target
+    visibility: SlotVisibility
+
+
+class SlotTargetList(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    start_at: AwareDatetime = Field(..., alias='startAt')
+    duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
+    items: list[SlotTarget]
 
 
 class ObservatoryMode(StrEnum):

@@ -51,7 +51,7 @@ export async function POST(
     request: body.data,
     now: new Date(),
   });
-  if (!result.ok) return apiError(result.status, result.code, result.message);
+  if (!result.ok) return apiError(result.status, result.code, result.message, result.details);
 
   return Response.json(result.booking, { status: 201 });
 }

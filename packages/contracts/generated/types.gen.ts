@@ -35,6 +35,7 @@ export const ErrorCode = {
     SESSION_NOT_OWNER: 'SESSION_NOT_OWNER',
     MISSION_NOT_ACTIVE: 'MISSION_NOT_ACTIVE',
     MISSION_NOT_OBSERVABLE: 'MISSION_NOT_OBSERVABLE',
+    TARGET_NOT_OBSERVABLE: 'TARGET_NOT_OBSERVABLE',
     OBSERVER_CAPACITY_REACHED: 'OBSERVER_CAPACITY_REACHED',
     OBSERVER_CANNOT_COMMAND: 'OBSERVER_CANNOT_COMMAND',
     OBSERVATORY_OFFLINE: 'OBSERVATORY_OFFLINE',
@@ -315,6 +316,33 @@ export type TonightTargetList = {
     observatoryId: string;
     items: Array<TonightTarget>;
     evaluatedAt: string;
+};
+
+/**
+ * One target judged across one slot (#151). Computed at request time.
+ */
+export type SlotVisibility = {
+    /**
+     * True when no instant of the slot is blocked. `POST /bookings` refuses the target when false.
+     */
+    observable: boolean;
+    /**
+     * Every reason found at any instant of the slot, in the order first met. Empty when observable.
+     */
+    blockReasons: Array<VisibilityBlockReason>;
+    atStart: TargetVisibility;
+};
+
+export type SlotTarget = {
+    target: Target;
+    visibility: SlotVisibility;
+};
+
+export type SlotTargetList = {
+    observatoryId: string;
+    startAt: string;
+    durationMinutes: number;
+    items: Array<SlotTarget>;
 };
 
 /**
@@ -3126,6 +3154,48 @@ export type ListTonightTargetsResponses = {
 };
 
 export type ListTonightTargetsResponse = ListTonightTargetsResponses[keyof ListTonightTargetsResponses];
+
+export type ListSlotTargetsData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * An `id` from `GET /observatories`.
+         */
+        observatoryId: string;
+        /**
+         * The slot's start, a `startAt` from `GET /slots`.
+         */
+        startAt: string;
+        /**
+         * The slot's length, its `durationMinutes`.
+         */
+        durationMinutes: number;
+    };
+    url: '/targets/visibility';
+};
+
+export type ListSlotTargetsErrors = {
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type ListSlotTargetsError = ListSlotTargetsErrors[keyof ListSlotTargetsErrors];
+
+export type ListSlotTargetsResponses = {
+    /**
+     * Every catalogue target with its assessment across the slot.
+     */
+    200: SlotTargetList;
+};
+
+export type ListSlotTargetsResponse = ListSlotTargetsResponses[keyof ListSlotTargetsResponses];
 
 export type GetTargetData = {
     body?: never;

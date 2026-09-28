@@ -12,6 +12,7 @@ import {
   findGeneratedSlot,
   isSlotConflict,
   retryOnDeadlock,
+  targetNotObservableInSlot,
   targetTooLongForSlot,
   toContractBooking,
 } from "@/features/booking/reserve";
@@ -30,6 +31,7 @@ type Refusal = {
   status: 404 | 409 | 422 | 503;
   code: ErrorCode;
   message: string;
+  details?: Record<string, unknown>;
 };
 
 const notFound: Refusal = { ok: false, status: 404, code: "NOT_FOUND", message: "No such booking." };
@@ -164,6 +166,14 @@ export async function rescheduleMyBooking(input: {
     default:
       break;
   }
+
+  const notObservable = await targetNotObservableInSlot(
+    observatory,
+    target,
+    slotStartAt,
+    slot.durationMinutes,
+  );
+  if (notObservable) return notObservable;
 
   try {
     const bookingId = await retryOnDeadlock(() =>

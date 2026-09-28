@@ -27,6 +27,7 @@ import {
   type BookableObservatory,
 } from "@/features/booking/observatories";
 import { sandboxCheckoutUrl } from "@/features/payments/sandbox-checkout";
+import { slotVisibilityForBooking } from "@/features/targets/slot";
 import { getDatabase } from "@/lib/db/client";
 import { openIntervals } from "@/lib/slots/availability";
 import { nightWindow } from "@/lib/slots/darkness";
@@ -89,6 +90,7 @@ export type ReserveSlotFailure = {
   status: 404 | 409 | 422 | 500;
   code: ErrorCode;
   message: string;
+  details?: Record<string, unknown>;
 };
 
 export type ReserveSlotSuccess = {
@@ -138,6 +140,35 @@ export function targetTooLongForSlot(
 ): string | null {
   if (target.expectedMissionMinutes <= durationMinutes) return null;
   return `${target.nameEn} needs ${target.expectedMissionMinutes} minutes; this slot is ${durationMinutes}.`;
+}
+
+/**
+ * #151: a target the slot cannot deliver is refused where the money is taken, not
+ * only left off the list. Judged exactly as `GET /targets/visibility` judges it.
+ * Returns the refusal, or null when the target is observable across the slot.
+ */
+export async function targetNotObservableInSlot(
+  observatory: BookableObservatory,
+  target: Parameters<typeof slotVisibilityForBooking>[1] & { nameEn: string },
+  slotStartAt: Date,
+  durationMinutes: number,
+): Promise<(ReserveSlotFailure & { status: 422 }) | null> {
+  const visibility = await slotVisibilityForBooking(
+    observatory,
+    target,
+    slotStartAt,
+    durationMinutes,
+  );
+  if (visibility.observable) return null;
+  return {
+    ok: false,
+    status: 422,
+    code: "TARGET_NOT_OBSERVABLE",
+    message:
+      `${target.nameEn} cannot be observed from this telescope for the whole slot ` +
+      `(${visibility.blockReasons.join(", ")}). Choose another target or another slot.`,
+    details: { blockReasons: visibility.blockReasons },
+  };
 }
 
 /** What a booking read selects so its entitlement reaches the contract (DV-111). */
@@ -389,6 +420,14 @@ export async function reserveSlot(input: {
     default:
       break;
   }
+
+  const notObservable = await targetNotObservableInSlot(
+    observatory,
+    target,
+    slotStartAt,
+    slot.durationMinutes,
+  );
+  if (notObservable) return notObservable;
 
   // One price reduction per booking (maintainer decision of 2026-09-16, extended to
   // subscription minutes by ADR-022 section 7).

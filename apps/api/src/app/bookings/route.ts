@@ -103,7 +103,7 @@ export async function POST(request: Request) {
   });
 
   if (!result.ok) {
-    return apiError(result.status, result.code, result.message);
+    return apiError(result.status, result.code, result.message, result.details);
   }
 
   return Response.json(result.body, { status: 201 });

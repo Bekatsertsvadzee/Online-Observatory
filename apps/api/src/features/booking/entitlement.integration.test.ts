@@ -192,19 +192,22 @@ beforeEach(async () => {
     },
   });
 
+  // Polaris: some 42 degrees up over Tbilisi all night, every night, so every slot
+  // here can deliver it (#151). M13 stood here before, below the horizon for most of
+  // a December night -- a booking the platform now refuses.
   const target = await database.target.create({
     data: {
-      slug: `m13-${randomUUID()}`,
-      nameEn: "M13",
-      nameKa: "M13",
-      type: "GLOBULAR_CLUSTER",
+      slug: `polaris-${randomUUID()}`,
+      nameEn: "Polaris",
+      nameKa: "პოლარისი",
+      type: "DOUBLE_STAR",
       positionSource: "FIXED",
-      rightAscensionHours: 16.6949,
-      declinationDegrees: 36.4613,
-      angularSizeArcmin: 20,
-      magnitude: 5.8,
+      rightAscensionHours: 2.5303,
+      declinationDegrees: 89.2641,
+      angularSizeArcmin: 0.3,
+      magnitude: 2,
       opticalConfig: "F10_NATIVE",
-      imagingProfile: "GLOBULAR_CLUSTER",
+      imagingProfile: "DOUBLE_STAR",
       minAltitudeDegrees: 25,
       expectedMissionMinutes: 30,
     },
@@ -368,15 +371,17 @@ describe("taking a free reschedule", () => {
 
   it("accepts a changed target that fits the slot", async () => {
     const { bookingId } = await entitledBooking();
+    // Almach, high in the east in that slot. Albireo stood here before, and has
+    // sunk under its minimum altitude by then (#151).
     const short = await database.target.create({
       data: {
-        slug: `albireo-${randomUUID()}`,
-        nameEn: "Albireo",
-        nameKa: "Albireo",
+        slug: `almach-${randomUUID()}`,
+        nameEn: "Almach",
+        nameKa: "Almach",
         type: "DOUBLE_STAR",
         positionSource: "FIXED",
-        rightAscensionHours: 19.512,
-        declinationDegrees: 27.9597,
+        rightAscensionHours: 2.065,
+        declinationDegrees: 42.3297,
         angularSizeArcmin: 1,
         magnitude: 3.1,
         opticalConfig: "F10_NATIVE",
