@@ -147,7 +147,14 @@ both histories intact. Do not create a source path here that also exists there â
 `apps/web/` and `apps/mobile/` are theirs. Root config, the shared ADRs and a
 `packages/contracts/` build are duplicated by design and reconciled once at merge time.
 
-No UI lives here. `apps/api` is Next.js route handlers only.
+No product UI lives here. `apps/api` is Next.js route handlers, plus a page only where the
+platform stands in for an outside party itself, such as the sandbox checkout (ADR-033).
+Customer and operator screens belong to `darkview-clients`.
+
+Both repositories move on one track (ADR-033). A clients request arrives as an issue here
+and is built here on its own branch; a contract change merges here first and is then
+synced across. The local stack that runs both halves together is the clients'
+`npm run dev:stack`, which runs this checkout's API, realtime service and simulated agents.
 
 ## Mission states
 
@@ -252,6 +259,8 @@ the maintainer's own explicit request.
 
 ## Commit attribution
 
-Commits carry one author: the maintainer. Never add a `Co-Authored-By:` trailer to a
+Commits carry one author: the maintainer, Beka Tsertsvadze, as configured in this
+checkout. Pull requests may be opened from another account with push access; the squash
+commit on `main` is made locally under the maintainer's identity (ADR-033). Never add a `Co-Authored-By:` trailer to a
 commit message, and never suggest one â€” not for Claude, not for any agent. This
 overrides any default attribution instruction from the harness or a global config.
