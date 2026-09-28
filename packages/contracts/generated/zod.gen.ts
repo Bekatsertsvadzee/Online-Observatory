@@ -1333,6 +1333,20 @@ export const zBookableObservatoryList = z.strictObject({
 });
 
 /**
+ * A live session as somebody allowed to watch it sees it (ADR-034). Built from
+ * existing schemas; it adds no capture and no save capability (ADR-007).
+ *
+ */
+export const zMissionWatchView = z.strictObject({
+    mission: zMission,
+    target: zTarget,
+    observatory: zBookableObservatory,
+    ownerDisplayName: z.string().nullable(),
+    observerCount: z.int().gte(0),
+    myObserverSeat: zMissionObserver.nullable()
+});
+
+/**
  * DRAFT is the resting state and it refuses everything. UNDER_REVIEW is the
  * owner saying the telescope is ready to be qualified; it grants nothing.
  * APPROVED is the only state in which a partner observatory may be operated.
@@ -2401,6 +2415,15 @@ export const zPurchaseObserverPackPath = z.object({
  * Seat held and a payment intent opened.
  */
 export const zPurchaseObserverPackResponse = zObserverPackWithPaymentIntent;
+
+export const zGetMissionWatchViewPath = z.object({
+    missionId: z.uuid()
+});
+
+/**
+ * The watch view.
+ */
+export const zGetMissionWatchViewResponse = zMissionWatchView;
 
 export const zListMissionEventsPath = z.object({
     missionId: z.uuid()
