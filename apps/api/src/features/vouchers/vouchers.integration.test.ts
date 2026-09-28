@@ -25,6 +25,7 @@ const SECRET = "v".repeat(32);
 vi.mock("@/lib/validation/env", () => ({
   getServerEnvironment: () => ({
     NODE_ENV: process.env.NODE_ENV ?? "test",
+    APP_URL: "https://darkview.test",
     VOUCHER_CODE_SECRET: process.env.TEST_NO_VOUCHER_SECRET ? undefined : "v".repeat(32),
   }),
 }));

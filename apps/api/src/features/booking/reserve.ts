@@ -1,5 +1,7 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+
 import type {
   Booking as ContractBooking,
   BookingWithPaymentIntent,
@@ -24,6 +26,7 @@ import {
   findBookableObservatory,
   type BookableObservatory,
 } from "@/features/booking/observatories";
+import { sandboxCheckoutUrl } from "@/features/payments/sandbox-checkout";
 import { getDatabase } from "@/lib/db/client";
 import { openIntervals } from "@/lib/slots/availability";
 import { nightWindow } from "@/lib/slots/darkness";
@@ -473,10 +476,15 @@ export async function reserveSlot(input: {
       database.$transaction(async (tx) => {
         await expireLapsedHolds(tx, observatory.id, now);
 
+        // #149. The sandbox is its own provider, so the cloud supplies the
+        // redirect: a checkout page it serves, keyed by this payment's id.
+        const paymentId = randomUUID();
         const payment = await tx.payment.create({
           data: {
+            id: paymentId,
             userId,
             provider: PHASE_1_PROVIDER,
+            redirectUrl: sandboxCheckoutUrl(paymentId),
             status: "PENDING",
             amountMinor,
             currency: slot.currency,

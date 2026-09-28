@@ -93,10 +93,11 @@ export function signSandboxBody(rawBody: string, secret: string): string {
 /**
  * The development and CI provider (contract: `PaymentProvider.SANDBOX`).
  *
- * It settles a payment on a signed callback and nothing else: there is no card
- * form and no redirect, because the sandbox is not pretending to be a bank. A
- * developer, a test or a dev script signs a body with the shared secret and posts
- * it, exactly as a real provider would with its own key.
+ * It settles a payment on a signed callback: a developer, a test or a dev script
+ * signs a body with the shared secret and posts it, exactly as a real provider
+ * would with its own key. A customer reaches the same settlement through the
+ * sandbox checkout (#149, `sandbox-checkout.ts`), which asks for no card because
+ * the sandbox is not pretending to be a bank.
  */
 export function createSandboxProvider(secret: string): PaymentProviderAdapter {
   return {

@@ -22,7 +22,10 @@ vi.mock("@/lib/db/client", () => ({ getDatabase: () => testDatabase.current }));
  * below drives the production check exactly as it drives the real function.
  */
 vi.mock("@/lib/validation/env", () => ({
-  getServerEnvironment: () => ({ NODE_ENV: process.env.NODE_ENV ?? "test" }),
+  getServerEnvironment: () => ({
+    NODE_ENV: process.env.NODE_ENV ?? "test",
+    APP_URL: "https://darkview.test",
+  }),
 }));
 
 const { PAYMENT_HOLD_MINUTES, releaseSlotForFailedPayment, reserveSlot } =
