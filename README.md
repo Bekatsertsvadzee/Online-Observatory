@@ -114,8 +114,22 @@ The observatory dials out to the realtime service and presents its device token 
 `Authorization: Bearer <token>`. Nothing dials the observatory: it has no reachable
 address and no listening port. An observatory with no `deviceTokenHash` admits no agent.
 
-The development seed issues a known token for the demo observatory, printed when the seed
+The development seed issues a known token for each demo observatory, printed when the seed
 runs. It is development-only — the seed refuses to run unless `NODE_ENV=development`.
+
+It seeds two SIMULATED demo observatories, both bookable: Tbilisi
+(`DEMO_IDS.observatory`, token `DEMO_AGENT_DEVICE_TOKEN`) and a night-side simulator on
+Mauna Kea (`DEMO_IDS.nightObservatory`, token `DEMO_NIGHT_AGENT_DEVICE_TOKEN`, #146), where
+it is night during Tbilisi's working day. Run an agent against the night side with
+`DARKVIEW_AGENT_SITE_LATITUDE=19.8207 DARKVIEW_AGENT_SITE_LONGITUDE=-155.4681`, or the
+agent's own daylight lock will refuse every slew. Both carry the simulator's stand-in
+altitude limit (ADR-032), so simulated missions slew; it is never admitted on anything
+that is not SIMULATED.
+
+The demo accounts — `demo.observer`, `demo.operator` and `demo.viewer`, all
+`@darkview.invalid` — sign in with the password `darkview demo password`
+(`DEMO_ACCOUNT_PASSWORD` in `packages/db/prisma/development-seed.ts`, #145). It is printed
+when the seed runs and is development-only. `demo.operator` has the OPERATOR role.
 
 ### The agent's environment
 

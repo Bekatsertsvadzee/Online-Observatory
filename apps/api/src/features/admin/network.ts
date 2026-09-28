@@ -11,6 +11,7 @@ import type {
   SuspendNetworkNodeRequest,
 } from "@darkview/contracts";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { isSimulatorMarked } from "@darkview/db/simulator-envelope";
 
 import { cancelMissionAsOperator } from "@/features/admin/missions";
 import { LIVE_MISSION_STATES } from "@/features/missions/session";
@@ -48,6 +49,18 @@ const NODE_COLUMNS = {
       agentPosture: true,
       agentDisarmReason: true,
       safetyEnvelope: { select: { maxAltitudeDegrees: true } },
+    },
+  },
+} as const;
+
+const APPROVAL_COLUMNS = {
+  ...NODE_COLUMNS,
+  observatory: {
+    select: {
+      ...NODE_COLUMNS.observatory.select,
+      safetyEnvelope: {
+        select: { maxAltitudeDegrees: true, maxAltitudeMeasuredBy: true },
+      },
     },
   },
 } as const;
@@ -104,7 +117,7 @@ export async function approveNetworkNode(input: {
 
   const node = await database.observatoryNetworkNode.findUnique({
     where: { id: input.nodeId },
-    select: NODE_COLUMNS,
+    select: APPROVAL_COLUMNS,
   });
 
   if (!node) {
@@ -135,7 +148,13 @@ export async function approveNetworkNode(input: {
     };
   }
 
-  if (node.observatory.safetyEnvelope?.maxAltitudeDegrees == null) {
+  // ADR-032: the simulator's stand-in limit counts as no limit here, whatever the
+  // observatory's mode. Approval qualifies a telescope, and it is not measured.
+  const envelope = node.observatory.safetyEnvelope;
+  if (
+    envelope?.maxAltitudeDegrees == null ||
+    isSimulatorMarked(envelope.maxAltitudeMeasuredBy)
+  ) {
     return {
       ok: false,
       status: 422,

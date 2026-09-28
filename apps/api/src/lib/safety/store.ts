@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { SafetyEnvelopeConfig } from "@darkview/contracts";
+import { admitEnvelopeFor } from "@darkview/db/simulator-envelope";
 
 import { getDatabase } from "@/lib/db/client";
 import type { Site } from "@/lib/ephemeris/engine";
@@ -11,6 +12,9 @@ import type { Site } from "@/lib/ephemeris/engine";
  * Null means no envelope row exists, which `isMeasured` treats exactly like a null
  * `maxAltitudeDegrees`: UNMEASURED, and nothing moves. An observatory with no
  * envelope is not an observatory with permissive defaults.
+ *
+ * Admitted for the observatory's current mode (ADR-032): a simulator-marked
+ * envelope on anything but a SIMULATED observatory is returned UNMEASURED.
  */
 export async function loadSafetyEnvelope(
   observatoryId: string,
@@ -20,10 +24,13 @@ export async function loadSafetyEnvelope(
     include: {
       horizonMask: { orderBy: { azimuthDegrees: "asc" } },
       forbiddenAzimuthSectors: true,
+      observatory: { select: { mode: true } },
     },
   });
 
-  return row === null ? null : toContractEnvelope(row);
+  return row === null
+    ? null
+    : admitEnvelopeFor(toContractEnvelope(row), row.observatory.mode);
 }
 
 type EnvelopeRow = {

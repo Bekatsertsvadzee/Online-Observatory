@@ -20,7 +20,7 @@ from uuid import UUID, uuid4
 
 from contracts.models import MissionState
 from darkview_agent.clock import ManualClock
-from darkview_agent.config import AgentConfig
+from darkview_agent.config import AgentConfig, DriverMode
 from darkview_agent.devices.simulated import SimCamera, SimFocuser, SimMount
 from darkview_agent.mission.solver import SimSolver
 from darkview_agent.runtime import Devices
@@ -225,6 +225,7 @@ def build_agent(
     uploader=None,
     observing_seconds: float = 4.0,
     sustained_link_loss_seconds: float | None = None,
+    driver_mode: DriverMode = DriverMode.SIMULATED,
 ) -> Agent:
     """Assemble one agent. Passing the same `state_path` twice is a restart.
 
@@ -245,6 +246,7 @@ def build_agent(
     devices = Devices(mount=mount, camera=SimCamera(clock, mount), focuser=SimFocuser(clock))
 
     config = AgentConfig(
+        driver_mode=driver_mode,
         attended=attended,
         cloud_url="wss://cloud.invalid/ws/agent",
         device_token="a-device-token",

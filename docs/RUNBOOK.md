@@ -104,10 +104,27 @@ own bucket.
 
 ### Seeding
 
-`npm run db:seed` refuses to run unless `NODE_ENV=development`. It writes demo users, a
-demo observatory and a demo device token, and the guard exists so an unset variable cannot
-put fake telescope data into a real database. The token is printed when the seed runs and
-is development-only.
+`npm run db:seed` refuses to run unless `NODE_ENV=development`. It writes demo users, two
+demo observatories and a device token for each, and the guard exists so an unset variable
+cannot put fake telescope data into a real database. The tokens are printed when the seed
+runs and are development-only. Running it again is safe: every row is upserted, and the
+append-only credit ledger is only ever inserted into.
+
+- **Demo accounts (#145).** `demo.observer@darkview.invalid`,
+  `demo.operator@darkview.invalid` (OPERATOR) and `demo.viewer@darkview.invalid`, all with
+  the password `darkview demo password` (`DEMO_ACCOUNT_PASSWORD`). Printed by the seed.
+  Development only; a real database never has these accounts.
+- **Simulator envelope (ADR-032, #147).** Both demo observatories get
+  `maxAltitudeDegrees = SIMULATOR_MAX_ALTITUDE_DEGREES` recorded by
+  `SIMULATOR — NOT A MEASUREMENT`, so a simulated mission can slew. The seed writes it only
+  to a SIMULATED demo observatory; the API and realtime loaders, the admin envelope route,
+  the switch to REAL, node approval and the agent all treat it as UNMEASURED anywhere else.
+  It is not MAX_ALT_SAFE, and DV-034 still has to measure the real one.
+- **Night-side simulator (#146).** `[DEMO] Darkview Night-side Simulator`
+  (`DEMO_IDS.nightObservatory`, Mauna Kea, `Pacific/Honolulu`), with its own token
+  `DEMO_NIGHT_AGENT_DEVICE_TOKEN` and availability over its whole local night. Its dark
+  hours fall roughly 09:30–18:30 Tbilisi time. No safety rule is relaxed for it. Its agent
+  needs `DARKVIEW_AGENT_SITE_LATITUDE=19.8207` and `DARKVIEW_AGENT_SITE_LONGITUDE=-155.4681`.
 
 ### Nothing is bookable until its node is APPROVED
 

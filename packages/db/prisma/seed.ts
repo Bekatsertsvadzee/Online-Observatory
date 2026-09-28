@@ -5,17 +5,91 @@ import { createHash } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "../generated/prisma/client";
+import { SIMULATOR_ENVELOPE_MEASURER } from "../simulator-envelope";
 import { PHASE1_TARGETS } from "./phase1-catalogue";
 import {
+  DEMO_ACCOUNT_EMAILS,
+  DEMO_ACCOUNT_PASSWORD,
+  DEMO_ACCOUNT_PASSWORD_HASH,
   DEMO_AGENT_DEVICE_TOKEN,
   DEMO_CAPTURES,
   DEMO_IDS,
   DEMO_MISSIONS,
+  DEMO_NIGHT_AGENT_DEVICE_TOKEN,
+  DEMO_NIGHT_SITE,
+  SIMULATOR_MAX_ALTITUDE_DEGREES,
   assertDevelopmentSeedData,
 } from "./development-seed";
 
-const DEMO_PASSWORD_HASH =
-  "scrypt$65536$8$1$BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc$h0__krhRoWlhZbCHOc0Wf_46L_kywkY8G1KOWdN5y1Xv6tVPAhQik6YPo8pqo9zhXGfH-l8diHELfuJ3eL0yxw";
+/** Same algorithm the realtime service uses to verify the presented token. */
+function deviceTokenHashOf(token: string) {
+  return createHash("sha256").update(token, "utf8").digest("base64url");
+}
+
+/**
+ * The simulator's safety envelope, for one SIMULATED demo observatory (ADR-032).
+ *
+ * MAX_ALT_SAFE is MEASURED from the physical optical train (DV-034), and no
+ * observatory with real hardware may carry a value nobody measured. This one is
+ * written anyway, and it is safe for three independent reasons:
+ *
+ * 1. It is written only after re-reading the row and finding it SIMULATED and
+ *    isDemo. Anything else throws, and nothing is written.
+ * 2. It is recorded under SIMULATOR_ENVELOPE_MEASURER, not a person. The API's and
+ *    the realtime service's envelope loaders read a marked envelope on any
+ *    observatory that is not SIMULATED as UNMEASURED; setSafetyEnvelope refuses the
+ *    marker there, switching to REAL is refused while it stands, and node approval
+ *    never counts it as measured.
+ * 3. The agent applies the same rule on its own: a marked envelope reaching an
+ *    agent whose driver mode or mount is not SIMULATED is UNMEASURED, and every
+ *    slew is refused.
+ *
+ * So the number moves the simulator and nothing else.
+ */
+async function seedSimulatorEnvelope(
+  database: PrismaClient,
+  input: { id: string; observatoryId: string },
+) {
+  const observatory = await database.observatory.findUniqueOrThrow({
+    where: { id: input.observatoryId },
+    select: { mode: true, isDemo: true },
+  });
+  if (observatory.mode !== "SIMULATED" || !observatory.isDemo) {
+    throw new Error(
+      `Refusing to write the simulator envelope to ${input.observatoryId}: ` +
+        "it is only ever written to a SIMULATED demo observatory.",
+    );
+  }
+
+  const simulatorLimit = {
+    maxAltitudeDegrees: SIMULATOR_MAX_ALTITUDE_DEGREES,
+    maxAltitudeMeasuredAt: new Date("2026-09-28T00:00:00.000Z"),
+    maxAltitudeMeasuredBy: SIMULATOR_ENVELOPE_MEASURER,
+    maxAltitudeMeasurementNote:
+      "Development seed, ADR-032. NOT A MEASUREMENT: nobody measured this. It lets the " +
+      "simulator slew, and is read as UNMEASURED on any observatory or agent that is " +
+      "not SIMULATED.",
+  };
+
+  await database.safetyEnvelope.upsert({
+    where: { observatoryId: input.observatoryId },
+    create: {
+      id: input.id,
+      observatoryId: input.observatoryId,
+      minAltitudeDegrees: 25,
+      ...simulatorLimit,
+      sunExclusionDegrees: 30,
+      daylightLockSunAltitudeDegrees: -12,
+      nudgeMaxDegrees: 0.5,
+      nudgeRateDegreesPerSecond: 0.25,
+      slewTimeoutSeconds: 120,
+      heartbeatLossSeconds: 15,
+      linkDeadSeconds: 45,
+      refocusTemperatureDeltaC: 1.5,
+    },
+    update: { minAltitudeDegrees: 25, ...simulatorLimit },
+  });
+}
 
 async function seedDevelopmentDatabase() {
   if (process.env.NODE_ENV !== "development") {
@@ -38,14 +112,14 @@ async function seedDevelopmentDatabase() {
       where: { id: DEMO_IDS.observer },
       create: {
         id: DEMO_IDS.observer,
-        email: "demo.observer@darkview.invalid",
+        email: DEMO_ACCOUNT_EMAILS.observer,
         name: "[DEMO] Darkview Observer",
         role: "USER",
         emailVerifiedAt: new Date("2026-08-01T00:00:00.000Z"),
         isDemo: true,
       },
       update: {
-        email: "demo.observer@darkview.invalid",
+        email: DEMO_ACCOUNT_EMAILS.observer,
         name: "[DEMO] Darkview Observer",
         role: "USER",
         emailVerifiedAt: new Date("2026-08-01T00:00:00.000Z"),
@@ -57,14 +131,14 @@ async function seedDevelopmentDatabase() {
       where: { id: DEMO_IDS.operator },
       create: {
         id: DEMO_IDS.operator,
-        email: "demo.operator@darkview.invalid",
+        email: DEMO_ACCOUNT_EMAILS.operator,
         name: "[DEMO] Simulator Operator",
         role: "OPERATOR",
         emailVerifiedAt: new Date("2026-08-01T00:00:00.000Z"),
         isDemo: true,
       },
       update: {
-        email: "demo.operator@darkview.invalid",
+        email: DEMO_ACCOUNT_EMAILS.operator,
         name: "[DEMO] Simulator Operator",
         role: "OPERATOR",
         emailVerifiedAt: new Date("2026-08-01T00:00:00.000Z"),
@@ -76,14 +150,14 @@ async function seedDevelopmentDatabase() {
       where: { id: DEMO_IDS.viewer },
       create: {
         id: DEMO_IDS.viewer,
-        email: "demo.viewer@darkview.invalid",
+        email: DEMO_ACCOUNT_EMAILS.viewer,
         name: "[DEMO] Mission Viewer",
         role: "USER",
         emailVerifiedAt: new Date("2026-08-01T00:00:00.000Z"),
         isDemo: true,
       },
       update: {
-        email: "demo.viewer@darkview.invalid",
+        email: DEMO_ACCOUNT_EMAILS.viewer,
         name: "[DEMO] Mission Viewer",
         role: "USER",
         emailVerifiedAt: new Date("2026-08-01T00:00:00.000Z"),
@@ -97,17 +171,14 @@ async function seedDevelopmentDatabase() {
         create: {
           id: userId,
           userId,
-          passwordHash: DEMO_PASSWORD_HASH,
+          passwordHash: DEMO_ACCOUNT_PASSWORD_HASH,
           isDemo: true,
         },
-        update: { passwordHash: DEMO_PASSWORD_HASH, isDemo: true },
+        update: { passwordHash: DEMO_ACCOUNT_PASSWORD_HASH, isDemo: true },
       });
     }
 
-    // Same algorithm the realtime service uses to verify the presented token.
-    const demoDeviceTokenHash = createHash("sha256")
-      .update(DEMO_AGENT_DEVICE_TOKEN, "utf8")
-      .digest("base64url");
+    const demoDeviceTokenHash = deviceTokenHashOf(DEMO_AGENT_DEVICE_TOKEN);
 
     await database.observatory.upsert({
       where: { id: DEMO_IDS.observatory },
@@ -136,27 +207,9 @@ async function seedDevelopmentDatabase() {
       },
     });
 
-    // MAX_ALT_SAFE is MEASURED from the physical optical train (DV-034). It is null
-    // here and must stay null until that measurement exists: while it is null the
-    // system is UNMEASURED and both cloud and agent refuse every slew. A seeded
-    // value would defeat the entire safety envelope, so the seed must never set one.
-    await database.safetyEnvelope.upsert({
-      where: { observatoryId: DEMO_IDS.observatory },
-      create: {
-        id: DEMO_IDS.safetyEnvelope,
-        observatoryId: DEMO_IDS.observatory,
-        minAltitudeDegrees: 25,
-        maxAltitudeDegrees: null,
-        sunExclusionDegrees: 30,
-        daylightLockSunAltitudeDegrees: -12,
-        nudgeMaxDegrees: 0.5,
-        nudgeRateDegreesPerSecond: 0.25,
-        slewTimeoutSeconds: 120,
-        heartbeatLossSeconds: 15,
-        linkDeadSeconds: 45,
-        refocusTemperatureDeltaC: 1.5,
-      },
-      update: { minAltitudeDegrees: 25 },
+    await seedSimulatorEnvelope(database, {
+      id: DEMO_IDS.safetyEnvelope,
+      observatoryId: DEMO_IDS.observatory,
     });
 
     await database.telescope.upsert({
@@ -274,6 +327,146 @@ async function seedDevelopmentDatabase() {
           isDemo: false,
         },
         update: { isDemo: false },
+      });
+    }
+
+    // The night-side simulator (#146). Everything the Tbilisi demo has, at a site
+    // where it is night during Tbilisi's working day. No safety rule is exempted:
+    // the cloud and the agent both judge the Sun from these coordinates.
+    await database.observatory.upsert({
+      where: { id: DEMO_IDS.nightObservatory },
+      create: {
+        id: DEMO_IDS.nightObservatory,
+        slug: "demo-night-side",
+        nameEn: "[DEMO] Darkview Night-side Simulator",
+        nameKa: "[დემო] Darkview ღამის მხარის სიმულატორი",
+        city: "Mauna Kea",
+        countryCode: "US",
+        latitude: DEMO_NIGHT_SITE.latitude,
+        longitude: DEMO_NIGHT_SITE.longitude,
+        timezone: DEMO_NIGHT_SITE.timezone,
+        status: "ONLINE",
+        mode: "SIMULATED",
+        deviceTokenHash: deviceTokenHashOf(DEMO_NIGHT_AGENT_DEVICE_TOKEN),
+        isDemo: true,
+      },
+      update: {
+        nameEn: "[DEMO] Darkview Night-side Simulator",
+        nameKa: "[დემო] Darkview ღამის მხარის სიმულატორი",
+        latitude: DEMO_NIGHT_SITE.latitude,
+        longitude: DEMO_NIGHT_SITE.longitude,
+        timezone: DEMO_NIGHT_SITE.timezone,
+        status: "ONLINE",
+        mode: "SIMULATED",
+        deviceTokenHash: deviceTokenHashOf(DEMO_NIGHT_AGENT_DEVICE_TOKEN),
+        isDemo: true,
+      },
+    });
+
+    await seedSimulatorEnvelope(database, {
+      id: DEMO_IDS.nightSafetyEnvelope,
+      observatoryId: DEMO_IDS.nightObservatory,
+    });
+
+    const nightTelescope = {
+      name: "[DEMO] Night-side Telescope",
+      manufacturer: "Celestron",
+      model: "NexStar 6SE configuration",
+      apertureMm: 150,
+      focalLengthMm: 1500,
+      status: "ONLINE" as const,
+      isDemo: true,
+    };
+    await database.telescope.upsert({
+      where: { id: DEMO_IDS.nightTelescope },
+      create: {
+        id: DEMO_IDS.nightTelescope,
+        observatoryId: DEMO_IDS.nightObservatory,
+        ...nightTelescope,
+      },
+      update: nightTelescope,
+    });
+
+    const nightCamera = {
+      telescopeId: DEMO_IDS.nightTelescope,
+      name: "[DEMO] Night-side Development Camera",
+      manufacturer: "Configuration pending",
+      model: "Development placeholder",
+      sensorType: "Development placeholder",
+      status: "ONLINE" as const,
+      isDemo: true,
+    };
+    await database.camera.upsert({
+      where: { id: DEMO_IDS.nightCamera },
+      create: {
+        id: DEMO_IDS.nightCamera,
+        observatoryId: DEMO_IDS.nightObservatory,
+        ...nightCamera,
+      },
+      update: nightCamera,
+    });
+
+    const nightNode = {
+      ownerId: DEMO_IDS.operator,
+      primaryTelescopeId: DEMO_IDS.nightTelescope,
+      kind: "FIRST_PARTY" as const,
+      approvalStatus: "APPROVED" as const,
+      capabilities: ["PLANETARY" as const, "LUNAR" as const, "BRIGHT_DEEP_SKY" as const],
+      approvedAt: new Date("2026-09-28T00:00:00.000Z"),
+      isDemo: true,
+    };
+    await database.observatoryNetworkNode.upsert({
+      where: { id: DEMO_IDS.nightNetworkNode },
+      create: {
+        id: DEMO_IDS.nightNetworkNode,
+        observatoryId: DEMO_IDS.nightObservatory,
+        ...nightNode,
+      },
+      update: nightNode,
+    });
+
+    // The whole local night, every weekday. A window may not wrap midnight
+    // (lib/slots/availability.ts), so each day has an evening window to local
+    // midnight (endMinute 1440 is exclusive) and a morning one from it; the slot
+    // generator merges the two across midnight and intersects them with
+    // astronomical darkness, which still decides what is actually sold.
+    const nightWindows = [
+      { suffix: "054", startMinute: 1020, endMinute: 1440 },
+      { suffix: "055", startMinute: 0, endMinute: 420 },
+    ];
+    for (const { suffix, startMinute, endMinute } of nightWindows) {
+      for (let weekday = 0; weekday < 7; weekday += 1) {
+        const id = `00000000-0000-4000-8000-00000000${suffix}${weekday}`;
+        await database.networkAvailabilityWindow.upsert({
+          where: { id },
+          create: {
+            id,
+            nodeId: DEMO_IDS.nightNetworkNode,
+            weekday,
+            startMinute,
+            endMinute,
+            enabled: true,
+            isDemo: true,
+          },
+          update: { startMinute, endMinute, enabled: true, isDemo: true },
+        });
+      }
+    }
+
+    for (const target of PHASE1_TARGETS) {
+      await database.targetObservatory.upsert({
+        where: {
+          targetId_observatoryId: {
+            targetId: target.id,
+            observatoryId: DEMO_IDS.nightObservatory,
+          },
+        },
+        create: {
+          targetId: target.id,
+          observatoryId: DEMO_IDS.nightObservatory,
+          isDemo: true,
+        },
+        update: { isDemo: true },
       });
     }
 
@@ -534,11 +727,13 @@ async function seedDevelopmentDatabase() {
     for (const entry of ledgerEntries) {
       const { id, ...entryData } = entry;
       const data = { ...entryData, userId: DEMO_IDS.observer, isDemo: true };
-      await database.creditLedger.upsert({
+      // Created once and never updated: CreditLedger is append-only (a trigger
+      // refuses every UPDATE), so an upsert made the second seed run fail.
+      const existing = await database.creditLedger.findUnique({
         where: { idempotencyKey: entry.idempotencyKey },
-        create: { id, ...data },
-        update: data,
+        select: { id: true },
       });
+      if (!existing) await database.creditLedger.create({ data: { id, ...data } });
     }
 
     await database.privateSession.upsert({
@@ -640,7 +835,12 @@ async function seedDevelopmentDatabase() {
     console.info(
       `Development seed complete: ${PHASE1_TARGETS.length} catalogue targets, ` +
         "all observations marked demo and simulated.\n" +
-        `Agent device token for the demo observatory: ${DEMO_AGENT_DEVICE_TOKEN}`,
+        `Agent device token for the demo observatory: ${DEMO_AGENT_DEVICE_TOKEN}\n` +
+        "Agent device token for the night-side demo observatory " +
+        `(${DEMO_IDS.nightObservatory}, ${DEMO_NIGHT_SITE.latitude}, ` +
+        `${DEMO_NIGHT_SITE.longitude}): ${DEMO_NIGHT_AGENT_DEVICE_TOKEN}\n` +
+        `Demo accounts (password "${DEMO_ACCOUNT_PASSWORD}", development only): ` +
+        Object.values(DEMO_ACCOUNT_EMAILS).join(", "),
     );
   } finally {
     await database.$disconnect();

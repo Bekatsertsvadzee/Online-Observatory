@@ -5,6 +5,7 @@ import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PrismaClient } from "@darkview/db";
+import { SIMULATOR_ENVELOPE_MEASURER } from "@darkview/db/simulator-envelope";
 
 vi.mock("server-only", () => ({}));
 
@@ -295,6 +296,26 @@ describe("qualifying a node to operate unattended", () => {
     // unmeasured telescope be approved by clicking, on somebody else's property.
     const node = await nodeIn("UNDER_REVIEW");
     await measureEnvelope(node.observatoryId, null);
+
+    const result = await approveNetworkNode({
+      nodeId: node.nodeId,
+      request: attestation(),
+      operatorId,
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("SAFETY_NOT_CONFIGURED");
+  });
+
+  it("refuses the simulator's stand-in limit, which is not a measurement (ADR-032)", async () => {
+    const node = await nodeIn("UNDER_REVIEW");
+    await measureEnvelope(node.observatoryId, FAKE_MEASURED_MAX_ALTITUDE_DEGREES);
+    await database.safetyEnvelope.update({
+      where: { observatoryId: node.observatoryId },
+      data: { maxAltitudeMeasuredBy: SIMULATOR_ENVELOPE_MEASURER },
+    });
 
     const result = await approveNetworkNode({
       nodeId: node.nodeId,

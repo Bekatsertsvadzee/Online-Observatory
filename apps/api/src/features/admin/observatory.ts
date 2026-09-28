@@ -10,6 +10,7 @@ import type {
 } from "@darkview/contracts";
 import { recordAuditEvent } from "@darkview/db/audit";
 import { queueEmail } from "@darkview/db/notifications";
+import { isSimulatorMarked } from "@darkview/db/simulator-envelope";
 
 import { randomUUID } from "node:crypto";
 
@@ -76,10 +77,36 @@ export async function setObservatoryMode(input: {
 
   const observatory = await database.observatory.findUnique({
     where: { id: observatoryId },
-    select: { id: true, mode: true },
+    select: {
+      id: true,
+      mode: true,
+      safetyEnvelope: {
+        select: { maxAltitudeDegrees: true, maxAltitudeMeasuredBy: true },
+      },
+    },
   });
   if (!observatory) {
     return { ok: false, status: 404, code: "NOT_FOUND", message: "No such observatory." };
+  }
+
+  // ADR-032. An observatory still carrying the simulator's stand-in altitude limit
+  // has never been measured, and does not go onto real hardware with it. The
+  // loaders would already read it as UNMEASURED under REAL; refusing the switch
+  // makes the operator record a measurement (or clear the value) first.
+  const envelope = observatory.safetyEnvelope;
+  if (
+    request.mode === "REAL" &&
+    envelope?.maxAltitudeDegrees != null &&
+    isSimulatorMarked(envelope.maxAltitudeMeasuredBy)
+  ) {
+    return {
+      ok: false,
+      status: 422,
+      code: "SAFETY_NOT_CONFIGURED",
+      message:
+        "This observatory's altitude limit is the simulator's, not a measurement. " +
+        "Record the measured MAX_ALT_SAFE before switching to REAL.",
+    };
   }
 
   // Not while a mission is running. Switching under a live mission would change

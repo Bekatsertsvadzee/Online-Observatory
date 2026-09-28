@@ -59,6 +59,15 @@ Recording a measurement requires its provenance. `setSafetyEnvelope` refuses a
 `maxAltitudeMeasuredBy` — a number with no measurer is somebody's guess, and a guess here
 is how an optical train meets a fork arm.
 
+**The simulator's stand-in (ADR-032).** The development seed writes
+`SIMULATOR_MAX_ALTITUDE_DEGREES` onto its SIMULATED demo observatories, recorded by
+`SIMULATOR — NOT A MEASUREMENT`, so a simulated mission can slew. That is the clearly-named
+fake above, and it is held there four times over: the seed writes it only to a SIMULATED
+demo row; the API's and the realtime service's envelope loaders read a marked envelope as
+UNMEASURED on any observatory that is not SIMULATED; `setSafetyEnvelope`, the switch to
+REAL and node approval refuse it; and the agent, independently, reads it as UNMEASURED
+whenever its driver mode or its mount is not SIMULATED.
+
 **Site coordinates fail closed the same way.** `DARKVIEW_AGENT_SITE_LATITUDE` and
 `DARKVIEW_AGENT_SITE_LONGITUDE` must be set together or not at all. Without them the Sun's
 position cannot be computed, so the envelope refuses every slew rather than assuming the

@@ -2,6 +2,7 @@ import "server-only";
 
 import type { ErrorCode, SafetyEnvelopeConfig } from "@darkview/contracts";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { isSimulatorMarked } from "@darkview/db/simulator-envelope";
 
 import { getDatabase } from "@/lib/db/client";
 import { notifyAgent } from "@/lib/observatory/relay";
@@ -57,10 +58,30 @@ export async function setSafetyEnvelope(input: {
   const database = getDatabase();
   const observatory = await database.observatory.findUnique({
     where: { id: observatoryId },
-    select: { id: true },
+    select: { id: true, mode: true },
   });
   if (!observatory) {
     return { ok: false, status: 404, code: "NOT_FOUND", message: "No such observatory." };
+  }
+
+  // ADR-032. The simulator's stand-in limit is not a measurement, and recording it
+  // against an observatory that drives real hardware would put an unmeasured
+  // number in front of a real mount. The loaders would read it as UNMEASURED
+  // anyway; refusing here keeps it out of the row.
+  if (
+    envelope.maxAltitudeDegrees != null &&
+    isSimulatorMarked(envelope.maxAltitudeMeasuredBy) &&
+    observatory.mode !== "SIMULATED"
+  ) {
+    return {
+      ok: false,
+      status: 422,
+      code: "VALIDATION_FAILED",
+      message:
+        "maxAltitudeMeasuredBy names the simulator, which is not a measurement. " +
+        "It may only be recorded on a SIMULATED observatory.",
+      details: { mode: observatory.mode },
+    };
   }
 
   const scalars = {
