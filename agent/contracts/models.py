@@ -664,7 +664,10 @@ class PaymentIntent(BaseModel):
     """
     The minimum a client needs to continue a payment. `redirectUrl` is supplied by
     the provider. No provider-specific field is modelled here because none has been
-    confirmed against provider documentation.
+    confirmed against provider documentation. For a booking's SANDBOX payment the
+    cloud is the provider, and `redirectUrl` is its `getSandboxCheckout` page on the
+    web client's origin (#149). A client follows it the same way for either
+    provider and reads the booking when it comes back.
 
     """
     model_config = ConfigDict(
@@ -675,6 +678,11 @@ class PaymentIntent(BaseModel):
     status: PaymentStatus
     redirect_url: AnyUrl | None = Field(None, alias='redirectUrl')
     expires_at: AwareDatetime | None = Field(None, alias='expiresAt')
+
+
+class SandboxCheckoutResult(StrEnum):
+    captured = 'CAPTURED'
+    failed = 'FAILED'
 
 
 class LoyaltyTier(BaseModel):
@@ -2297,6 +2305,18 @@ class Booking(BaseModel):
     subscription_minutes_spent: int | None = Field(None, alias='subscriptionMinutesSpent', description='Subscription minutes that paid for this booking (ADR-022).', ge=0)
     entitlement: BookingEntitlement | None = Field(None, description='DV-111. Null until the slot has ended and been evaluated, and when nothing\nwas lost on our side or less than half the slot was lost.\n')
     created_at: AwareDatetime = Field(..., alias='createdAt')
+
+
+class SandboxCheckoutConfirmation(BaseModel):
+    """
+    #149. What the sandbox checkout page submits: pay (CAPTURED) or decline
+    (FAILED). Nothing else a real provider reports is modelled.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    result: SandboxCheckoutResult
 
 
 class BookingWithPaymentIntent(BaseModel):

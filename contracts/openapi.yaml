@@ -983,6 +983,68 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /payments/{paymentId}/sandbox-checkout:
+    get:
+      operationId: getSandboxCheckout
+      tags: [booking]
+      summary: The sandbox provider's checkout page, for a booking's SANDBOX payment.
+      description: |
+        #149. The page a SANDBOX `PaymentIntent.redirectUrl` points at, standing in
+        for a provider's hosted checkout. An HTML page served to the booking's owner:
+        it states that no money moves and offers to pay or decline. Absent (404)
+        wherever SANDBOX is not selectable, which includes every production
+        environment; 404 for a payment that is not the signed-in user's own.
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      responses:
+        "200":
+          description: The checkout page.
+          content:
+            text/html:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: confirmSandboxCheckout
+      tags: [booking]
+      summary: The customer's answer on the sandbox checkout page.
+      description: |
+        #149. Settles the SANDBOX payment through the same path a verified
+        `receivePaymentWebhook` callback takes, then answers 303 to the booking's page
+        on the web client. The redirect target is built by the cloud from its own
+        configured origin and is never read from the request. Idempotent: answering a
+        payment already settled with the same result changes nothing and redirects
+        again. 404 wherever SANDBOX is not selectable and for a payment that is not
+        the signed-in user's own; 409 for a payment that is not a SANDBOX booking
+        payment, for a hold that has lapsed, and for a second answer that contradicts
+        the first.
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/SandboxCheckoutConfirmation"
+      responses:
+        "303":
+          description: Settled, or already settled with this result. `Location` is the booking's page.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
   /missions:
     get:
       operationId: listMissions
@@ -2025,6 +2087,13 @@ components:
         format: uuid
     BookingId:
       name: bookingId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PaymentId:
+      name: paymentId
       in: path
       required: true
       schema:
@@ -3326,7 +3395,10 @@ components:
       description: |
         The minimum a client needs to continue a payment. `redirectUrl` is supplied by
         the provider. No provider-specific field is modelled here because none has been
-        confirmed against provider documentation.
+        confirmed against provider documentation. For a booking's SANDBOX payment the
+        cloud is the provider, and `redirectUrl` is its `getSandboxCheckout` page on the
+        web client's origin (#149). A client follows it the same way for either
+        provider and reads the booking when it comes back.
       additionalProperties: false
       required: [paymentId, provider, status]
       properties:
@@ -3343,6 +3415,21 @@ components:
         expiresAt:
           type: [string, "null"]
           format: date-time
+
+    SandboxCheckoutConfirmation:
+      type: object
+      description: |
+        #149. What the sandbox checkout page submits: pay (CAPTURED) or decline
+        (FAILED). Nothing else a real provider reports is modelled.
+      additionalProperties: false
+      required: [result]
+      properties:
+        result:
+          $ref: "#/components/schemas/SandboxCheckoutResult"
+
+    SandboxCheckoutResult:
+      type: string
+      enum: [CAPTURED, FAILED]
 
     BookingWithPaymentIntent:
       type: object

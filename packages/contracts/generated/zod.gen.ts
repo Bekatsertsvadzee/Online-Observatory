@@ -594,7 +594,10 @@ export const zPaymentStatus = z.enum([
 /**
  * The minimum a client needs to continue a payment. `redirectUrl` is supplied by
  * the provider. No provider-specific field is modelled here because none has been
- * confirmed against provider documentation.
+ * confirmed against provider documentation. For a booking's SANDBOX payment the
+ * cloud is the provider, and `redirectUrl` is its `getSandboxCheckout` page on the
+ * web client's origin (#149). A client follows it the same way for either
+ * provider and reads the booking when it comes back.
  *
  */
 export const zPaymentIntent = z.strictObject({
@@ -603,6 +606,17 @@ export const zPaymentIntent = z.strictObject({
     status: zPaymentStatus,
     redirectUrl: z.url().nullish(),
     expiresAt: z.iso.datetime().nullish()
+});
+
+export const zSandboxCheckoutResult = z.enum(['CAPTURED', 'FAILED']);
+
+/**
+ * #149. What the sandbox checkout page submits: pay (CAPTURED) or decline
+ * (FAILED). Nothing else a real provider reports is modelled.
+ *
+ */
+export const zSandboxCheckoutConfirmation = z.strictObject({
+    result: zSandboxCheckoutResult
 });
 
 export const zBookingWithPaymentIntent = z.strictObject({
@@ -2022,6 +2036,8 @@ export const zMissionId = z.uuid();
 
 export const zBookingId = z.uuid();
 
+export const zPaymentId = z.uuid();
+
 export const zCaptureId = z.uuid();
 
 export const zTargetId = z.uuid();
@@ -2247,6 +2263,21 @@ export const zReceivePaymentWebhookBody = zPaymentWebhookEnvelope;
  * Accepted for processing.
  */
 export const zReceivePaymentWebhookResponse = zPaymentWebhookAck;
+
+export const zGetSandboxCheckoutPath = z.object({
+    paymentId: z.uuid()
+});
+
+/**
+ * The checkout page.
+ */
+export const zGetSandboxCheckoutResponse = z.string();
+
+export const zConfirmSandboxCheckoutBody = zSandboxCheckoutConfirmation;
+
+export const zConfirmSandboxCheckoutPath = z.object({
+    paymentId: z.uuid()
+});
 
 export const zListMissionsQuery = z.object({
     cursor: z.string().optional(),
