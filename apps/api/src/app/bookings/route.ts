@@ -1,13 +1,36 @@
 import { zCreateBookingBody, zIdempotencyKey } from "@darkview/contracts/zod";
 
+import { pageLimitOf } from "@/features/audit/logs";
+import { listMyBookings } from "@/features/booking/manage";
 import { reserveSlot } from "@/features/booking/reserve";
-import { requireApiMutation } from "@/lib/auth/api-guard";
+import { requireApiMutation, requireApiSession } from "@/lib/auth/api-guard";
 import { apiError } from "@/lib/http/api-error";
 import {
   BOOKING_POLICY,
   meterRequest,
   VOUCHER_REDEMPTION_POLICY,
 } from "@/lib/security/rate-limit";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * GET /bookings -- the signed-in user's bookings. No `userId` parameter, for the
+ * reason `GET /captures` has none.
+ */
+export async function GET(request: Request) {
+  const guard = await requireApiSession();
+  if (!guard.ok) return guard.response;
+
+  const query = new URL(request.url).searchParams;
+
+  return Response.json(
+    await listMyBookings({
+      userId: guard.session.user.id,
+      cursor: query.get("cursor") ?? undefined,
+      limit: pageLimitOf(query.get("limit")),
+    }),
+  );
+}
 
 /**
  * POST /bookings -- reserve a slot and open a payment intent.
@@ -18,8 +41,6 @@ import {
  * Price and duration are read from the generated slot, never from the request.
  * A client that could name its own price would be a client that could set it.
  */
-export const dynamic = "force-dynamic";
-
 export async function POST(request: Request) {
   const guard = await requireApiMutation();
   if (!guard.ok) return guard.response;

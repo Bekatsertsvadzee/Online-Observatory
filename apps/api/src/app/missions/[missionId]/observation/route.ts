@@ -6,7 +6,7 @@ import { apiError } from "@/lib/http/api-error";
 import { meterRequest, MISSION_SESSION_POLICY } from "@/lib/security/rate-limit";
 
 /**
- * PUT /missions/{missionId}/observation -- the controller's consent to be watched.
+ * PATCH /missions/{missionId}/observation -- the controller's consent to be watched.
  *
  * ADR-007 rule 5, and the only way a session becomes observable. Owner-only, and
  * an operator is refused like anyone else: the thing being granted is consent,
@@ -14,7 +14,7 @@ import { meterRequest, MISSION_SESSION_POLICY } from "@/lib/security/rate-limit"
  */
 export const dynamic = "force-dynamic";
 
-export async function PUT(
+export async function PATCH(
   request: Request,
   context: { params: Promise<{ missionId: string }> },
 ) {
