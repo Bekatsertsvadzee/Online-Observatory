@@ -121,6 +121,9 @@ export type AuditAction =
   | "MISSION_OPENED_TO_OBSERVERS"
   | "MISSION_CLOSED_TO_OBSERVERS"
   | "CAPTURE_RECORDED"
+  // #144: the owner published a capture to the gallery or took it back. Written
+  // on change only; setting the visibility a capture already has writes nothing.
+  | "CAPTURE_VISIBILITY_CHANGED"
   // COMMAND
   | "COMMAND_MINTED"
   | "COMMAND_VERDICT_RECORDED"

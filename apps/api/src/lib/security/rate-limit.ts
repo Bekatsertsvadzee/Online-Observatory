@@ -121,6 +121,19 @@ export const SUBSCRIPTION_POLICY: RateLimitPolicy = {
 };
 
 /**
+ * Capture visibility changes, per account (#144).
+ *
+ * Each change writes one row and one audit event and holds nothing scarce, so this
+ * protects the audit log from a stuck client toggling in a loop. Sixty an hour is
+ * far past a customer sorting through an evening's captures.
+ */
+export const CAPTURE_VISIBILITY_POLICY: RateLimitPolicy = {
+  limit: 60,
+  windowMs: 60 * 60 * 1000,
+  blockMs: 60 * 60 * 1000,
+};
+
+/**
  * Accounts created from one address.
  *
  * `AUTHENTICATION_POLICY` meters registration by address *and* email, so a fresh

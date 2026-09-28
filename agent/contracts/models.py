@@ -1424,6 +1424,13 @@ class CaptureVisibility(StrEnum):
     gallery = 'GALLERY'
 
 
+class SetCaptureVisibilityRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    visibility: CaptureVisibility
+
+
 class Capture(BaseModel):
     model_config = ConfigDict(
         extra='forbid',

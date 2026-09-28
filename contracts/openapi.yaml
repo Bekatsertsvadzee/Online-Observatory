@@ -1411,6 +1411,38 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: setCaptureVisibility
+      tags: [captures]
+      summary: Publish a capture to the gallery, or take it back.
+      description: |
+        Owner only: a capture belonging to anyone else answers 404, as getCapture does.
+        Idempotent -- setting the visibility a capture already has answers 200 and
+        changes nothing. PRIVATE is always accepted. GALLERY is refused with 409 for a
+        SIMULATED capture, which is never presented as telescope output.
+      parameters:
+        - $ref: "#/components/parameters/CaptureId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetCaptureVisibilityRequest"
+      responses:
+        "200":
+          description: The capture.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capture"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
 
   /captures/{captureId}/download:
     get:
@@ -4644,6 +4676,14 @@ components:
       type: string
       description: PRIVATE by default. Publishing to the public gallery is opt-in.
       enum: [PRIVATE, GALLERY]
+
+    SetCaptureVisibilityRequest:
+      type: object
+      additionalProperties: false
+      required: [visibility]
+      properties:
+        visibility:
+          $ref: "#/components/schemas/CaptureVisibility"
 
     Capture:
       type: object

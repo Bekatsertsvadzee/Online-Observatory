@@ -1834,6 +1834,10 @@ export const CaptureVisibility = { PRIVATE: 'PRIVATE', GALLERY: 'GALLERY' } as c
  */
 export type CaptureVisibility = typeof CaptureVisibility[keyof typeof CaptureVisibility];
 
+export type SetCaptureVisibilityRequest = {
+    visibility: CaptureVisibility;
+};
+
 export type Capture = {
     id: string;
     missionId: string;
@@ -4282,6 +4286,45 @@ export type GetCaptureResponses = {
 };
 
 export type GetCaptureResponse = GetCaptureResponses[keyof GetCaptureResponses];
+
+export type SetCaptureVisibilityData = {
+    body: SetCaptureVisibilityRequest;
+    path: {
+        captureId: string;
+    };
+    query?: never;
+    url: '/captures/{captureId}';
+};
+
+export type SetCaptureVisibilityErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type SetCaptureVisibilityError = SetCaptureVisibilityErrors[keyof SetCaptureVisibilityErrors];
+
+export type SetCaptureVisibilityResponses = {
+    /**
+     * The capture.
+     */
+    200: Capture;
+};
+
+export type SetCaptureVisibilityResponse = SetCaptureVisibilityResponses[keyof SetCaptureVisibilityResponses];
 
 export type GetCaptureDownloadData = {
     body?: never;
