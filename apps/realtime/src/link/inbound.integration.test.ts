@@ -4,6 +4,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { PrismaClient } from "@darkview/db";
+import { SIMULATOR_ENVELOPE_MEASURER } from "@darkview/db/simulator-envelope";
 
 import { AgentLink } from "@/link/agent-link";
 import { AgentRelay } from "@/link/agent-relay";
@@ -956,5 +957,49 @@ describe("a capture reaching the Collection", () => {
     });
     expect(audit.commandId).toBe(commandId);
     expect(audit.entityId).toBe(outcome.capture.id);
+  });
+});
+
+describe("the envelope relayed to the agent (ADR-031)", () => {
+  /** The simulator's stand-in limit, stated here rather than defaulted. */
+  const SIMULATOR_LIMIT_DEGREES = 78;
+
+  async function storeSimulatorEnvelope() {
+    await database.safetyEnvelope.create({
+      data: {
+        observatoryId: observatory.id,
+        minAltitudeDegrees: 25,
+        maxAltitudeDegrees: SIMULATOR_LIMIT_DEGREES,
+        maxAltitudeMeasuredAt: new Date("2026-09-28T00:00:00.000Z"),
+        maxAltitudeMeasuredBy: SIMULATOR_ENVELOPE_MEASURER,
+        sunExclusionDegrees: 30,
+        daylightLockSunAltitudeDegrees: -12,
+        nudgeMaxDegrees: 0.5,
+        nudgeRateDegreesPerSecond: 0.25,
+        slewTimeoutSeconds: 120,
+        heartbeatLossSeconds: 15,
+        linkDeadSeconds: 45,
+        refocusTemperatureDeltaC: 1.5,
+      },
+    });
+  }
+
+  it("carries the simulator's limit to a SIMULATED observatory", async () => {
+    await storeSimulatorEnvelope();
+
+    const envelope = await store.loadSafetyEnvelope(observatory.id);
+    expect(envelope?.maxAltitudeDegrees).toBe(SIMULATOR_LIMIT_DEGREES);
+  });
+
+  it("sends it UNMEASURED to an observatory that is not SIMULATED", async () => {
+    await storeSimulatorEnvelope();
+    await database.observatory.update({
+      where: { id: observatory.id },
+      data: { mode: "REAL" },
+    });
+
+    const envelope = await store.loadSafetyEnvelope(observatory.id);
+    expect(envelope?.maxAltitudeDegrees).toBeNull();
+    expect(envelope?.maxAltitudeMeasuredBy).toBe(SIMULATOR_ENVELOPE_MEASURER);
   });
 });

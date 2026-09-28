@@ -5,6 +5,7 @@ import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PrismaClient } from "@darkview/db";
+import { SIMULATOR_ENVELOPE_MEASURER } from "@darkview/db/simulator-envelope";
 
 vi.mock("server-only", () => ({}));
 
@@ -284,6 +285,39 @@ describe("switching the observatory to real hardware", () => {
       reason: "mount qualification Q4, operator at the pier",
       attendedOperatorPresent: true,
     });
+  });
+
+  it("refuses REAL while the envelope is the simulator's stand-in (ADR-031)", async () => {
+    await database.mission.update({
+      where: { id: missionId },
+      data: { state: "COMPLETE" },
+    });
+    await setSafetyEnvelope({
+      observatoryId,
+      envelope: {
+        ...(envelopeFor(FAKE_MEASURED_MAX_ALTITUDE_DEGREES) as object),
+        maxAltitudeMeasuredBy: SIMULATOR_ENVELOPE_MEASURER,
+      } as never,
+      actorUserId: operatorId,
+    });
+
+    const result = await setObservatoryMode({
+      observatoryId,
+      request: {
+        mode: "REAL",
+        reason: "first light, operator at the pier",
+        attendedOperatorPresent: true,
+      },
+      actorUserId: operatorId,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("SAFETY_NOT_CONFIGURED");
+    expect(
+      (await database.observatory.findUniqueOrThrow({ where: { id: observatoryId } }))
+        .mode,
+    ).toBe("SIMULATED");
   });
 
   it("refuses to change mode under a live mission", async () => {

@@ -91,6 +91,42 @@ def daylight_lock_altitude_degrees(config: SafetyEnvelopeConfig) -> float:
     return min(configured, MAX_DAYLIGHT_LOCK_ALTITUDE_DEGREES)
 
 
+#: `maxAltitudeMeasuredBy` on the development seed's simulator envelope (ADR-031).
+#:
+#: The same string as `SIMULATOR_ENVELOPE_MEASURER` in
+#: `packages/db/simulator-envelope.ts`; a test holds the two equal. It is a
+#: provenance marker, not a type, so it is not in the contract.
+SIMULATOR_ENVELOPE_MEASURER = "SIMULATOR — NOT A MEASUREMENT"
+
+
+def is_simulator_marked(config: SafetyEnvelopeConfig | None) -> bool:
+    """Whether this envelope's altitude limit is the simulator's, not a measurement.
+
+    A case-insensitive prefix, like the cloud's rule: a hand-typed variant is
+    still not a measurement, and nobody who measured an optical train is called
+    "Simulator".
+    """
+    if config is None:
+        return False
+    measured_by = (config.max_altitude_measured_by or "").strip().upper()
+    return measured_by.startswith("SIMULATOR")
+
+
+def admit_envelope(
+    config: SafetyEnvelopeConfig | None, *, simulated: bool
+) -> SafetyEnvelopeConfig | None:
+    """The envelope as this agent may enforce it (ADR-031).
+
+    On an agent driving anything but the simulator, a simulator-marked envelope
+    loses its MAX_ALT_SAFE and is UNMEASURED: every slew refused. This is the
+    agent's own check and does not trust the cloud to have made it. It can only
+    ever remove a limit's standing, never grant one.
+    """
+    if config is None or simulated or not is_simulator_marked(config):
+        return config
+    return config.model_copy(update={"max_altitude_degrees": None})
+
+
 def is_measured(config: SafetyEnvelopeConfig | None) -> bool:
     """True only when MAX_ALT_SAFE has been physically measured.
 
@@ -328,6 +364,19 @@ class SafetyEnvelope:
 
     config: SafetyEnvelopeConfig | None = None
     site: SiteLocation | None = None
+    simulated: bool = False
+    """Whether the drivers this envelope protects are the simulator's.
+
+    False unless a caller says otherwise, so an envelope built without thinking
+    about it treats the simulator's altitude limit as UNMEASURED.
+    """
+
+    def __post_init__(self) -> None:
+        # The one place every enforcing copy of the envelope is built, so the
+        # simulator marker is admitted here rather than at each caller.
+        object.__setattr__(
+            self, "config", admit_envelope(self.config, simulated=self.simulated)
+        )
 
     @property
     def is_measured(self) -> bool:

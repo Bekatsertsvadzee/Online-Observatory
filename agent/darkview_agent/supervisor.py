@@ -49,6 +49,7 @@ from contracts.models import (
     MissionFailureReason,
     MissionState,
     NetworkNodeApprovalStatus,
+    ObservatoryMode,
     SafetyEnvelopeConfig,
     WeatherState,
 )
@@ -633,12 +634,16 @@ class Supervisor:
             logger.error("refusing an unreadable safety envelope update: %s", error)
             return
 
-        self._envelope = SafetyEnvelope(config=config, site=self._config.site)
+        self._envelope = SafetyEnvelope(
+            config=config,
+            site=self._config.site,
+            simulated=_drives_simulator(self._config, self._devices),
+        )
         if self._store is not None:
             self._store.save_envelope(config)
         self._validator.set_envelope(self._envelope)
         self._runner.set_envelope(self._envelope)
-        self._watchdog.set_config(config)
+        self._watchdog.set_config(self._envelope.config or config)
         self._link.set_safety_envelope_configured(self._envelope.is_measured)
 
         if self._envelope.is_measured:
@@ -1555,7 +1560,11 @@ def build_supervisor(
     if store is not None and not envelope.is_measured:
         stored_config = store.load_envelope()
         if stored_config is not None:
-            envelope = SafetyEnvelope(config=stored_config, site=config.site)
+            envelope = SafetyEnvelope(
+                config=stored_config,
+                site=config.site,
+                simulated=_drives_simulator(config, devices),
+            )
             logger.info("recovered the measured safety envelope from local state")
 
     audit = AuditLog(sink=store.append_audit if store else None)
@@ -1631,6 +1640,15 @@ def _failure_reason_for(action: WatchdogAction) -> MissionFailureReason:
     if action.device is not None:
         return FAULT_REASONS[action.device]
     return MissionFailureReason.mount_fault
+
+
+def _drives_simulator(config: AgentConfig, devices: Devices) -> bool:
+    """Whether the simulator's altitude limit may stand here (ADR-031).
+
+    Both the configured driver mode and the mount actually wired must say
+    SIMULATED. Either one naming real hardware is enough to refuse it.
+    """
+    return config.is_simulated and devices.mount.mode == ObservatoryMode.simulated
 
 
 def _mount_pointing(devices: Devices) -> tuple[float, float]:

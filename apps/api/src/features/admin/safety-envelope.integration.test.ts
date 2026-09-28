@@ -5,6 +5,7 @@ import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PrismaClient } from "@darkview/db";
+import { SIMULATOR_ENVELOPE_MEASURER } from "@darkview/db/simulator-envelope";
 
 vi.mock("server-only", () => ({}));
 
@@ -249,6 +250,61 @@ describe("recording a measured maximum altitude", () => {
       "maxAltitudeMeasuredAt",
       "maxAltitudeMeasuredBy",
     ]);
+  });
+});
+
+describe("the simulator's stand-in limit (ADR-031)", () => {
+  const simulatorEnvelope = () =>
+    envelopeFor(MEASURED, {
+      maxAltitudeMeasuredAt: NOW.toISOString(),
+      maxAltitudeMeasuredBy: SIMULATOR_ENVELOPE_MEASURER,
+      maxAltitudeMeasurementNote: "Development seed. Not a measurement.",
+    });
+
+  it("is recorded and enforced on a SIMULATED observatory", async () => {
+    const result = await setSafetyEnvelope({
+      observatoryId,
+      envelope: simulatorEnvelope(),
+      actorUserId: operatorId,
+    });
+
+    expect(result.ok).toBe(true);
+    expect((await loadSafetyEnvelope(observatoryId))?.maxAltitudeDegrees).toBe(MEASURED);
+  });
+
+  it("is refused on a REAL observatory, and nothing is stored", async () => {
+    await database.observatory.update({
+      where: { id: observatoryId },
+      data: { mode: "REAL" },
+    });
+
+    const result = await setSafetyEnvelope({
+      observatoryId,
+      envelope: simulatorEnvelope(),
+      actorUserId: operatorId,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(422);
+    expect(await loadSafetyEnvelope(observatoryId)).toBeNull();
+  });
+
+  it("reads as UNMEASURED once the observatory is not SIMULATED, however it got there", async () => {
+    await setSafetyEnvelope({
+      observatoryId,
+      envelope: simulatorEnvelope(),
+      actorUserId: operatorId,
+    });
+    // Bypassing setObservatoryMode on purpose: the loader must hold on its own.
+    await database.observatory.update({
+      where: { id: observatoryId },
+      data: { mode: "REAL" },
+    });
+
+    const loaded = await loadSafetyEnvelope(observatoryId);
+    expect(loaded?.maxAltitudeDegrees).toBeNull();
+    expect(loaded?.maxAltitudeMeasuredBy).toBe(SIMULATOR_ENVELOPE_MEASURER);
   });
 });
 

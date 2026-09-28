@@ -6,6 +6,7 @@ import { PrismaClient } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
 import { CAPTURE_CONTRACT_COLUMNS, toContractCapture } from "@darkview/db/capture";
 import { queueEmail } from "@darkview/db/notifications";
+import { admitEnvelopeFor } from "@darkview/db/simulator-envelope";
 
 import type {
   CommandEnvelope,
@@ -639,7 +640,8 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       for (const mission of candidates) {
         if (!mission.booking) continue;
         const slotEndsAt = new Date(
-          mission.booking.slotStartAt.getTime() + mission.booking.durationMinutes * 60_000,
+          mission.booking.slotStartAt.getTime() +
+            mission.booking.durationMinutes * 60_000,
         );
         if (slotEndsAt > now) continue;
 
@@ -647,7 +649,11 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
           // Conditional: a customer whose start committed a moment ago keeps it.
           const { count } = await tx.mission.updateMany({
             where: { id: mission.id, state: "SCHEDULED" },
-            data: { state: "CANCELLED", failureReason: "SESSION_EXPIRED", completedAt: now },
+            data: {
+              state: "CANCELLED",
+              failureReason: "SESSION_EXPIRED",
+              completedAt: now,
+            },
           });
           if (count === 0) return false;
 
@@ -692,6 +698,7 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
         include: {
           horizonMask: { orderBy: { azimuthDegrees: "asc" } },
           forbiddenAzimuthSectors: true,
+          observatory: { select: { mode: true } },
         },
       });
       if (!row) return null;
@@ -699,31 +706,38 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       // The same mapping exists in apps/api's safety store. Duplicated for the
       // same reason as LIVE_MISSION_STATES: this service does not depend on the
       // Next.js app. If the contract changes, both change.
-      return {
-        observatoryId: row.observatoryId,
-        minAltitudeDegrees: row.minAltitudeDegrees,
-        maxAltitudeDegrees: row.maxAltitudeDegrees,
-        maxAltitudeMeasuredAt: row.maxAltitudeMeasuredAt?.toISOString() ?? null,
-        maxAltitudeMeasuredBy: row.maxAltitudeMeasuredBy,
-        maxAltitudeMeasurementNote: row.maxAltitudeMeasurementNote,
-        horizonMask: row.horizonMask.map((entry) => ({
-          azimuthDegrees: entry.azimuthDegrees,
-          minAltitudeDegrees: entry.minAltitudeDegrees,
-        })),
-        forbiddenAzimuthSectors: row.forbiddenAzimuthSectors.map((sector) => ({
-          fromDegrees: sector.fromDegrees,
-          toDegrees: sector.toDegrees,
-        })),
-        sunExclusionDegrees: row.sunExclusionDegrees,
-        daylightLockSunAltitudeDegrees: row.daylightLockSunAltitudeDegrees,
-        nudgeMaxDegrees: row.nudgeMaxDegrees,
-        nudgeRateDegreesPerSecond: row.nudgeRateDegreesPerSecond,
-        slewTimeoutSeconds: row.slewTimeoutSeconds,
-        heartbeatLossSeconds: row.heartbeatLossSeconds,
-        linkDeadSeconds: row.linkDeadSeconds,
-        refocusTemperatureDeltaC: row.refocusTemperatureDeltaC,
-        updatedAt: row.updatedAt.toISOString(),
-      };
+      //
+      // Admitted for the observatory's mode before it is relayed (ADR-031): the
+      // agent is never sent the simulator's altitude limit for anything but a
+      // SIMULATED observatory. The agent applies the same rule again on receipt.
+      return admitEnvelopeFor(
+        {
+          observatoryId: row.observatoryId,
+          minAltitudeDegrees: row.minAltitudeDegrees,
+          maxAltitudeDegrees: row.maxAltitudeDegrees,
+          maxAltitudeMeasuredAt: row.maxAltitudeMeasuredAt?.toISOString() ?? null,
+          maxAltitudeMeasuredBy: row.maxAltitudeMeasuredBy,
+          maxAltitudeMeasurementNote: row.maxAltitudeMeasurementNote,
+          horizonMask: row.horizonMask.map((entry) => ({
+            azimuthDegrees: entry.azimuthDegrees,
+            minAltitudeDegrees: entry.minAltitudeDegrees,
+          })),
+          forbiddenAzimuthSectors: row.forbiddenAzimuthSectors.map((sector) => ({
+            fromDegrees: sector.fromDegrees,
+            toDegrees: sector.toDegrees,
+          })),
+          sunExclusionDegrees: row.sunExclusionDegrees,
+          daylightLockSunAltitudeDegrees: row.daylightLockSunAltitudeDegrees,
+          nudgeMaxDegrees: row.nudgeMaxDegrees,
+          nudgeRateDegreesPerSecond: row.nudgeRateDegreesPerSecond,
+          slewTimeoutSeconds: row.slewTimeoutSeconds,
+          heartbeatLossSeconds: row.heartbeatLossSeconds,
+          linkDeadSeconds: row.linkDeadSeconds,
+          refocusTemperatureDeltaC: row.refocusTemperatureDeltaC,
+          updatedAt: row.updatedAt.toISOString(),
+        },
+        row.observatory.mode,
+      );
     },
 
     async loadWeather(observatoryId: string): Promise<WeatherState | null> {

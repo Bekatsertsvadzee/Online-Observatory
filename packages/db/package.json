@@ -17,7 +17,8 @@
     "./loyalty": "./loyalty.ts",
     "./credits": "./credits.ts",
     "./subscriptions": "./subscriptions.ts",
-    "./rate-limit": "./rate-limit.ts"
+    "./rate-limit": "./rate-limit.ts",
+    "./simulator-envelope": "./simulator-envelope.ts"
   },
   "scripts": {
     "db:generate": "prisma generate",
