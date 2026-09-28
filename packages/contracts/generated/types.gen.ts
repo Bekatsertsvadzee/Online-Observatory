@@ -914,7 +914,10 @@ export type PaymentStatus = typeof PaymentStatus[keyof typeof PaymentStatus];
 /**
  * The minimum a client needs to continue a payment. `redirectUrl` is supplied by
  * the provider. No provider-specific field is modelled here because none has been
- * confirmed against provider documentation.
+ * confirmed against provider documentation. For a booking's SANDBOX payment the
+ * cloud is the provider, and `redirectUrl` is its `getSandboxCheckout` page on the
+ * web client's origin (#149). A client follows it the same way for either
+ * provider and reads the booking when it comes back.
  *
  */
 export type PaymentIntent = {
@@ -924,6 +927,19 @@ export type PaymentIntent = {
     redirectUrl?: string | null;
     expiresAt?: string | null;
 };
+
+/**
+ * #149. What the sandbox checkout page submits: pay (CAPTURED) or decline
+ * (FAILED). Nothing else a real provider reports is modelled.
+ *
+ */
+export type SandboxCheckoutConfirmation = {
+    result: SandboxCheckoutResult;
+};
+
+export const SandboxCheckoutResult = { CAPTURED: 'CAPTURED', FAILED: 'FAILED' } as const;
+
+export type SandboxCheckoutResult = typeof SandboxCheckoutResult[keyof typeof SandboxCheckoutResult];
 
 export type BookingWithPaymentIntent = {
     booking: Booking;
@@ -2790,6 +2806,8 @@ export type MissionId = string;
 
 export type BookingId = string;
 
+export type PaymentId = string;
+
 export type CaptureId = string;
 
 export type TargetId = string;
@@ -3703,6 +3721,75 @@ export type ReceivePaymentWebhookResponses = {
 };
 
 export type ReceivePaymentWebhookResponse = ReceivePaymentWebhookResponses[keyof ReceivePaymentWebhookResponses];
+
+export type GetSandboxCheckoutData = {
+    body?: never;
+    path: {
+        paymentId: string;
+    };
+    query?: never;
+    url: '/payments/{paymentId}/sandbox-checkout';
+};
+
+export type GetSandboxCheckoutErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+};
+
+export type GetSandboxCheckoutError = GetSandboxCheckoutErrors[keyof GetSandboxCheckoutErrors];
+
+export type GetSandboxCheckoutResponses = {
+    /**
+     * The checkout page.
+     */
+    200: string;
+};
+
+export type GetSandboxCheckoutResponse = GetSandboxCheckoutResponses[keyof GetSandboxCheckoutResponses];
+
+export type ConfirmSandboxCheckoutData = {
+    body: SandboxCheckoutConfirmation;
+    path: {
+        paymentId: string;
+    };
+    query?: never;
+    url: '/payments/{paymentId}/sandbox-checkout';
+};
+
+export type ConfirmSandboxCheckoutErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+    /**
+     * Rate limited. The body does not say how much budget remains or when it returns.
+     */
+    429: ApiError;
+};
+
+export type ConfirmSandboxCheckoutError = ConfirmSandboxCheckoutErrors[keyof ConfirmSandboxCheckoutErrors];
 
 export type ListMissionsData = {
     body?: never;
