@@ -1354,6 +1354,40 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /missions/{missionId}/watch:
+    get:
+      operationId: getMissionWatchView
+      tags: [missions]
+      summary: One read of a live session for the people allowed to watch it.
+      description: |
+        Everything a watch page needs in one call (ADR-034): the mission, its target,
+        its observatory and instrument, the controller's display name, and the
+        caller's own observer seat.
+
+        Readable by the session owner, by a caller holding an attached observer seat,
+        and -- only while the owner has opened the session to observers
+        (`Mission.observable`) and the mission is live -- by any signed-in user, who
+        needs it to decide whether to buy a seat. Everybody else gets 404, exactly as
+        for a mission that does not exist.
+
+        It grants nothing. ADR-007 stands: an observer receives mission state and the
+        live view and nothing else, so this carries no captures and no way to save
+        one. The audience is `observerCount`, the seats attached; there is no
+        presence count.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      responses:
+        "200":
+          description: The watch view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MissionWatchView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /missions/{missionId}/events:
     get:
       operationId: listMissionEvents
@@ -4221,6 +4255,41 @@ components:
       properties:
         observable:
           type: boolean
+
+    MissionWatchView:
+      type: object
+      description: |
+        A live session as somebody allowed to watch it sees it (ADR-034). Built from
+        existing schemas; it adds no capture and no save capability (ADR-007).
+      additionalProperties: false
+      required:
+        - mission
+        - target
+        - observatory
+        - ownerDisplayName
+        - observerCount
+        - myObserverSeat
+      properties:
+        mission:
+          $ref: "#/components/schemas/Mission"
+        target:
+          $ref: "#/components/schemas/Target"
+        observatory:
+          $ref: "#/components/schemas/BookableObservatory"
+        ownerDisplayName:
+          type: [string, "null"]
+          description: The controller's display name, as `User.displayName`.
+        observerCount:
+          type: integer
+          minimum: 0
+          description: |
+            Observer seats attached now, equal to `mission.observerCount`. The
+            audience shown on a watch page; there is no separate presence count.
+        myObserverSeat:
+          oneOf:
+            - $ref: "#/components/schemas/MissionObserver"
+            - type: "null"
+          description: The caller's attached observer seat, or null if they hold none.
 
     MissionEventSource:
       type: string

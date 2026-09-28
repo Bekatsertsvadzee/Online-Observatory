@@ -577,22 +577,11 @@ async function seedDevelopmentDatabase() {
       });
     }
 
-    await database.missionPresence.upsert({
-      where: {
-        missionId_userId: {
-          missionId: DEMO_MISSIONS[4].id,
-          userId: DEMO_IDS.viewer,
-        },
-      },
-      create: {
-        id: DEMO_IDS.livePresence,
-        missionId: DEMO_MISSIONS[4].id,
-        userId: DEMO_IDS.viewer,
-        lastSeenAt: new Date("2026-08-25T21:45:00.000Z"),
-        isDemo: true,
-      },
-      update: { leftAt: null, isDemo: true },
-    });
+    // ADR-034: ADR-007 stands and presence is dropped, so the demo no longer seeds
+    // a presence row or a shared-capture grant. Deleted by id rather than just no
+    // longer written, so a development database seeded before #150 loses them too.
+    await database.missionPresence.deleteMany({ where: { id: DEMO_IDS.livePresence } });
+    await database.captureAccess.deleteMany({ where: { id: DEMO_IDS.liveCaptureAccess } });
 
     await database.missionParticipant.upsert({
       where: {
@@ -606,33 +595,15 @@ async function seedDevelopmentDatabase() {
         missionId: DEMO_MISSIONS[4].id,
         userId: DEMO_IDS.viewer,
         status: "JOINED",
-        canSaveCaptures: true,
+        canSaveCaptures: false,
         isDemo: true,
       },
       update: {
         status: "JOINED",
-        canSaveCaptures: true,
+        canSaveCaptures: false,
         leftAt: null,
         isDemo: true,
       },
-    });
-
-    await database.captureAccess.upsert({
-      where: {
-        captureId_userId: {
-          captureId: DEMO_CAPTURES[3].id,
-          userId: DEMO_IDS.viewer,
-        },
-      },
-      create: {
-        id: DEMO_IDS.liveCaptureAccess,
-        captureId: DEMO_CAPTURES[3].id,
-        missionId: DEMO_MISSIONS[4].id,
-        userId: DEMO_IDS.viewer,
-        status: "AVAILABLE",
-        isDemo: true,
-      },
-      update: { status: "AVAILABLE", savedAt: null, isDemo: true },
     });
 
     const collections = [

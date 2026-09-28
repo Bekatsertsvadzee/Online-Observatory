@@ -2373,6 +2373,23 @@ class BookingPage(BaseModel):
     page: PageMeta
 
 
+class MissionWatchView(BaseModel):
+    """
+    A live session as somebody allowed to watch it sees it (ADR-034). Built from
+    existing schemas; it adds no capture and no save capability (ADR-007).
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    mission: Mission
+    target: Target
+    observatory: BookableObservatory
+    owner_display_name: str | None = Field(..., alias='ownerDisplayName', description="The controller's display name, as `User.displayName`.")
+    observer_count: int = Field(..., alias='observerCount', description='Observer seats attached now, equal to `mission.observerCount`. The\naudience shown on a watch page; there is no separate presence count.\n', ge=0)
+    my_observer_seat: MissionObserver | None = Field(..., alias='myObserverSeat', description="The caller's attached observer seat, or null if they hold none.")
+
+
 class MissionSession(BaseModel):
     """
     Proof that this client is the single active session owner. The session

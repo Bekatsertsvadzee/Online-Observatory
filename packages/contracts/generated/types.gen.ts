@@ -1468,6 +1468,31 @@ export type MissionObservationSettings = {
     observable: boolean;
 };
 
+/**
+ * A live session as somebody allowed to watch it sees it (ADR-034). Built from
+ * existing schemas; it adds no capture and no save capability (ADR-007).
+ *
+ */
+export type MissionWatchView = {
+    mission: Mission;
+    target: Target;
+    observatory: BookableObservatory;
+    /**
+     * The controller's display name, as `User.displayName`.
+     */
+    ownerDisplayName: string | null;
+    /**
+     * Observer seats attached now, equal to `mission.observerCount`. The
+     * audience shown on a watch page; there is no separate presence count.
+     *
+     */
+    observerCount: number;
+    /**
+     * The caller's attached observer seat, or null if they hold none.
+     */
+    myObserverSeat: MissionObserver | null;
+};
+
 export const MissionEventSource = {
     CLOUD: 'CLOUD',
     AGENT: 'AGENT',
@@ -4187,6 +4212,37 @@ export type PurchaseObserverPackResponses = {
 };
 
 export type PurchaseObserverPackResponse = PurchaseObserverPackResponses[keyof PurchaseObserverPackResponses];
+
+export type GetMissionWatchViewData = {
+    body?: never;
+    path: {
+        missionId: string;
+    };
+    query?: never;
+    url: '/missions/{missionId}/watch';
+};
+
+export type GetMissionWatchViewErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+};
+
+export type GetMissionWatchViewError = GetMissionWatchViewErrors[keyof GetMissionWatchViewErrors];
+
+export type GetMissionWatchViewResponses = {
+    /**
+     * The watch view.
+     */
+    200: MissionWatchView;
+};
+
+export type GetMissionWatchViewResponse = GetMissionWatchViewResponses[keyof GetMissionWatchViewResponses];
 
 export type ListMissionEventsData = {
     body?: never;

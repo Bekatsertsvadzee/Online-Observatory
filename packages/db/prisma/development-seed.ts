@@ -10,6 +10,8 @@ export const DEMO_IDS = {
   booking: "00000000-0000-4000-8000-000000000021",
   privateBooking: "00000000-0000-4000-8000-000000000022",
   privateSession: "00000000-0000-4000-8000-000000000023",
+  // livePresence and liveCaptureAccess are retired by ADR-034 and kept only so the
+  // seed can delete the rows an older seed wrote.
   livePresence: "00000000-0000-4000-8000-000000000024",
   liveParticipant: "00000000-0000-4000-8000-000000000025",
   liveCaptureAccess: "00000000-0000-4000-8000-000000000026",
@@ -152,7 +154,7 @@ export const DEMO_MISSIONS = [
     completedAt: null,
     sharingMode: "PUBLIC",
     joinPolicy: "OPEN",
-    allowSharedCaptures: true,
+    allowSharedCaptures: false,
     mode: "SIMULATED",
     isDemo: true,
   },
