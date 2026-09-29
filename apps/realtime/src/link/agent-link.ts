@@ -195,6 +195,15 @@ export class AgentLink {
       return;
     }
 
+    // Relayed, never recorded (#161), for the same reason: the agent never queues a
+    // telemetry sample (see `send_state_delta`), so there is no replay for a row to
+    // deduplicate, and at up to 2 Hz while slewing a row per sample was most of
+    // the table. The latest sample lives in `telemetry`, in memory (ADR-017).
+    if (message.type === "AGENT_STATE_DELTA") {
+      await this.applyStateDelta(message);
+      return;
+    }
+
     // Record first, act only on the first sighting. The primary key on
     // AgentMessage is what makes every effect in `apply` idempotent, so a replayed
     // queue after an outage is acknowledged once and applied once, and nothing
@@ -220,10 +229,6 @@ export class AgentLink {
         await this.applyCommandAck(message);
         return;
 
-      case "AGENT_STATE_DELTA":
-        await this.applyStateDelta(message);
-        return;
-
       case "AGENT_CAPTURE_READY":
         await this.applyCaptureReady(message);
         return;
@@ -239,8 +244,8 @@ export class AgentLink {
         await this.applyPosture(message.posture, message.disarmReason ?? null);
         return;
 
-      // AGENT_LIVE_FRAME never reaches here -- it is taken in `receive` before
-      // the record step, because its pixels are a separate frame on the wire.
+      // AGENT_LIVE_FRAME and AGENT_STATE_DELTA never reach here -- both are taken
+      // in `receive` before the record step, being samples that are never replayed.
       // AGENT_ERROR is diagnostic and is recorded; DV-063 gives it a reader.
       default:
         return;
@@ -543,10 +548,11 @@ export class AgentLink {
   /**
    * Telemetry from the agent's control loop.
    *
-   * Not recorded here, only relayed. This is a sample of a continuously changing
-   * value arriving several times a second; the durable account of what the
-   * observatory did is `AGENT_MISSION_EVENT` and the command audit, and writing
-   * every delta would grow a table without answering a question those two do not.
+   * Relayed, and not recorded -- not even its messageId in AgentMessage (#161).
+   * This is a sample of a continuously changing value arriving several times a
+   * second; the durable account of what the observatory did is
+   * `AGENT_MISSION_EVENT` and the command audit, and writing every delta would
+   * grow a table without answering a question those two do not.
    *
    * A delta holding no mission has nothing to fan out to -- the mission channel is
    * keyed by mission, and an idle observatory has no subscribers. The operator

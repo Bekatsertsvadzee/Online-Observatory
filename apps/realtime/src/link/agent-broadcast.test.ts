@@ -232,6 +232,50 @@ describe("telemetry", () => {
     expect(broadcast.telemetry).toEqual([]);
     expect(sent).toEqual([]);
   });
+
+  it("is relayed but writes no AgentMessage row (#161)", async () => {
+    // The agent never queues a sample, so there is no replay for a row to
+    // deduplicate, and at 2 Hz while slewing the rows were most of the table.
+    const link = await onlineLink();
+    const before = store.recorded.length;
+
+    for (let sample = 0; sample < 10; sample += 1) {
+      await link.receive(stateDelta());
+    }
+    await link.receive(stateDelta({ missionId: null }));
+
+    expect(store.recorded).toHaveLength(before);
+    expect(broadcast.telemetry).toHaveLength(10);
+    expect(link.latestTelemetry).not.toBeNull();
+  });
+
+  it("does not stop the messages around it being recorded (#161)", async () => {
+    const link = await onlineLink();
+    const commandId = randomUUID();
+    mintCommand(commandId);
+    const before = store.recorded.length;
+
+    await link.receive(missionEvent());
+    await link.receive(stateDelta());
+    await link.receive(commandAck(commandId));
+    await link.receive(stateDelta());
+    await link.receive(
+      JSON.stringify({
+        type: "AGENT_ERROR",
+        messageId: randomUUID(),
+        sentAt: new Date(now).toISOString(),
+        severity: "WARNING",
+        code: "CAMERA_TIMEOUT",
+        message: "Exposure timed out.",
+      }),
+    );
+
+    expect(store.recorded.slice(before).map((m) => m.type)).toEqual([
+      "AGENT_MISSION_EVENT",
+      "AGENT_COMMAND_ACK",
+      "AGENT_ERROR",
+    ]);
+  });
 });
 
 describe("command acknowledgements", () => {
