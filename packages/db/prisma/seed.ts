@@ -557,6 +557,13 @@ async function seedDevelopmentDatabase() {
       update: { status: "CONFIRMED", isDemo: true },
     });
 
+    // Before #163 the demo captures had "CAP-DEMO-*" ids, which the contract's
+    // `format: uuid` refuses. A database seeded then still holds them; their assets,
+    // collection entries and access rows cascade with them.
+    await database.capture.deleteMany({
+      where: { id: { startsWith: "CAP-DEMO-" }, isDemo: true },
+    });
+
     for (const capture of DEMO_CAPTURES) {
       const { id, thumbnailStorageKey, ...captureData } = capture;
       const data = {
