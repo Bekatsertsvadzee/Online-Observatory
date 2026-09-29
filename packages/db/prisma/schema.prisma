@@ -589,6 +589,8 @@ model ViewingForecastHour {
 /// after an outage, so the same message arrives more than once by design -- that is
 /// the recovery path working, not a fault. Recording the id makes ingestion
 /// idempotent: a replayed message is recognised and does not write a second row.
+/// AGENT_LIVE_FRAME and AGENT_STATE_DELTA are samples the agent never queues, so they
+/// are relayed and never recorded here (#161).
 model AgentMessage {
   messageId     String      @id @db.Uuid
   observatoryId String      @db.Uuid

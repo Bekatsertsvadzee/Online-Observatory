@@ -1003,3 +1003,84 @@ describe("the envelope relayed to the agent (ADR-032)", () => {
     expect(envelope?.maxAltitudeMeasuredBy).toBe(SIMULATOR_ENVELOPE_MEASURER);
   });
 });
+
+// #161
+describe("what reaches AgentMessage", () => {
+  function stateDelta() {
+    return JSON.stringify({
+      type: "AGENT_STATE_DELTA",
+      messageId: randomUUID(),
+      sentAt: NOW.toISOString(),
+      missionId,
+      telemetry: {
+        mode: "SIMULATED",
+        link: "ONLINE",
+        mount: { health: "OK", detail: null },
+        camera: { health: "OK", detail: null },
+        focuser: { health: "NOT_CONFIGURED", detail: null },
+        weather: {
+          status: "CLEAR",
+          source: "OPERATOR",
+          holdActive: false,
+          note: null,
+          updatedAt: NOW.toISOString(),
+        },
+        pointingEquatorial: null,
+        pointingHorizontal: null,
+        tracking: true,
+        parked: false,
+        slewing: true,
+        focuserPosition: null,
+        ambientTemperatureC: 9.5,
+        agentVersion: "0.1.0",
+        reportedAt: NOW.toISOString(),
+      },
+      missionState: "CAPTURING",
+      failureReason: null,
+      centeringIteration: null,
+      residualArcminutes: null,
+    });
+  }
+
+  it("is every message but the state deltas, which are relayed", async () => {
+    const link = makeLink();
+    await link.receive(hello());
+    await link.receive(stateDelta());
+    await link.receive(
+      JSON.stringify({
+        type: "AGENT_HEARTBEAT",
+        messageId: randomUUID(),
+        sentAt: NOW.toISOString(),
+        sequence: 1,
+        uptimeSeconds: 5,
+        posture: "SIMULATED",
+      }),
+    );
+    await link.receive(stateDelta());
+    await link.receive(
+      JSON.stringify({
+        type: "AGENT_MISSION_EVENT",
+        messageId: randomUUID(),
+        sentAt: NOW.toISOString(),
+        missionId,
+        state: "PROCESSING",
+        failureReason: null,
+        occurredAt: NOW.toISOString(),
+        commandId: null,
+        detail: null,
+      }),
+    );
+    await link.receive(stateDelta());
+
+    const rows = await database.agentMessage.findMany({
+      where: { observatoryId: observatory.id },
+      orderBy: { receivedAt: "asc" },
+    });
+    expect(rows.map((row) => row.type).sort()).toEqual([
+      "AGENT_HEARTBEAT",
+      "AGENT_HELLO",
+      "AGENT_MISSION_EVENT",
+    ]);
+    expect(broadcast.telemetry).toHaveLength(3);
+  });
+});
