@@ -6128,6 +6128,14 @@ components:
           minimum: 0
         ambientTemperatureC:
           type: [number, "null"]
+        pointing:
+          oneOf:
+            - $ref: "#/components/schemas/HorizontalCoordinates"
+            - type: "null"
+          description: |
+            Where the mount is pointing, rounded to 0.1°. Null when the agent has not reported
+            a position. Sent only on the channel of the mission it belongs to. Read-only: no
+            client message addresses the mount, and this field does not change that.
 
     MissionStreamInfo:
       type: object

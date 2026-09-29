@@ -2720,6 +2720,13 @@ export type MissionTelemetryUpdate = {
     residualArcminutes?: number | null;
     nudgeUsedDegrees?: number | null;
     ambientTemperatureC?: number | null;
+    /**
+     * Where the mount is pointing, rounded to 0.1°. Null when the agent has not reported
+     * a position. Sent only on the channel of the mission it belongs to. Read-only: no
+     * client message addresses the mount, and this field does not change that.
+     *
+     */
+    pointing?: HorizontalCoordinates | null;
 };
 
 /**

@@ -5,6 +5,7 @@ import type {
   AgentCommandAck,
   Capture,
   ErrorCode,
+  HorizontalCoordinates,
   LiveFrameEncoding,
   MissionCaptureReady,
   MissionChannelError,
@@ -94,9 +95,14 @@ export function missionStateUpdate(input: {
  * This is a deliberate narrowing, not a mapping that happens to drop fields. The
  * contract calls MissionTelemetryUpdate "deliberately narrower than
  * ObservatoryTelemetry: no device identity, no driver state, no address", so the
- * mount, camera and focuser DeviceStatus objects, the pointing coordinates, the
+ * mount, camera and focuser DeviceStatus objects, the equatorial pointing, the
  * focuser position and the agent version all stop here. Adding a field to this
  * function is a contract change, not an implementation detail.
+ *
+ * One pointing pair does pass (#148): the horizontal one, rounded to 0.1° for the
+ * room's pointing dial. Where a telescope points follows from the target and the
+ * time, both already public, and a tenth of a degree is a dial, not an instrument
+ * readout. It is telemetry only -- nothing a client sends reaches the mount.
  */
 export function missionTelemetryUpdate(
   missionId: string,
@@ -118,6 +124,28 @@ export function missionTelemetryUpdate(
     // to zero, which would tell the customer no nudge budget had been spent.
     nudgeUsedDegrees: null,
     ambientTemperatureC: delta.telemetry.ambientTemperatureC ?? null,
+    pointing: roundedPointing(delta.telemetry.pointingHorizontal ?? null),
+  };
+}
+
+function tenths(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+/**
+ * The mount's horizontal position, to a tenth of a degree.
+ *
+ * Azimuth is normalised after rounding: 359.96° rounds to 360.0°, which the
+ * contract's `exclusiveMaximum` refuses, and is the same bearing as 0.0°.
+ */
+export function roundedPointing(
+  pointing: HorizontalCoordinates | null,
+): HorizontalCoordinates | null {
+  if (!pointing) return null;
+  const azimuth = tenths(pointing.azimuthDegrees);
+  return {
+    altitudeDegrees: tenths(pointing.altitudeDegrees),
+    azimuthDegrees: azimuth >= 360 ? 0 : azimuth,
   };
 }
 

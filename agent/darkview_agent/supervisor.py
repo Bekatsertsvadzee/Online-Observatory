@@ -53,6 +53,7 @@ from contracts.models import (
     SafetyEnvelopeConfig,
     WeatherState,
 )
+from darkview_agent import __version__
 from darkview_agent.capture import profiles
 from darkview_agent.capture.deliverable import Deliverable, RenderedAsset, render
 from darkview_agent.capture.overlay import Caption
@@ -79,6 +80,7 @@ from darkview_agent.safety.posture import PostureLatch, initial_posture
 from darkview_agent.safety.watchdog import Watchdog, WatchdogAction, WatchdogTrigger
 from darkview_agent.state.store import StateStore, StoredMission, StoredOwnership, StoredRun
 from darkview_agent.stream.mjpeg import LiveView, StreamSettings
+from darkview_agent.telemetry import TelemetryReporter
 
 logger = logging.getLogger("darkview.agent.supervisor")
 
@@ -228,6 +230,10 @@ class Supervisor:
         # process is what makes an arming die with the process that received it.
         self._run_id = uuid.uuid4()
         self._started_at = self._now()
+        # Read-only: it reads device status and sends AGENT_STATE_DELTA (#148).
+        self._telemetry = TelemetryReporter(
+            devices=devices, agent_version=__version__, started_at=self._started_at
+        )
         self._posture = PostureLatch(
             initial_posture(config), real_drivers=not config.is_simulated
         )
@@ -454,6 +460,8 @@ class Supervisor:
         for result in self._uploader.take_results():
             self._record_upload(result)
 
+        self._report_telemetry(at_time)
+
         self._persist_mission()
 
         # Told at every pass, read only at the next hello. An agent that
@@ -465,6 +473,30 @@ class Supervisor:
             self._link.set_resume_mission(self._recovered_mission.mission_id)
         else:
             self._link.set_resume_mission(None)
+
+    def _report_telemetry(self, at_time: datetime) -> None:
+        """Where the mount is pointing, for the mission channel (#148).
+
+        The devices are read under the lock, like every other device call here;
+        the sample is sent after it is released, like every other send. Nothing
+        is written to a device and nothing is queued: offline, a sample is simply
+        not taken, and the first one after a reconnect goes out at once.
+        """
+        if not self._link.is_online:
+            self._telemetry.reset()
+            return
+
+        active = self._runner.is_active
+        with self._watchdog.device_lock:
+            delta = self._telemetry.sample(
+                at_time,
+                mission_id=self._runner.mission_id if active else None,
+                mission_state=self._runner.state if active else None,
+                centering_iteration=self._runner.centering_iterations if active else None,
+                weather=self._weather,
+            )
+        if delta is not None and self._link.send_state_delta(delta):
+            self._telemetry.sent(delta, at_time)
 
     # ------------------------------------------------------------------
     # Inbound messages
@@ -1542,8 +1574,6 @@ def build_supervisor(
     restart is still refused, and a measured safety envelope survives a reboot
     during a network outage instead of coming back UNMEASURED.
     """
-    from darkview_agent import __version__
-
     if config.observatory_id is None:
         raise ValueError(
             "an observatory id is required to open the link; set "

@@ -248,6 +248,24 @@ class LinkSession:
 
         return True
 
+    def send_state_delta(self, delta: dict) -> bool:
+        """Send one telemetry sample, or drop it. Returns whether it went.
+
+        **Never queued**, for the reason `send_live_frame` is not: a sample is
+        worth nothing once the next one exists, and a backlog replayed after an
+        outage would show the mount where it was rather than where it is.
+        """
+        if not self.is_online or self._transport is None:
+            return False
+
+        try:
+            self._transport.send(json.dumps(delta, separators=(",", ":")))
+        except TransportError as error:
+            self._handle_disconnection(f"state delta send failed: {error}")
+            return False
+
+        return True
+
     # ------------------------------------------------------------------
     # The pump
     # ------------------------------------------------------------------

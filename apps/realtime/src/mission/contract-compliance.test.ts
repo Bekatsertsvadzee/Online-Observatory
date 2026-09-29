@@ -60,6 +60,42 @@ describe("every message this service emits satisfies the contract", () => {
     expect(parsed.error?.issues ?? "ok").toEqual("ok");
   });
 
+  it("MISSION_TELEMETRY carrying where the mount points (#148)", () => {
+    const parsed = zMissionChannelMessage.safeParse(
+      missionTelemetryUpdate(MISSION, {
+        type: "AGENT_STATE_DELTA",
+        messageId: randomUUID(),
+        sentAt: now,
+        missionId: MISSION,
+        telemetry: {
+          mode: "SIMULATED",
+          link: "ONLINE",
+          mount: { health: "OK", detail: null },
+          camera: { health: "OK", detail: null },
+          focuser: { health: "NOT_CONFIGURED", detail: null },
+          weather: { status: "CLEAR", source: "OPERATOR", holdActive: false, note: null, updatedAt: now },
+          pointingEquatorial: null,
+          pointingHorizontal: { altitudeDegrees: -12.349, azimuthDegrees: 359.97 },
+          tracking: true,
+          parked: false,
+          slewing: false,
+          focuserPosition: null,
+          ambientTemperatureC: 9.5,
+          agentVersion: "0.1.0",
+          reportedAt: now,
+        },
+        missionState: "OBSERVING",
+        failureReason: null,
+        centeringIteration: null,
+        residualArcminutes: null,
+      } as never),
+    );
+    expect(parsed.error?.issues ?? "ok").toEqual("ok");
+    expect(parsed.data).toMatchObject({
+      pointing: { altitudeDegrees: -12.3, azimuthDegrees: 0 },
+    });
+  });
+
   it("MISSION_COMMAND_RESULT", () => {
     const parsed = zMissionChannelMessage.safeParse(
       missionCommandResult(MISSION, {
