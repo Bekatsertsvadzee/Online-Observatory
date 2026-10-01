@@ -15,6 +15,7 @@ import { nextPeriodEnd } from "@darkview/db/subscriptions";
 
 import type { PaymentOutcome } from "@/features/payments/provider";
 import { getDatabase } from "@/lib/db/client";
+import { sandboxMoneyAllowed } from "@/lib/deployment";
 import { getServerEnvironment } from "@/lib/validation/env";
 
 /**
@@ -123,7 +124,7 @@ export async function subscribe(input: {
   const { userId, request, now } = input;
   const database = getDatabase();
 
-  if (getServerEnvironment().NODE_ENV === "production") {
+  if (!sandboxMoneyAllowed(getServerEnvironment())) {
     // ADR-022 section 11: BOG_IPAY has no adapter and the sandbox is refused in
     // production, so nothing sells there until the provider documentation arrives.
     return {
