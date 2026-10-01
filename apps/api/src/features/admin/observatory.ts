@@ -18,13 +18,14 @@ import { randomUUID } from "node:crypto";
 const WEATHER_HOLD_NOTICE_HOURS = 24;
 
 import { getDatabase } from "@/lib/db/client";
+import { getServerEnvironment } from "@/lib/validation/env";
 import { COMMAND_TTL_SECONDS } from "@/features/missions/command";
 import { LIVE_MISSION_STATES } from "@/features/missions/session";
 import { notifyAgent } from "@/lib/observatory/relay";
 
 export type AdminFailure = {
   ok: false;
-  status: 404 | 409 | 422;
+  status: 403 | 404 | 409 | 422;
   code: ErrorCode;
   message: string;
   details?: Record<string, unknown>;
@@ -60,6 +61,18 @@ export async function setObservatoryMode(input: {
   actorUserId: string;
 }): Promise<ModeResult> {
   const { observatoryId, request, actorUserId } = input;
+
+  // ADR-035. A demo never commands hardware, whoever is standing at the telescope.
+  if (request.mode === "REAL" && getServerEnvironment().DARKVIEW_DEPLOYMENT === "demo") {
+    return {
+      ok: false,
+      status: 403,
+      code: "FORBIDDEN",
+      message:
+        "This deployment is a demo (DARKVIEW_DEPLOYMENT=demo) and never commands " +
+        "hardware. REAL mode is refused; the observatory stays SIMULATED.",
+    };
+  }
 
   if (request.mode === "REAL" && !request.attendedOperatorPresent) {
     return {

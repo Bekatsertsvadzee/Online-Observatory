@@ -76,7 +76,9 @@ deliberate — a permissive fallback silently disables the check it stands for.
 | `APP_URL` | realtime | The only origin a mission-channel handshake may come from. A fallback would let any site open a subscription as a signed-in customer. |
 | `STREAM_SIGNING_SECRET` | realtime | Signs live-view URLs (ADR-011). ≥ 32 characters. A known fallback is worse than no signing, because it looks like it works. |
 | `REALTIME_INTERNAL_SECRET` | realtime (required), api | What the API presents on `/internal/*` to read live operator telemetry (ADR-017). ≥ 32 characters, the same value in both services, separate from every other secret. On the API it is optional together with `REALTIME_INTERNAL_URL` -- the realtime service's origin as the API reaches it -- and without both `GET /admin/observatories/{observatoryId}/state` answers 503. **The reverse proxy must not route `/internal/*` from the internet**; the secret is the control, and that is the second line. |
-| `EMAIL_VERIFICATION_WEBHOOK_URL` / `_SECRET` | api | Registration is refused without them. |
+| `EMAIL_VERIFICATION_WEBHOOK_URL` / `_SECRET` | api | Where the verification email is delivered, signed in `x-darkview-signature`. Registration is refused unless this pair or the Resend pair below is set. |
+| `RESEND_API_KEY` / `EMAIL_FROM` | api | The verification email sent through Resend's HTTP API (ADR-035), in the customer's locale. Optional, both or neither; when set it is used instead of the webhook, and either path is enough for registration. `EMAIL_FROM` is `address@domain` or `Name <address@domain>` on a domain Resend has verified. It sends nothing else: the notification emails stay with `NOTIFICATION_WEBHOOK_URL`. |
+| `DARKVIEW_DEPLOYMENT` | both | `production` (default) or `demo` (ADR-035). `demo` is a hosted build that takes no real money and commands no hardware: the sandbox payment provider and the sandbox renewal charger work although `NODE_ENV` is production, `POST /admin/observatories/{observatoryId}/mode` refuses REAL, and both services refuse to start while any observatory is in REAL mode. Cookies and every other production check are unchanged. **Unset it, or set `production`, for the real launch.** |
 | `NOTIFICATION_WEBHOOK_URL` / `_SECRET` | realtime | Where customer emails are delivered, signed with HMAC-SHA256 in `x-darkview-signature` and deduplicated by `idempotency-key` (DV-064). Optional, both or neither: unset, emails are queued in `EmailNotification` and nothing is sent until they are set. |
 | `VOUCHER_CODE_SECRET` | realtime (required), api | Derives gift voucher codes from voucher ids (DV-112). ≥ 32 characters, **the same value in both services**. Codes are never stored, so the realtime service writes each one into its email from this secret. On the API it is optional: unset, `POST /vouchers` answers 503. **Never rotate it while vouchers are unsent or unspent**: every outstanding code would stop matching, and an email under a different secret is retried and then fails rather than sent wrong. |
 | `OPEN_METEO_API_KEY` | realtime | Open-Meteo's commercial key for viewing conditions (DV-110). Optional: unset, forecasts come from the keyless endpoint, which Open-Meteo licenses for **non-commercial use only**, and the service warns at start. Set it before selling slots. |
@@ -86,7 +88,8 @@ deliberate — a permissive fallback silently disables the check it stands for.
 `PAYMENT_SANDBOX_WEBHOOK_SECRET` is optional, and what it guards is the sandbox payment
 provider's callbacks to `POST /payments/webhook` (DV-056). Unset, a sandbox callback is
 refused rather than accepted unsigned. It is never read in production, where the
-sandbox provider is refused before the secret is looked for; the real provider's
+sandbox provider is refused before the secret is looked for, except on a
+`DARKVIEW_DEPLOYMENT=demo` deployment (ADR-035), which needs it set; the real provider's
 signing configuration arrives with merchant onboarding and is documented here when it
 does.
 
