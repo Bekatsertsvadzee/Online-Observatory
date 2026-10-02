@@ -12,6 +12,9 @@ const { testDatabase } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/db/client", () => ({ getDatabase: () => testDatabase.current }));
+vi.mock("@/lib/validation/env", () => ({
+  getServerEnvironment: () => ({ NODE_ENV: process.env.NODE_ENV ?? "test" }),
+}));
 
 const {
   MAX_OBSERVER_CAPACITY,
@@ -21,16 +24,17 @@ const {
   setMissionObservation,
   takeObserverSeat,
 } = await import("@/features/missions/observers");
-const { zMission, zMissionObserver, zMissionObserverList } =
+const { purchaseObserverPack } = await import("@/features/missions/observer-pack");
+const { zMission, zMissionObserver, zMissionObserverList, zObserverPack } =
   await import("@darkview/contracts/zod");
 
 /**
  * DV-100 against a real PostgreSQL instance.
  *
- * The claim worth testing is the cap. ADR-007 says "maximum five observers per
- * session ... a hard cap, enforced server-side", and a cap that is a count
- * followed by an insert is not enforced at all: two requests arriving together
- * both see four seats taken and both take the fifth. So the interesting test here
+ * The claim worth testing is the cap. ADR-007, as ADR-036 amended it, says "at
+ * most ten observers per session ... a hard cap, enforced server-side", and a cap
+ * that is a count followed by an insert is not enforced at all: two requests
+ * arriving together both see nine seats taken and both take the tenth. So the interesting test here
  * is the concurrent one, and it needs a real database for the same reason
  * DV-055's and DV-058's do.
  */
@@ -196,7 +200,7 @@ beforeEach(async () => {
   missionId = mission.id;
 });
 
-describe("the cap ADR-007 fixed at five", () => {
+describe("the cap ADR-036 set at ten", () => {
   it("is the database's rule, not a number the application promises", async () => {
     await expect(
       database.mission.update({
@@ -206,14 +210,16 @@ describe("the cap ADR-007 fixed at five", () => {
     ).rejects.toThrow();
   });
 
-  it("holds when five people join at once", async () => {
+  it("holds when fifteen people join at once for ten seats", async () => {
     await openToObservers();
 
-    // Ten at once for five seats. Counting and then inserting would let more than
-    // five through here, which is the whole reason the seat is taken under a lock
+    // Fifteen at once for ten seats. Counting and then inserting would let more than
+    // ten through here, which is the whole reason the seat is taken under a lock
     // on the mission row.
     const contenders = await Promise.all(
-      Array.from({ length: 10 }, (_, index) => createUser(`observer-${index}`)),
+      Array.from({ length: MAX_OBSERVER_CAPACITY + 5 }, (_, index) =>
+        createUser(`observer-${index}`),
+      ),
     );
 
     await Promise.all(contenders.map(grantPaidPack));
@@ -583,5 +589,218 @@ describe("the controller's consent (DV-101)", () => {
       orderBy: { createdAt: "desc" },
     });
     expect(rows[0]?.action).toBe("MISSION_OPENED_TO_OBSERVERS");
+  });
+});
+
+describe("a close refunds the time it takes (ADR-036)", () => {
+  const MINUTE = 60_000;
+  const SESSION_ENDS = new Date(NOW.getTime() + 30 * MINUTE);
+  const TEN_IN = new Date(NOW.getTime() + 10 * MINUTE);
+
+  async function openSession() {
+    await database.missionSession.create({
+      data: { missionId, userId: controllerId, issuedAt: NOW, expiresAt: SESSION_ENDS },
+    });
+  }
+
+  async function buyer(label: string, provider: "SANDBOX" | "BOG_IPAY" = "SANDBOX") {
+    const userId = await createUser(label);
+    const payment = await database.payment.create({
+      data: {
+        userId,
+        purpose: "OBSERVER_PACK",
+        provider,
+        status: "CAPTURED",
+        amountMinor: 1500,
+        capturedAt: NOW,
+      },
+    });
+    const pack = await database.observerPack.create({
+      data: { missionId, userId, paymentId: payment.id, status: "PAID", priceMinor: 1500, paidAt: NOW },
+    });
+    return { userId, paymentId: payment.id, packId: pack.id };
+  }
+
+  async function seated(label: string, provider: "SANDBOX" | "BOG_IPAY" = "SANDBOX") {
+    const seat = await buyer(label, provider);
+    expect((await takeObserverSeat({ missionId, userId: seat.userId, now: NOW })).ok).toBe(true);
+    return seat;
+  }
+
+  function close(now: Date) {
+    return setMissionObservation({
+      missionId,
+      actor: { id: controllerId, role: "USER" },
+      observable: false,
+      now,
+    });
+  }
+
+  const pack = (id: string) => database.observerPack.findUniqueOrThrow({ where: { id } });
+
+  beforeEach(async () => {
+    await database.emailNotification.deleteMany();
+    await openToObservers();
+    await openSession();
+  });
+
+  it("refunds each paid observer the share of the time they lose, rounded up", async () => {
+    const first = await seated("first");
+    const second = await seated("second");
+
+    expect((await close(TEN_IN)).ok).toBe(true);
+
+    // Thirty minutes bought at NOW, closed ten minutes in: twenty of thirty back.
+    for (const seat of [first, second]) {
+      const row = await pack(seat.packId);
+      expect(row.refundedMinor).toBe(1000);
+      expect(row.refundedAt).toEqual(TEN_IN);
+      expect(row.refundOwedMinor).toBeNull();
+      // A partial refund: the payment was captured, and the pack says what came back.
+      expect(
+        (await database.payment.findUniqueOrThrow({ where: { id: seat.paymentId } })).status,
+      ).toBe("CAPTURED");
+    }
+
+    const audit = await database.auditLog.findMany({
+      where: { missionId, action: "OBSERVER_PACK_REFUNDED" },
+    });
+    expect(audit.map((row) => row.entityId).sort()).toEqual([first.packId, second.packId].sort());
+
+    const closed = await database.auditLog.findFirstOrThrow({
+      where: { missionId, action: "MISSION_CLOSED_TO_OBSERVERS" },
+    });
+    expect(closed.metadata).toMatchObject({
+      detached: 2,
+      refunds: { refunded: 2, owed: 0, nothingLost: 0, undetermined: 0 },
+    });
+
+    const emails = await database.emailNotification.findMany({
+      where: { kind: "OBSERVER_PACK_REFUNDED" },
+    });
+    expect(emails.map((row) => row.userId).sort()).toEqual([first.userId, second.userId].sort());
+  });
+
+  it("shows the refund on the contract's ObserverPack", async () => {
+    const seat = await seated("observer");
+    await close(TEN_IN);
+
+    await openToObservers();
+    const again = await purchaseObserverPack({ missionId, userId: seat.userId, now: TEN_IN });
+
+    expect(again.ok).toBe(true);
+    if (again.ok) {
+      expect(again.value.observerPack.refundedMinor).toBe(1000);
+      expect(() => zObserverPack.parse(again.value.observerPack)).not.toThrow();
+    }
+  });
+
+  it("refunds a buyer who had paid and not attached yet", async () => {
+    const waiting = await buyer("waiting");
+
+    await close(TEN_IN);
+
+    expect((await pack(waiting.packId)).refundedMinor).toBe(1000);
+  });
+
+  it("does not refund an observer who left on their own", async () => {
+    const leaver = await seated("leaver");
+    const stayer = await seated("stayer");
+    await releaseObserverSeat({ missionId, userId: leaver.userId, now: NOW });
+
+    await close(TEN_IN);
+
+    expect((await pack(leaver.packId)).refundedMinor).toBeNull();
+    expect((await pack(stayer.packId)).refundedMinor).toBe(1000);
+  });
+
+  it("refunds once, however often the session is closed or reopened", async () => {
+    const seat = await seated("observer");
+
+    await close(TEN_IN);
+    await close(new Date(NOW.getTime() + 5 * MINUTE));
+
+    // Reopened, rejoined, closed again earlier on the clock than the first close
+    // would make a larger refund -- and still nothing more is given back.
+    await setMissionObservation({
+      missionId,
+      actor: { id: controllerId, role: "USER" },
+      observable: true,
+      now: TEN_IN,
+    });
+    await takeObserverSeat({ missionId, userId: seat.userId, now: TEN_IN });
+    await close(new Date(NOW.getTime() + MINUTE));
+
+    expect((await pack(seat.packId)).refundedMinor).toBe(1000);
+    expect(
+      await database.auditLog.count({ where: { missionId, action: "OBSERVER_PACK_REFUNDED" } }),
+    ).toBe(1);
+    expect(await database.emailNotification.count()).toBe(1);
+  });
+
+  it("refunds once when two closes race", async () => {
+    const seat = await seated("observer");
+
+    await Promise.all([close(TEN_IN), close(TEN_IN)]);
+
+    expect((await pack(seat.packId)).refundedMinor).toBe(1000);
+    expect(
+      await database.auditLog.count({ where: { missionId, action: "OBSERVER_PACK_REFUNDED" } }),
+    ).toBe(1);
+  });
+
+  it("records a refund the provider cannot issue as owed, never as paid, and sends nothing", async () => {
+    const seat = await seated("live-provider", "BOG_IPAY");
+
+    await close(TEN_IN);
+
+    const row = await pack(seat.packId);
+    expect(row.refundedMinor).toBeNull();
+    expect(row.refundedAt).toBeNull();
+    expect(row.refundOwedMinor).toBe(1000);
+    expect(
+      (await database.payment.findUniqueOrThrow({ where: { id: seat.paymentId } })).status,
+    ).toBe("CAPTURED");
+    expect(
+      await database.auditLog.count({ where: { missionId, action: "OBSERVER_PACK_REFUND_OWED" } }),
+    ).toBe(1);
+    expect(await database.emailNotification.count()).toBe(0);
+  });
+
+  it("refunds nothing for a close at or after the session's end", async () => {
+    const seat = await seated("observer");
+
+    await close(SESSION_ENDS);
+
+    expect((await pack(seat.packId)).refundedMinor).toBeNull();
+    expect(await database.emailNotification.count()).toBe(0);
+  });
+
+  it("marks the payment refunded when the whole price comes back", async () => {
+    const seat = await seated("observer");
+
+    await close(NOW);
+
+    expect((await pack(seat.packId)).refundedMinor).toBe(1500);
+    const payment = await database.payment.findUniqueOrThrow({ where: { id: seat.paymentId } });
+    expect(payment.status).toBe("REFUNDED");
+    expect(payment.refundedAt).toEqual(NOW);
+  });
+
+  it("is never more than was paid, by the database's own rule", async () => {
+    const seat = await buyer("observer");
+
+    await expect(
+      database.observerPack.update({
+        where: { id: seat.packId },
+        data: { refundedMinor: 1501, refundedAt: NOW },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      database.observerPack.update({
+        where: { id: seat.packId },
+        data: { refundedMinor: 500, refundedAt: NOW, refundOwedMinor: 500 },
+      }),
+    ).rejects.toThrow();
   });
 });

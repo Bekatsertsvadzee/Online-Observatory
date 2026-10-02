@@ -30,7 +30,7 @@ const { zObserverPack, zObserverPackWithPaymentIntent } =
 /**
  * DV-102 against a real PostgreSQL instance.
  *
- * The claim worth testing is the one that needs locks: ADR-007's five seats are a
+ * The claim worth testing is the one that needs locks: ADR-036's ten seats are a
  * count followed by an insert, and a count followed by an insert is not a cap.
  * Twenty people buying at once is the test that separates a lock from a hope, and
  * a mocked client has no locks to exercise.
@@ -46,7 +46,7 @@ const CONNECTION_STRING =
 
 const POOL_SIZE = 32;
 const CONTENDERS = 20;
-const CAPACITY = 5;
+const CAPACITY = 10;
 
 const NOW = new Date("2026-07-15T20:00:00.000Z");
 const AFTER_HOLD = new Date(NOW.getTime() + (OBSERVER_PACK_HOLD_MINUTES + 1) * 60_000);
@@ -291,8 +291,8 @@ describe("buying a seat", () => {
   });
 });
 
-describe("ADR-007's five seats, under contention", () => {
-  it("sells exactly five when twenty people buy at once", async () => {
+describe("ADR-036's ten seats, under contention", () => {
+  it("sells exactly ten when twenty people buy at once", async () => {
     await openToObservers();
 
     const contenders = await Promise.all(
@@ -316,7 +316,7 @@ describe("ADR-007's five seats, under contention", () => {
         where: { missionId, status: { in: ["PENDING_PAYMENT", "PAID"] } },
       }),
     ).toBe(CAPACITY);
-    // And exactly five payments were opened: nobody was charged for a seat the
+    // And exactly ten payments were opened: nobody was charged for a seat the
     // cap was always going to refuse.
     expect(await database.payment.count()).toBe(CAPACITY);
   });

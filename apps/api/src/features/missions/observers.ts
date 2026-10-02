@@ -9,6 +9,7 @@ import type {
 import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
 
+import { refundSeatsTakenByClose } from "@/features/missions/close-refund";
 import { hasPaidObserverPack } from "@/features/missions/observer-pack";
 import { LIVE_MISSION_STATES } from "@/features/missions/session";
 import { getDatabase } from "@/lib/db/client";
@@ -38,10 +39,11 @@ export type ObserverFailure = {
 export type ObserverResult<T> = { ok: true; value: T } | ObserverFailure;
 
 /**
- * ADR-007's hard cap, here only so a test can assert the two agree. What actually
- * stops a sixth seat is Mission_observer_capacity_within_adr007 in the migration.
+ * ADR-007's hard cap as ADR-036 amended it, here only so a test can assert the two
+ * agree. What actually stops an eleventh seat is
+ * Mission_observer_capacity_within_adr036 in the migration.
  */
-export const MAX_OBSERVER_CAPACITY = 5;
+export const MAX_OBSERVER_CAPACITY = 10;
 
 const NO_SUCH_MISSION: ObserverFailure = {
   ok: false,
@@ -113,8 +115,8 @@ export async function listMissionObservers(input: {
  *
  * The capacity check and the insert are one transaction over a locked mission
  * row. Counting and then inserting without the lock cannot be correct: two
- * requests arriving together both count four seats taken and both insert a
- * fifth, which is how a hard cap of five becomes six. Same reasoning as DV-055's
+ * requests arriving together both count nine seats taken and both insert a
+ * tenth, which is how a hard cap of ten becomes eleven. Same reasoning as DV-055's
  * held-slot index and DV-058's active-owner index; the difference is that "at
  * most N rows" is not something a unique index can say, so the lock says it.
  *
@@ -312,6 +314,12 @@ export async function releaseObserverSeat(input: {
  * Closing detaches everyone currently watching, in the same transaction. The
  * contract says "closing a session detaches any attached observers", and consent
  * withdrawn has to stop the watching now rather than for the next person to ask.
+ *
+ * Closing also refunds every paid seat the time it loses (ADR-036), in that same
+ * transaction and before the seats are marked LEFT, so a seat that was LEFT before
+ * the close -- an observer who left on their own -- can still be told apart. The
+ * mission row is locked first, so a payment settling a seat at the same moment
+ * lands either before the close, and is refunded, or after it.
  */
 export async function setMissionObservation(input: {
   missionId: string;
@@ -345,10 +353,21 @@ export async function setMissionObservation(input: {
   }
 
   return database.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "Mission" WHERE "id" = ${missionId}::uuid FOR UPDATE`;
+
     await tx.mission.update({
       where: { id: missionId },
       data: { joinPolicy: observable ? "OPEN" : "DISABLED" },
     });
+
+    const refunds = observable
+      ? null
+      : await refundSeatsTakenByClose(tx, {
+          missionId,
+          actorUserId: actor.id,
+          closedAt: now,
+          isDemo: mission.isDemo,
+        });
 
     const detached = observable
       ? 0
@@ -367,7 +386,7 @@ export async function setMissionObservation(input: {
         missionId,
         entityType: "Mission",
         entityId: missionId,
-        detail: { observable, detached },
+        detail: refunds ? { observable, detached, refunds } : { observable, detached },
         isDemo: mission.isDemo,
       },
       tx,
