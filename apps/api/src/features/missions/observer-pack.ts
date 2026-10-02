@@ -91,6 +91,7 @@ type PackRow = {
   holdExpiresAt: Date | null;
   priceMinor: number;
   currency: string;
+  refundedMinor: number | null;
   createdAt: Date;
 };
 
@@ -111,6 +112,7 @@ function toContractPack(row: PackRow): ObserverPack {
     currency: row.currency as ObserverPack["currency"],
     paymentId: row.paymentId,
     holdExpiresAt: row.holdExpiresAt?.toISOString() ?? null,
+    refundedMinor: row.refundedMinor,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -166,7 +168,7 @@ async function expireLapsedPacks(
  * The capacity check and the insert are one transaction over a locked mission row,
  * for the reason `takeObserverSeat` gives: "at most N rows" is not something a
  * unique index can say, so the lock says it. Counting and then inserting without
- * the lock is how a hard cap of five becomes six.
+ * the lock is how a hard cap of ten becomes eleven.
  *
  * Asking twice returns the same pack rather than opening a second payment. A
  * customer who reloads a checkout page has not bought two seats, and the unique

@@ -1014,7 +1014,7 @@ class Mission(BaseModel):
     ended_at: AwareDatetime | None = Field(None, alias='endedAt')
     capture_ids: list[UUID] | None = Field(None, alias='captureIds')
     observable: bool | None = Field(False, description='Whether the controller has opted this session in to being observed. Sessions\nare PRIVATE by default (ADR-007). Only the session owner may change it.\n')
-    observer_capacity: int | None = Field(5, alias='observerCapacity', description='Hard server-side cap on concurrent observers. Never exceeds 5 (ADR-007).', ge=0, le=5)
+    observer_capacity: int | None = Field(10, alias='observerCapacity', description='Hard server-side cap on concurrent observers. Never exceeds 10 (ADR-007 as\namended by ADR-036).\n', ge=0, le=10)
     observer_count: int | None = Field(None, alias='observerCount', description='Observers currently attached. Never exceeds observerCapacity.', ge=0)
 
 
@@ -1057,7 +1057,7 @@ class MissionObserverList(BaseModel):
         extra='forbid',
     )
     items: list[MissionObserver]
-    capacity: int = Field(..., ge=0, le=5)
+    capacity: int = Field(..., ge=0, le=10)
 
 
 class ObserverPackStatus(StrEnum):
@@ -1094,6 +1094,7 @@ class ObserverPack(BaseModel):
     currency: Currency
     payment_id: UUID | None = Field(None, alias='paymentId')
     hold_expires_at: AwareDatetime | None = Field(None, alias='holdExpiresAt', description='When an unpaid hold lapses. Null once the pack is no longer holding one.')
+    refunded_minor: int | None = Field(None, alias='refundedMinor', description="What was given back for this seat, in minor units of `currency`. Null until\na refund has been issued.\n\nADR-036: when the session owner closes the session to observers, a PAID\nseat whose buyer had not left on their own is refunded the share of\n`priceMinor` matching the time it loses,\n`ceil(priceMinor × (expiresAt − closedAt) ÷ (expiresAt − paidAt))`,\nwhere `paidAt` is when the seat's payment settled, `expiresAt` is the\nsession's end and `closedAt` is the close. Never more than `priceMinor`;\nzero, and therefore no refund, when the close comes at or after the\nsession's end. Automatic, and at most once per seat: closing again, or\nclosing after a reopen, refunds nothing further. An observer who leaves on\ntheir own, and a seat that runs to the end of the session, are not\nrefunded.\n\nSet only once the money has actually been returned. A refund the payment\nprovider cannot yet issue is recorded as owed on the platform and leaves\nthis null, so it is never shown as paid.\n", ge=0)
     created_at: AwareDatetime = Field(..., alias='createdAt')
 
 

@@ -106,6 +106,10 @@ export type AuditAction =
   | "OBSERVER_PACK_CAPTURED"
   | "OBSERVER_PACK_PAYMENT_FAILED"
   | "OBSERVER_PACK_CAPTURED_WITHOUT_SEAT"
+  // ADR-036: the owner closed the session and a paid seat was refunded the time it
+  // lost -- returned, or owed where the provider's refund API is not integrated.
+  | "OBSERVER_PACK_REFUNDED"
+  | "OBSERVER_PACK_REFUND_OWED"
   // MISSION
   | "MISSION_SCHEDULED"
   // ADR-018: the customer started it inside the slot; nobody did before the slot

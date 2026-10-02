@@ -170,6 +170,39 @@ async function describeData(
     };
   }
 
+  if (kind === "OBSERVER_PACK_REFUNDED") {
+    // ADR-036. Only a refund that was issued: refundedMinor is null for one that is
+    // merely owed, and an owed refund is never told to anyone as paid.
+    const pack = await database.observerPack.findUnique({
+      where: { id: String(payload.observerPackId) },
+      select: {
+        id: true,
+        missionId: true,
+        priceMinor: true,
+        currency: true,
+        refundedMinor: true,
+        mission: {
+          select: {
+            target: { select: { nameEn: true, nameKa: true } },
+            observatory: { select: { nameEn: true, nameKa: true, timezone: true } },
+          },
+        },
+      },
+    });
+    if (!pack || pack.refundedMinor === null) return null;
+    return {
+      observerPackId: pack.id,
+      missionId: pack.missionId,
+      target: pack.mission.target,
+      observatory: pack.mission.observatory,
+      refund: {
+        refundedMinor: pack.refundedMinor,
+        priceMinor: pack.priceMinor,
+        currency: pack.currency,
+      },
+    };
+  }
+
   const booking = await database.booking.findUnique({
     where: { id: String(payload.bookingId) },
     select: {

@@ -1360,7 +1360,9 @@ export type Mission = {
      */
     observable?: boolean;
     /**
-     * Hard server-side cap on concurrent observers. Never exceeds 5 (ADR-007).
+     * Hard server-side cap on concurrent observers. Never exceeds 10 (ADR-007 as
+     * amended by ADR-036).
+     *
      */
     observerCapacity?: number;
     /**
@@ -1451,6 +1453,28 @@ export type ObserverPack = {
      * When an unpaid hold lapses. Null once the pack is no longer holding one.
      */
     holdExpiresAt?: string | null;
+    /**
+     * What was given back for this seat, in minor units of `currency`. Null until
+     * a refund has been issued.
+     *
+     * ADR-036: when the session owner closes the session to observers, a PAID
+     * seat whose buyer had not left on their own is refunded the share of
+     * `priceMinor` matching the time it loses,
+     * `ceil(priceMinor × (expiresAt − closedAt) ÷ (expiresAt − paidAt))`,
+     * where `paidAt` is when the seat's payment settled, `expiresAt` is the
+     * session's end and `closedAt` is the close. Never more than `priceMinor`;
+     * zero, and therefore no refund, when the close comes at or after the
+     * session's end. Automatic, and at most once per seat: closing again, or
+     * closing after a reopen, refunds nothing further. An observer who leaves on
+     * their own, and a seat that runs to the end of the session, are not
+     * refunded.
+     *
+     * Set only once the money has actually been returned. A refund the payment
+     * provider cannot yet issue is recorded as owed on the platform and leaves
+     * this null, so it is never shown as paid.
+     *
+     */
+    refundedMinor?: number | null;
     createdAt: string;
 };
 

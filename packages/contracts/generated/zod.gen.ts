@@ -897,7 +897,7 @@ export const zMission = z.strictObject({
     endedAt: z.iso.datetime().nullish(),
     captureIds: z.array(z.uuid()).optional(),
     observable: z.boolean().optional().default(false),
-    observerCapacity: z.int().gte(0).lte(5).optional().default(5),
+    observerCapacity: z.int().gte(0).lte(10).optional().default(10),
     observerCount: z.int().gte(0).optional()
 });
 
@@ -928,7 +928,7 @@ export const zMissionObserver = z.strictObject({
 
 export const zMissionObserverList = z.strictObject({
     items: z.array(zMissionObserver),
-    capacity: z.int().gte(0).lte(5)
+    capacity: z.int().gte(0).lte(10)
 });
 
 /**
@@ -962,6 +962,7 @@ export const zObserverPack = z.strictObject({
     currency: zCurrency,
     paymentId: z.uuid().nullish(),
     holdExpiresAt: z.iso.datetime().nullish(),
+    refundedMinor: z.int().gte(0).nullish(),
     createdAt: z.iso.datetime()
 });
 

@@ -726,11 +726,12 @@ model Mission {
   /// Contract: Mission.observerCapacity. Seats available to observers, over and
   /// above the one controller.
   ///
-  /// ADR-007 caps it at five, and Mission_observer_capacity_within_adr007 makes
-  /// that the database's rule rather than a number the application promises to
-  /// check. The cap is per mission so an operator can lower it; nothing may raise
-  /// it above five without amending the decision record.
-  observerCapacity    Int                  @default(5)
+  /// ADR-007, as amended by ADR-036, caps it at ten, and
+  /// Mission_observer_capacity_within_adr036 makes that the database's rule rather
+  /// than a number the application promises to check. The cap is per mission so an
+  /// operator can lower it; nothing may raise it above ten without amending the
+  /// decision record.
+  observerCapacity    Int                  @default(10)
   /// Contract: ObservatoryMode. A mission run against the simulator is permanently
   /// marked SIMULATED and is never presented as real telescope output.
   mode                ObservatoryMode      @default(SIMULATED)
@@ -845,7 +846,7 @@ model MissionParticipant {
 ///
 /// Capacity is therefore counted here, over PENDING_PAYMENT and PAID rows, and
 /// not over attached participants. There is no unique index behind that count --
-/// "at most five rows" is not something an index can say -- so the mission row is
+/// "at most ten rows" is not something an index can say -- so the mission row is
 /// locked FOR UPDATE first, the same way takeObserverSeat does it.
 model ObserverPack {
   id            String             @id @default(uuid()) @db.Uuid
@@ -862,6 +863,16 @@ model ObserverPack {
   currency      Currency           @default(GEL)
   isDemo        Boolean            @default(false)
   paidAt        DateTime?
+  /// Contract: ObserverPack.refundedMinor. ADR-036: what a close gave back for this
+  /// seat, set only once the money has actually been returned. With refundedAt,
+  /// the instant it was.
+  refundedMinor Int?
+  refundedAt    DateTime?
+  /// ADR-036. A close refund decided but not issued, because the payment's provider
+  /// has no integrated refund API (DV-111's PROVIDER_REFUND_UNAVAILABLE). Not a
+  /// contract field: an owed refund is never shown as paid. Issued or owed, never
+  /// both -- ObserverPack_refund_issued_or_owed.
+  refundOwedMinor Int?
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
   mission       Mission            @relation(fields: [missionId], references: [id], onDelete: Cascade)
@@ -1372,6 +1383,8 @@ enum EmailNotificationKind {
   GIFT_VOUCHER_RESTORED
   /// #123: a refund gave back the subscription minutes a booking spent.
   SUBSCRIPTION_MINUTES_RETURNED
+  /// ADR-036: the owner closed a session, and an observer's seat was refunded.
+  OBSERVER_PACK_REFUNDED
 }
 
 /// Contract: BookingLossCause (DV-111).

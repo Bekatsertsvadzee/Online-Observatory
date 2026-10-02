@@ -327,6 +327,78 @@ describe("minutes returned by a refund (#123)", () => {
   });
 });
 
+describe("an observer seat refunded by a close (ADR-036)", () => {
+  async function refundedPack(refundedMinor: number | null, refundOwedMinor: number | null = null) {
+    const owner = await database.user.create({
+      data: { email: `${randomUUID()}@example.test`, name: "Giorgi", emailVerifiedAt: NOW },
+    });
+    const mission = await database.mission.create({
+      data: { userId: owner.id, targetId, observatoryId, telescopeId, state: "OBSERVING" },
+    });
+    const payment = await database.payment.create({
+      data: {
+        userId,
+        purpose: "OBSERVER_PACK",
+        provider: refundOwedMinor === null ? "SANDBOX" : "BOG_IPAY",
+        status: "CAPTURED",
+        amountMinor: 1500,
+        capturedAt: NOW,
+      },
+    });
+    const pack = await database.observerPack.create({
+      data: {
+        missionId: mission.id,
+        userId,
+        paymentId: payment.id,
+        status: "PAID",
+        priceMinor: 1500,
+        paidAt: NOW,
+        refundedMinor,
+        refundedAt: refundedMinor === null ? null : NOW,
+        refundOwedMinor,
+      },
+    });
+    await database.emailNotification.create({
+      data: {
+        userId,
+        kind: "OBSERVER_PACK_REFUNDED",
+        dedupeKey: `observer-pack-refunded:${pack.id}`,
+        payload: { observerPackId: pack.id },
+      },
+    });
+    return pack.id;
+  }
+
+  it("says what came back of what was paid, and names the session in both languages", async () => {
+    const id = await refundedPack(1000);
+    const mail = mailService();
+
+    await dispatchPendingEmails({ database, webhook: WEBHOOK, now: NOW, fetchImpl: mail.fetchImpl });
+
+    const body = JSON.parse(mail.sent[0].body);
+    expect(body).toMatchObject({
+      kind: "OBSERVER_PACK_REFUNDED",
+      locale: "ka",
+      data: {
+        observerPackId: id,
+        refund: { refundedMinor: 1000, priceMinor: 1500, currency: "GEL" },
+        target: { nameEn: "M13", nameKa: "M13 ბურთისებრი გროვა" },
+        observatory: { nameEn: "Tbilisi Observatory", nameKa: "თბილისის ობსერვატორია" },
+      },
+    });
+  });
+
+  it("is not sent for a refund that is owed and not issued", async () => {
+    await refundedPack(null, 1000);
+    const mail = mailService();
+
+    const summary = await dispatchPendingEmails({ database, webhook: WEBHOOK, now: NOW, fetchImpl: mail.fetchImpl });
+
+    expect(summary.skipped).toBe(1);
+    expect(mail.sent).toEqual([]);
+  });
+});
+
 describe("a capture reaching the Collection", () => {
   it("queues a capture-ready email for the mission's owner, once", async () => {
     const mission = await database.mission.create({
