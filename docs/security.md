@@ -65,13 +65,16 @@ disagree, `CLAUDE.md`'s order of precedence decides.
 
 8. **Email delivery is a server-to-server webhook** out of the platform. Requests are
    signed with `EMAIL_VERIFICATION_WEBHOOK_SECRET`; the verification bearer token is
-   never returned by the registration response.
+   never returned by the registration response. The verification email alone may
+   instead go straight to Resend over HTTPS with `RESEND_API_KEY` (ADR-035); the
+   token still travels only in that email.
 
 9. **Payment settlement is a server-to-server webhook** into the platform.
    `POST /payments/webhook` has no session. What authenticates the caller is the
    provider's signature over the exact bytes of the body, checked in constant time before
    the body's contents are trusted. The sandbox provider signs with
-   `PAYMENT_SANDBOX_WEBHOOK_SECRET` and is refused outright in production. A callback is
+   `PAYMENT_SANDBOX_WEBHOOK_SECRET` and is refused in production, except on a deployment
+   that declares `DARKVIEW_DEPLOYMENT=demo` (ADR-035), which never runs real hardware. A callback is
    then checked against the records — the payment it names, the provider it was opened
    with, the amount the intent was for — and only a callback that fits confirms a booking
    or funds a subscription. A refused callback leaves an audit row.
@@ -82,12 +85,13 @@ Passwords are normalized only at the email boundary; passwords themselves are ne
 
 Email addresses are stored lowercase and unique. New accounts receive a cryptographically random, 30-minute, single-use email verification token. Only the SHA-256 token hash is stored. Authentication is refused until `emailVerifiedAt` is set. Verification consumes the token, revokes older sessions, and creates a fresh session.
 
-The email webhook must be configured before registration is enabled:
+One email delivery path must be configured before registration is enabled, either:
 
-- `EMAIL_VERIFICATION_WEBHOOK_URL`
-- `EMAIL_VERIFICATION_WEBHOOK_SECRET` (at least 32 characters)
+- `EMAIL_VERIFICATION_WEBHOOK_URL` and `EMAIL_VERIFICATION_WEBHOOK_SECRET` (at least 32
+  characters), or
+- `RESEND_API_KEY` and `EMAIL_FROM` (ADR-035), which take precedence when both are set.
 
-The receiving mail service must verify the `x-darkview-signature` HMAC over the exact request body before sending mail.
+On the webhook path, the receiving mail service must verify the `x-darkview-signature` HMAC over the exact request body before sending mail.
 
 ## Sessions and cookies
 
@@ -260,7 +264,8 @@ Three balances, three ledgers, no crossing: money (`Payment`), observation minut
 - **One price reduction per booking** — a voucher, points, or minutes.
 - **The ledgers are append-only by database trigger**, not by application convention.
 - **Nothing sells in production.** The sandbox provider is refused there, and no real
-  provider adapter exists yet (ADR-022 §11).
+  provider adapter exists yet (ADR-022 §11). A `DARKVIEW_DEPLOYMENT=demo` deployment
+  takes the sandbox, moves no money and refuses REAL mode (ADR-035).
 
 ## Partner observatories
 
@@ -310,8 +315,8 @@ Required, with no safe default:
 - `APP_URL` on the API — the exact public HTTPS origin, for the origin check.
 - `APP_URL` on the realtime service — the only origin a mission-channel handshake may come
   from.
-- `EMAIL_VERIFICATION_WEBHOOK_URL` and `EMAIL_VERIFICATION_WEBHOOK_SECRET` (at least 32
-  characters) before registration is enabled.
+- An email delivery path before registration is enabled: the verification webhook pair,
+  or `RESEND_API_KEY` and `EMAIL_FROM` (ADR-035).
 
 If a reverse proxy is used it must replace rather than append untrusted forwarding
 headers. Add an IP/device-level rate limit at the edge: the application limit protects the

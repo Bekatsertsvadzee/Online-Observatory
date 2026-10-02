@@ -29,6 +29,7 @@ import {
 import { sandboxCheckoutUrl } from "@/features/payments/sandbox-checkout";
 import { slotVisibilityForBooking } from "@/features/targets/slot";
 import { getDatabase } from "@/lib/db/client";
+import { sandboxMoneyAllowed } from "@/lib/deployment";
 import { openIntervals } from "@/lib/slots/availability";
 import { nightWindow } from "@/lib/slots/darkness";
 import { generateSlots, SLOT_DURATION_MINUTES } from "@/lib/slots/generate";
@@ -312,7 +313,7 @@ export async function reserveSlot(input: {
   const database = getDatabase();
   const { userId, request, idempotencyKey, now } = input;
 
-  if (getServerEnvironment().NODE_ENV === "production") {
+  if (!sandboxMoneyAllowed(getServerEnvironment())) {
     return {
       ok: false,
       status: 500,

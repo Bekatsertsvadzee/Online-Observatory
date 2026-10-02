@@ -4,11 +4,26 @@ import { z } from "zod";
 
 const serverEnvironmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  /**
+   * ADR-035. `demo` is a hosted build that takes no real money and commands no
+   * hardware: the sandbox payment provider is allowed although NODE_ENV is
+   * production, and no observatory may be in REAL mode. Every other production
+   * check holds. Turned off for the real launch.
+   */
+  DARKVIEW_DEPLOYMENT: z.enum(["production", "demo"]).default("production"),
   DATABASE_URL: z.url().startsWith("postgresql://"),
   APP_URL: z.url(),
   AUTH_SECRET: z.string().min(32),
   EMAIL_VERIFICATION_WEBHOOK_URL: z.url().optional(),
   EMAIL_VERIFICATION_WEBHOOK_SECRET: z.string().min(32).optional(),
+  /**
+   * ADR-035. When both are set the verification email is sent through Resend's
+   * HTTP API instead of the webhook above. Both or neither. `EMAIL_FROM` is the
+   * sender, `address@domain` or `Name <address@domain>`, on a domain Resend has
+   * verified.
+   */
+  RESEND_API_KEY: z.string().min(1).optional(),
+  EMAIL_FROM: z.string().includes("@").optional(),
   /**
    * How many proxies sit in front of this app. Decides how far from the right of
    * `X-Forwarded-For` the real client address is. Zero means the header is not
@@ -43,7 +58,10 @@ const serverEnvironmentSchema = z.object({
    * unknown sooner.
    */
   VIEWING_CONDITIONS_MAX_AGE_MINUTES: z.coerce.number().int().min(60).max(1440).default(180),
-});
+}).refine(
+  (environment) => Boolean(environment.RESEND_API_KEY) === Boolean(environment.EMAIL_FROM),
+  { message: "RESEND_API_KEY and EMAIL_FROM are set together.", path: ["RESEND_API_KEY"] },
+);
 
 export type ServerEnvironment = z.infer<typeof serverEnvironmentSchema>;
 

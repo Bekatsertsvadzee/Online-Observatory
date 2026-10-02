@@ -5,6 +5,7 @@ vi.mock("server-only", () => ({}));
 const { environment } = vi.hoisted(() => ({
   environment: {
     NODE_ENV: "test" as string,
+    DARKVIEW_DEPLOYMENT: "production" as "production" | "demo",
     PAYMENT_SANDBOX_WEBHOOK_SECRET: "sandbox-secret-that-is-at-least-32-chars" as
       | string
       | undefined,
@@ -86,6 +87,16 @@ describe("resolving a provider", () => {
       message: expect.stringContaining("production"),
     });
     environment.NODE_ENV = "test";
+  });
+
+  it("hands out the sandbox to a production build deployed as a demo (ADR-035)", () => {
+    environment.NODE_ENV = "production";
+    environment.DARKVIEW_DEPLOYMENT = "demo";
+    const resolved = resolvePaymentProvider("SANDBOX");
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(resolved.adapter.provider).toBe("SANDBOX");
+    environment.NODE_ENV = "test";
+    environment.DARKVIEW_DEPLOYMENT = "production";
   });
 
   it("refuses the sandbox without a secret rather than accepting unsigned callbacks", () => {

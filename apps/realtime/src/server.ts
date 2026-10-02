@@ -27,6 +27,7 @@ import { handleInternalRequest } from "@/internal/http";
 import { handleStreamRequest } from "@/stream/http";
 import { LiveStream } from "@/stream/live-stream";
 import { getEnvironment } from "@/env";
+import { refuseRealHardwareInDemo, sandboxMoneyAllowed } from "@/deployment";
 import { dispatchPendingEmails, queueSlotReminders } from "@/notifications/email";
 import { evaluateEndedSlots, refundExpiredEntitlements } from "@/refunds/entitlements";
 import { createSandboxCharger, sweepSubscriptions } from "@/subscriptions/renewals";
@@ -384,6 +385,20 @@ export function createRealtimeServer(
 // apps/api holds no agent link, asserted in realtime-is-separate.test.ts.
 if (process.env.NODE_ENV !== "test") {
   const environment = getEnvironment();
+
+  // DV-064. Its own client, so the link's store interface stays as narrow as the
+  // link needs. Reminders are queued whether or not delivery is configured; an
+  // outbox that fills while the mail service is unset is delivered once it is set.
+  const notifications = new PrismaClient({
+    adapter: new PrismaPg({ connectionString: environment.DATABASE_URL }),
+  });
+
+  // ADR-035. A demo never commands hardware, so it does not come up over a
+  // database with an observatory in REAL mode. Before a socket is accepted.
+  await refuseRealHardwareInDemo(environment.DARKVIEW_DEPLOYMENT, () =>
+    notifications.observatory.count({ where: { mode: "REAL" } }),
+  );
+
   const server = createRealtimeServer(
     createPrismaStore(environment.DATABASE_URL),
     environment.APP_URL,
@@ -405,12 +420,6 @@ if (process.env.NODE_ENV !== "test") {
   });
   void listener.start();
 
-  // DV-064. Its own client, so the link's store interface stays as narrow as the
-  // link needs. Reminders are queued whether or not delivery is configured; an
-  // outbox that fills while the mail service is unset is delivered once it is set.
-  const notifications = new PrismaClient({
-    adapter: new PrismaPg({ connectionString: environment.DATABASE_URL }),
-  });
   setInterval(() => {
     void queueSlotReminders(notifications, new Date()).catch((error) => {
       console.error("darkview realtime: slot reminders", error);
@@ -436,8 +445,9 @@ if (process.env.NODE_ENV !== "test") {
 
   // ADR-022 sections 8 and 9. The sandbox is never charged in production (ADR-022
   // section 11), so there the sweep still expires minutes and ends subscriptions
-  // but opens no charge, until a real provider's charger exists.
-  const charger = environment.NODE_ENV === "production" ? null : createSandboxCharger();
+  // but opens no charge, until a real provider's charger exists. A demo deployment
+  // (ADR-035) takes no real money and charges the sandbox.
+  const charger = sandboxMoneyAllowed(environment) ? createSandboxCharger() : null;
   setInterval(() => {
     void sweepSubscriptions(notifications, { charger, now: new Date() })
       .then(({ unsubmitted }) => {

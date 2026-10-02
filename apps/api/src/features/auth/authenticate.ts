@@ -97,11 +97,12 @@ export async function register(request: RegisterRequest): Promise<{ ok: true } |
     return refuse(422, "VALIDATION_FAILED", "displayName must be at least two characters.");
   }
 
+  // Either delivery path is enough: Resend (ADR-035) or the signed webhook.
   const environment = getServerEnvironment();
-  if (
-    !environment.EMAIL_VERIFICATION_WEBHOOK_URL ||
-    !environment.EMAIL_VERIFICATION_WEBHOOK_SECRET
-  ) {
+  const resend = environment.RESEND_API_KEY && environment.EMAIL_FROM;
+  const webhook =
+    environment.EMAIL_VERIFICATION_WEBHOOK_URL && environment.EMAIL_VERIFICATION_WEBHOOK_SECRET;
+  if (!resend && !webhook) {
     return refuse(503, "INTERNAL", "Email verification delivery is not configured.");
   }
 

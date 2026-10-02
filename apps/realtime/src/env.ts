@@ -2,6 +2,12 @@ import { z } from "zod";
 
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  /**
+   * ADR-035. `demo` lets the sandbox charger run although NODE_ENV is production,
+   * and refuses to start while any observatory is in REAL mode. The API reads the
+   * same variable. Turned off for the real launch.
+   */
+  DARKVIEW_DEPLOYMENT: z.enum(["production", "demo"]).default("production"),
   DATABASE_URL: z.url().startsWith("postgresql://"),
   REALTIME_PORT: z.coerce.number().int().positive().default(4001),
   /**
