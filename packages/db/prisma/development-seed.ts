@@ -162,7 +162,7 @@ export const DEMO_MISSIONS = [
 
 export const DEMO_CAPTURES = [
   {
-    id: "CAP-DEMO-0001",
+    id: "00000000-0000-4000-8000-000000000301",
     imagingProfile: "PLANETARY",
     opticalConfig: "F20_BARLOW",
     exposureMilliseconds: 20,
@@ -180,7 +180,7 @@ export const DEMO_CAPTURES = [
     isDemo: true,
   },
   {
-    id: "CAP-DEMO-0002",
+    id: "00000000-0000-4000-8000-000000000302",
     imagingProfile: "PLANETARY_NEBULA",
     opticalConfig: "F6_3_REDUCER",
     exposureMilliseconds: 4000,
@@ -198,7 +198,7 @@ export const DEMO_CAPTURES = [
     isDemo: true,
   },
   {
-    id: "CAP-DEMO-0003",
+    id: "00000000-0000-4000-8000-000000000303",
     imagingProfile: "BRIGHT_NEBULA",
     opticalConfig: "F6_3_REDUCER",
     exposureMilliseconds: 3000,
@@ -216,7 +216,7 @@ export const DEMO_CAPTURES = [
     isDemo: true,
   },
   {
-    id: "CAP-DEMO-LIVE-0001",
+    id: "00000000-0000-4000-8000-000000000304",
     imagingProfile: "PLANETARY",
     opticalConfig: "F20_BARLOW",
     exposureMilliseconds: 20,
