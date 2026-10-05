@@ -128,6 +128,30 @@ class VerifyEmailRequest(BaseModel):
     token: str = Field(..., max_length=128, min_length=16, pattern='^[A-Za-z0-9_-]+$')
 
 
+class PasswordResetRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    email: EmailStr = Field(..., max_length=254)
+    locale: Locale
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    token: str = Field(..., max_length=128, min_length=16, pattern='^[A-Za-z0-9_-]+$')
+    password: str = Field(..., max_length=128, min_length=12)
+
+
+class ChangePasswordRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    current_password: str = Field(..., alias='currentPassword', max_length=128, min_length=1)
+    password: str = Field(..., max_length=128, min_length=12)
+
+
 class TargetType(StrEnum):
     """
     Phase 1 catalogue classes only. Every class in this enum is one the

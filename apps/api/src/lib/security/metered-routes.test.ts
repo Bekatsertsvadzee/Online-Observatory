@@ -63,11 +63,15 @@ const UNMETERED_BY_DESIGN = [
   // be a regression dressed as hardening, and the moment an operator most needs
   // it is the moment they have been hammering the console.
   "admin/network/nodes/[nodeId]/suspend/route.ts",
-  // Registration and sign-in are metered, but not by meterRequest: they have no
+  // A reset token is 256 random bits and single-use, as a verification token is
+  // (below), and is exempt for the same reason (ADR-040).
+  "auth/password-reset/confirm/route.ts",
+  // Registration, sign-in and asking for a reset are metered, but not by meterRequest: they have no
   // account to key on, so `features/auth/authenticate.ts` meters them with
   // consumeLimit on the address and the email together, plus the address alone
   // for registration (ADR-016 §5). A meter keyed on an account would meter
   // nothing here.
+  "auth/password-reset/route.ts",
   "auth/register/route.ts",
   "auth/sign-in/route.ts",
   // Signing out ends a session, which is the stopping direction. A limiter able
@@ -77,6 +81,10 @@ const UNMETERED_BY_DESIGN = [
   // guessing one less likely than it already is, and refusing the one real
   // attempt would strand a customer who clicked their own link twice.
   "auth/verify-email/route.ts",
+  // Changing a password is metered, but by `features/auth/password.ts` under the
+  // stricter AUTHENTICATION_POLICY on the account, because a wrong current password
+  // is a guess at it (ADR-040). meterRequest's budget would allow far more guesses.
+  "me/password/route.ts",
 ];
 
 describe("every mutating route is metered", () => {

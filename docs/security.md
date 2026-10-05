@@ -64,8 +64,8 @@ disagree, `CLAUDE.md`'s order of precedence decides.
    approval and token issuance are operator acts; nothing self-approves.
 
 8. **Email delivery is a server-to-server webhook** out of the platform. Requests are
-   signed with `EMAIL_VERIFICATION_WEBHOOK_SECRET`; the verification bearer token is
-   never returned by the registration response.
+   signed with `EMAIL_VERIFICATION_WEBHOOK_SECRET`; neither the verification token nor
+   the password reset token is ever returned in a response.
 
 9. **Payment settlement is a server-to-server webhook** into the platform.
    `POST /payments/webhook` has no session. What authenticates the caller is the
@@ -82,7 +82,13 @@ Passwords are normalized only at the email boundary; passwords themselves are ne
 
 Email addresses are stored lowercase and unique. New accounts receive a cryptographically random, 30-minute, single-use email verification token. Only the SHA-256 token hash is stored. Authentication is refused until `emailVerifiedAt` is set. Verification consumes the token, revokes older sessions, and creates a fresh session.
 
-The email webhook must be configured before registration is enabled:
+A forgotten password is reset through a link of the same kind (ADR-040): a random,
+30-minute, single-use token in its own table, hash only. Asking for one answers 202
+whatever the address. Confirming sets the password, verifies the address if it was not,
+revokes every session and creates a fresh one. Changing a known password requires the
+current one, revokes every other session and every outstanding reset link.
+
+The email webhook must be configured before registration or password reset is enabled:
 
 - `EMAIL_VERIFICATION_WEBHOOK_URL`
 - `EMAIL_VERIFICATION_WEBHOOK_SECRET` (at least 32 characters)

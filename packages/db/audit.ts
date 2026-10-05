@@ -39,6 +39,9 @@ export type AuditAction =
   | "LOGIN_SUCCEEDED"
   | "LOGIN_FAILED"
   | "LOGGED_OUT"
+  | "PASSWORD_RESET_REQUESTED"
+  | "PASSWORD_RESET"
+  | "PASSWORD_CHANGED"
   // LOYALTY (DV-090 to DV-096): one action per ledger entry kind, and a tier change.
   | "LOYALTY_WELCOME_BONUS"
   | "LOYALTY_REFERRAL_BONUS"

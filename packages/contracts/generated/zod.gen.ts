@@ -86,6 +86,21 @@ export const zVerifyEmailRequest = z.strictObject({
     token: z.string().min(16).max(128).regex(/^[A-Za-z0-9_-]+$/)
 });
 
+export const zPasswordResetRequest = z.strictObject({
+    email: z.email().max(254),
+    locale: zLocale
+});
+
+export const zPasswordResetConfirmRequest = z.strictObject({
+    token: z.string().min(16).max(128).regex(/^[A-Za-z0-9_-]+$/),
+    password: z.string().min(12).max(128)
+});
+
+export const zChangePasswordRequest = z.strictObject({
+    currentPassword: z.string().min(1).max(128),
+    password: z.string().min(12).max(128)
+});
+
 /**
  * Phase 1 catalogue classes only. Every class in this enum is one the
  * NexStar 6SE + ASI585MC combination can present convincingly from a Bortle 8-9
@@ -2117,10 +2132,26 @@ export const zSignInResponse = zUser;
  */
 export const zSignOutResponse = z.void();
 
+export const zRequestPasswordResetBody = zPasswordResetRequest;
+
+export const zConfirmPasswordResetBody = zPasswordResetConfirmRequest;
+
+/**
+ * Password set and signed in. Sets the session cookies.
+ */
+export const zConfirmPasswordResetResponse = zUser;
+
 /**
  * The current user.
  */
 export const zGetCurrentUserResponse = zUser;
+
+export const zChangePasswordBody = zChangePasswordRequest;
+
+/**
+ * Password changed.
+ */
+export const zChangePasswordResponse = z.void();
 
 export const zGetObservatoryStatusPath = z.object({
     observatoryId: z.uuid()
