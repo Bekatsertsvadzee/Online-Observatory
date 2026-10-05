@@ -6,6 +6,7 @@ import type { Currency, PaymentProvider } from "@darkview/contracts";
 import { zCurrency } from "@darkview/contracts/zod";
 import { z } from "zod";
 
+import { sandboxMoneyAllowed } from "@/lib/deployment";
 import { getServerEnvironment } from "@/lib/validation/env";
 
 /**
@@ -135,6 +136,9 @@ export function createSandboxProvider(secret: string): PaymentProviderAdapter {
  * never simulated." Refusing at the door means no later check can be talked
  * around by a well-formed body.
  *
+ * A demo deployment (ADR-035) is not a production environment in that sense: it
+ * takes no real money, and the sandbox is the only provider it has.
+ *
  * BOG_IPAY has no adapter. Its webhook shape, header and signing algorithm are
  * provider configuration that "must be confirmed against the provider's own
  * documentation before implementation" (contract, `paymentWebhookSignature`),
@@ -146,7 +150,7 @@ export function resolvePaymentProvider(provider: PaymentProvider): ProviderResol
 
   switch (provider) {
     case "SANDBOX": {
-      if (environment.NODE_ENV === "production") {
+      if (!sandboxMoneyAllowed(environment)) {
         return {
           ok: false,
           status: 401,

@@ -20,4 +20,17 @@ export async function register() {
 
   // Throws with the names of the missing variables and none of their values.
   getStorageConfiguration();
+
+  // ADR-035. A demo never commands hardware, so it does not come up over a
+  // database with an observatory in REAL mode. Read straight from the process
+  // rather than through the full schema, so this check does not turn every other
+  // variable into a startup requirement; any value but `demo` is production here,
+  // which is the cautious reading. Only a demo touches the database at startup.
+  if (process.env.DARKVIEW_DEPLOYMENT === "demo") {
+    const { refuseRealHardwareInDemo } = await import("@/lib/deployment");
+    const { getDatabase } = await import("@/lib/db/client");
+    await refuseRealHardwareInDemo("demo", () =>
+      getDatabase().observatory.count({ where: { mode: "REAL" } }),
+    );
+  }
 }

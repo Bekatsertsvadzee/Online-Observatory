@@ -11,6 +11,7 @@ import { recordAuditEvent } from "@darkview/db/audit";
 
 import { LIVE_MISSION_STATES } from "@/features/missions/session";
 import { getDatabase } from "@/lib/db/client";
+import { sandboxMoneyAllowed } from "@/lib/deployment";
 import { getServerEnvironment } from "@/lib/validation/env";
 
 /**
@@ -182,7 +183,7 @@ export async function purchaseObserverPack(input: {
   const database = getDatabase();
   const { missionId, userId, now } = input;
 
-  if (getServerEnvironment().NODE_ENV === "production") {
+  if (!sandboxMoneyAllowed(getServerEnvironment())) {
     return {
       ok: false,
       status: 500,

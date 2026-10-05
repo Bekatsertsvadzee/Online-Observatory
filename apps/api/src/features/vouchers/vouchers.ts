@@ -22,6 +22,7 @@ import {
 
 import type { PaymentOutcome } from "@/features/payments/provider";
 import { getDatabase } from "@/lib/db/client";
+import { sandboxMoneyAllowed } from "@/lib/deployment";
 import {
   PROVISIONAL_SLOT_PRICE_MINOR,
   SLOT_DURATION_MINUTES,
@@ -84,7 +85,7 @@ export async function purchaseGiftVoucher(input: {
   const { userId, request, now } = input;
   const environment = getServerEnvironment();
 
-  if (environment.NODE_ENV === "production") {
+  if (!sandboxMoneyAllowed(environment)) {
     return {
       ok: false,
       status: 500,
