@@ -53,11 +53,16 @@ describe("verification email through Resend (ADR-035)", () => {
     environment.EMAIL_FROM = FROM;
     // Configured too, and not used: Resend goes first when it is set.
     environment.EMAIL_VERIFICATION_WEBHOOK_URL = "https://mail.stellar.test/hook";
-    environment.EMAIL_VERIFICATION_WEBHOOK_SECRET = "webhook-secret-that-is-at-least-32-chars";
+    environment.EMAIL_VERIFICATION_WEBHOOK_SECRET =
+      "webhook-secret-that-is-at-least-32-chars";
   });
 
   it("posts the English email to Resend's API", async () => {
-    await sendEmailVerification({ recipient: "a@example.com", verificationUrl: URL_EN, locale: "en" });
+    await sendEmailVerification({
+      recipient: "a@example.com",
+      verificationUrl: URL_EN,
+      locale: "en",
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const request = sent();
@@ -73,12 +78,16 @@ describe("verification email through Resend (ADR-035)", () => {
   });
 
   it("writes the Georgian email in Georgian", async () => {
-    await sendEmailVerification({ recipient: "b@example.com", verificationUrl: URL_KA, locale: "ka" });
+    await sendEmailVerification({
+      recipient: "b@example.com",
+      verificationUrl: URL_KA,
+      locale: "ka",
+    });
 
     const request = sent();
     expect(request.body).toMatchObject({ from: FROM, to: ["b@example.com"] });
     expect(request.body.subject).toContain("სტელარი");
-    expect(request.body.text).toContain("დაადასტურეთ");
+    expect(request.body.text).toContain("დაადასტურე ელფოსტის");
     expect(request.body.text).toContain(URL_KA);
     expect(JSON.stringify(request.body).toLowerCase()).not.toContain("darkview");
   });
@@ -86,7 +95,11 @@ describe("verification email through Resend (ADR-035)", () => {
   it("throws when Resend answers non-OK", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 422 }));
     await expect(
-      sendEmailVerification({ recipient: "a@example.com", verificationUrl: URL_EN, locale: "en" }),
+      sendEmailVerification({
+        recipient: "a@example.com",
+        verificationUrl: URL_EN,
+        locale: "en",
+      }),
     ).rejects.toThrow("Email verification delivery failed");
   });
 });
@@ -94,8 +107,13 @@ describe("verification email through Resend (ADR-035)", () => {
 describe("verification email through the webhook", () => {
   it("falls back to the signed webhook when Resend is not configured", async () => {
     environment.EMAIL_VERIFICATION_WEBHOOK_URL = "https://mail.stellar.test/hook";
-    environment.EMAIL_VERIFICATION_WEBHOOK_SECRET = "webhook-secret-that-is-at-least-32-chars";
-    const message = { recipient: "a@example.com", verificationUrl: URL_EN, locale: "en" as const };
+    environment.EMAIL_VERIFICATION_WEBHOOK_SECRET =
+      "webhook-secret-that-is-at-least-32-chars";
+    const message = {
+      recipient: "a@example.com",
+      verificationUrl: URL_EN,
+      locale: "en" as const,
+    };
 
     await sendEmailVerification(message);
 
@@ -107,7 +125,11 @@ describe("verification email through the webhook", () => {
 
   it("throws when neither path is configured", async () => {
     await expect(
-      sendEmailVerification({ recipient: "a@example.com", verificationUrl: URL_EN, locale: "en" }),
+      sendEmailVerification({
+        recipient: "a@example.com",
+        verificationUrl: URL_EN,
+        locale: "en",
+      }),
     ).rejects.toThrow("not configured");
     expect(fetchMock).not.toHaveBeenCalled();
   });

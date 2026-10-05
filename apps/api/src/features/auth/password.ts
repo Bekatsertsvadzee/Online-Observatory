@@ -43,11 +43,12 @@ const resetLifetimeMs = 30 * 60 * 1000;
 export async function requestPasswordReset(
   request: PasswordResetRequest,
 ): Promise<{ ok: true } | Refusal> {
+  // Either delivery path is enough, as for registration: Resend (ADR-035) or the webhook.
   const environment = getServerEnvironment();
-  if (
-    !environment.EMAIL_VERIFICATION_WEBHOOK_URL ||
-    !environment.EMAIL_VERIFICATION_WEBHOOK_SECRET
-  ) {
+  const resend = environment.RESEND_API_KEY && environment.EMAIL_FROM;
+  const webhook =
+    environment.EMAIL_VERIFICATION_WEBHOOK_URL && environment.EMAIL_VERIFICATION_WEBHOOK_SECRET;
+  if (!resend && !webhook) {
     return refuse(503, "INTERNAL", "Password reset delivery is not configured.");
   }
 

@@ -14,6 +14,11 @@ const { testDatabase } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/db/client", () => ({ getDatabase: () => testDatabase.current }));
+// ADR-035: the mode switch reads the deployment. These run as production; the demo's
+// refusal is demo-deployment.test.ts's.
+vi.mock("@/lib/validation/env", () => ({
+  getServerEnvironment: () => ({ NODE_ENV: "test", DARKVIEW_DEPLOYMENT: "production" }),
+}));
 
 const { setObservatoryMode, setWeatherHold } = await import(
   "@/features/admin/observatory"

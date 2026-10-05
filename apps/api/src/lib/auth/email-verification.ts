@@ -11,28 +11,32 @@ export type EmailVerificationMessage = {
   locale: Locale;
 };
 
-const RESEND_ENDPOINT = "https://api.resend.com/emails";
+export const RESEND_ENDPOINT = "https://api.resend.com/emails";
 
-const escapeHtml = (value: string) =>
-  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+export const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 
 /** The customer-facing copy. The product is Stellar to a customer (ADR-025). */
 export function verificationEmailContent(locale: Locale, verificationUrl: string) {
   const href = escapeHtml(verificationUrl);
   if (locale === "ka") {
     return {
-      subject: "დაადასტურეთ ელფოსტა — სტელარი",
+      subject: "დაადასტურე ელფოსტა — სტელარი",
       text:
         "გამარჯობა,\n\n" +
-        "სტელარის ანგარიშის გასააქტიურებლად დაადასტურეთ ელფოსტის მისამართი:\n\n" +
+        "სტელარის ანგარიშის გასააქტიურებლად დაადასტურე ელფოსტის მისამართი:\n\n" +
         `${verificationUrl}\n\n` +
-        "ბმული 30 წუთი მოქმედებს. თუ ანგარიში თქვენ არ შეგიქმნიათ, ეს წერილი უგულებელყავით.\n\n" +
+        "ბმული 30 წუთი მოქმედებს. თუ ანგარიში შენ არ შეგიქმნია, ეს წერილი უგულებელყავი.\n\n" +
         "სტელარი",
       html:
         "<p>გამარჯობა,</p>" +
-        "<p>სტელარის ანგარიშის გასააქტიურებლად დაადასტურეთ ელფოსტის მისამართი:</p>" +
+        "<p>სტელარის ანგარიშის გასააქტიურებლად დაადასტურე ელფოსტის მისამართი:</p>" +
         `<p><a href="${href}">ელფოსტის დადასტურება</a></p>` +
-        "<p>ბმული 30 წუთი მოქმედებს. თუ ანგარიში თქვენ არ შეგიქმნიათ, ეს წერილი უგულებელყავით.</p>" +
+        "<p>ბმული 30 წუთი მოქმედებს. თუ ანგარიში შენ არ შეგიქმნია, ეს წერილი უგულებელყავი.</p>" +
         "<p>სტელარი</p>",
     };
   }
