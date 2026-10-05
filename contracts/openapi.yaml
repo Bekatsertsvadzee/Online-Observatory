@@ -267,6 +267,74 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /auth/password-reset:
+    post:
+      operationId: requestPasswordReset
+      tags: [identity]
+      summary: Send a link that sets a new password.
+      description: |
+        ADR-040. Answers 202 whether or not the address holds an account, as register
+        does. An account, verified or not, is sent a link to
+        APP_URL/{locale}/reset-password/{token}, which posts the token to
+        /auth/password-reset/confirm. An unknown address is sent nothing. A new link
+        replaces any earlier one.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetRequest"
+      responses:
+        "202":
+          description: Accepted. A link is sent if the address holds an account.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /auth/password-reset/confirm:
+    post:
+      operationId: confirmPasswordReset
+      tags: [identity]
+      summary: Consume a reset token, set the new password and sign in.
+      description: |
+        ADR-040. A token is single-use and expires thirty minutes after it was sent.
+        Setting the password ends every session the user held, verifies the address
+        if it was not (the link proves it), then issues the session cookies described
+        under the userSession security scheme. A token that is
+        unknown, used or expired is 404 NOT_FOUND, so the page can offer a fresh link;
+        422 is kept for a body the contract rejects. Not rate limited: the token is 256
+        random bits.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetConfirmRequest"
+      responses:
+        "200":
+          description: Password set and signed in. Sets the session cookies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
   /me:
     get:
       operationId: getCurrentUser
@@ -281,6 +349,35 @@ paths:
                 $ref: "#/components/schemas/User"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /me/password:
+    post:
+      operationId: changePassword
+      tags: [identity]
+      summary: Change the password of the signed-in user.
+      description: |
+        ADR-040. Requires the current password. A wrong one is 422 VALIDATION_FAILED
+        with `details.fields: ["currentPassword"]`, not 401, which would read as a lost
+        session; it costs the same scrypt work either way. On success every other
+        session the user held ends and this one stays.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "204":
+          description: Password changed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /observatories/{observatoryId}/state:
     get:
@@ -2502,6 +2599,47 @@ components:
           minLength: 16
           maxLength: 128
           pattern: "^[A-Za-z0-9_-]+$"
+
+    PasswordResetRequest:
+      type: object
+      additionalProperties: false
+      required: [email, locale]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        locale:
+          $ref: "#/components/schemas/Locale"
+
+    PasswordResetConfirmRequest:
+      type: object
+      additionalProperties: false
+      required: [token, password]
+      properties:
+        token:
+          type: string
+          minLength: 16
+          maxLength: 128
+          pattern: "^[A-Za-z0-9_-]+$"
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+
+    ChangePasswordRequest:
+      type: object
+      additionalProperties: false
+      required: [currentPassword, password]
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+          maxLength: 128
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
 
     # ---------------------------------------------------------------------------
     # Targets

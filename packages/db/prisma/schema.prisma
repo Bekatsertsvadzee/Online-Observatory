@@ -20,6 +20,9 @@ enum AuthEventType {
   LOGIN_FAILED
   LOGGED_OUT
   RATE_LIMITED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET
+  PASSWORD_CHANGED
 }
 
 enum ObservatoryStatus {
@@ -372,6 +375,7 @@ model User {
   account             Account?
   sessions            Session[]
   verificationTokens  EmailVerificationToken[]
+  passwordResetTokens PasswordResetToken[]
   missions            Mission[]
   bookings            Booking[]
   payments            Payment[]
@@ -422,6 +426,21 @@ model Session {
 }
 
 model EmailVerificationToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  tokenHash  String    @unique
+  userId     String    @db.Uuid
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// ADR-040. Shaped like EmailVerificationToken: only the hash is stored, it is
+/// single-use and it lives thirty minutes.
+model PasswordResetToken {
   id         String    @id @default(uuid()) @db.Uuid
   tokenHash  String    @unique
   userId     String    @db.Uuid

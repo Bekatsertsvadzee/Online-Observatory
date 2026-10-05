@@ -2,11 +2,13 @@ import "server-only";
 
 import type {
   ErrorCode,
+  Locale,
   RegisterRequest,
   SignInRequest,
   User,
   VerifyEmailRequest,
 } from "@darkview/contracts";
+import type { Prisma } from "@darkview/db";
 import { ensureLoyaltyAccount, postLoyaltyEntry, readLoyaltyScheme } from "@darkview/db/loyalty";
 
 import { toContractUser } from "@/features/identity/user";
@@ -31,25 +33,31 @@ import { getServerEnvironment } from "@/lib/validation/env";
  * line and these stay testable against a database without Next's request scope --
  * except for the cookies `createSession` writes, which is the point of calling it.
  */
-export type Refusal = { ok: false; status: number; code: ErrorCode; message: string };
+export type Refusal = {
+  ok: false;
+  status: number;
+  code: ErrorCode;
+  message: string;
+  details?: Record<string, unknown>;
+};
 
-const refuse = (status: number, code: ErrorCode, message: string): Refusal => ({
-  ok: false,
-  status,
-  code,
-  message,
-});
+export const refuse = (
+  status: number,
+  code: ErrorCode,
+  message: string,
+  details?: Record<string, unknown>,
+): Refusal => ({ ok: false, status, code, message, ...(details ? { details } : {}) });
 
-const rateLimited = () => refuse(429, "RATE_LIMITED", "Too many requests. Try again later.");
+export const rateLimited = () => refuse(429, "RATE_LIMITED", "Too many requests. Try again later.");
 
 // Verified against when the address has no account, so an unknown address costs
 // the same scrypt work as a wrong password and the two cannot be told apart by time.
-const dummyPasswordHash =
+export const dummyPasswordHash =
   "scrypt$65536$8$1$BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc$h0__krhRoWlhZbCHOc0Wf_46L_kywkY8G1KOWdN5y1Xv6tVPAhQik6YPo8pqo9zhXGfH-l8diHELfuJ3eL0yxw";
 
 const verificationLifetimeMs = 30 * 60 * 1000;
 
-function normalizedEmail(value: string) {
+export function normalizedEmail(value: string) {
   return value.trim().toLowerCase();
 }
 
@@ -127,7 +135,6 @@ export async function register(request: RegisterRequest): Promise<{ ok: true } |
   const existingUser = await database.user.findUnique({ where: { email } });
   if (existingUser?.emailVerifiedAt) return { ok: true };
 
-  const token = createOpaqueToken();
   const user =
     existingUser ??
     (await database.user.create({
@@ -152,6 +159,23 @@ export async function register(request: RegisterRequest): Promise<{ ok: true } |
     ensureLoyaltyAccount(tx, user.id, { referredByUserId: referrer?.userId ?? null }),
   );
 
+  try {
+    await sendVerificationLink(user, request.locale);
+  } catch {
+    return refuse(503, "INTERNAL", "Email verification delivery failed.");
+  }
+
+  if (!existingUser) await recordAuthEvent("REGISTERED", { userId: user.id, actor });
+  return { ok: true };
+}
+
+/**
+ * A fresh verification link, replacing any earlier one. Throws when delivery fails.
+ * Also sent by a password reset for an address that was never verified (ADR-040).
+ */
+export async function sendVerificationLink(user: { id: string; email: string }, locale: Locale) {
+  const database = getDatabase();
+  const token = createOpaqueToken();
   await database.$transaction([
     database.emailVerificationToken.deleteMany({ where: { userId: user.id } }),
     database.emailVerificationToken.create({
@@ -163,21 +187,34 @@ export async function register(request: RegisterRequest): Promise<{ ok: true } |
     }),
   ]);
 
-  try {
-    await sendEmailVerification({
-      recipient: user.email,
-      locale: request.locale,
-      verificationUrl: new URL(
-        `/${request.locale}/verify-email/${token}`,
-        environment.APP_URL,
-      ).toString(),
+  await sendEmailVerification({
+    recipient: user.email,
+    locale,
+    verificationUrl: new URL(
+      `/${locale}/verify-email/${token}`,
+      getServerEnvironment().APP_URL,
+    ).toString(),
+  });
+}
+
+/**
+ * Sets `emailVerifiedAt`, inside the caller's transaction. Reached by a verification
+ * link and by a password reset link (ADR-040), each of which proves the mailbox.
+ */
+export async function markEmailVerified(tx: Prisma.TransactionClient, userId: string, now: Date) {
+  // DV-090. The welcome bonus on a verified address, not on sign-up, so an
+  // address nobody controls earns nothing. Once per user, however it is reached.
+  const { scheme } = await readLoyaltyScheme(tx);
+  if (scheme.welcomeBonusPoints > 0) {
+    await postLoyaltyEntry(tx, {
+      userId,
+      kind: "WELCOME_BONUS",
+      points: scheme.welcomeBonusPoints,
+      sourceRef: `user:${userId}`,
     });
-  } catch {
-    return refuse(503, "INTERNAL", "Email verification delivery failed.");
   }
 
-  if (!existingUser) await recordAuthEvent("REGISTERED", { userId: user.id, actor });
-  return { ok: true };
+  return tx.user.update({ where: { id: userId }, data: { emailVerifiedAt: now } });
 }
 
 export async function verifyEmail(
@@ -205,23 +242,7 @@ export async function verifyEmail(
     if (consumed.count !== 1) return null;
 
     await tx.session.deleteMany({ where: { userId: verification.userId } });
-
-    // DV-090. The welcome bonus on a verified address, not on sign-up, so an
-    // address nobody controls earns nothing. Once per user, however it is reached.
-    const { scheme } = await readLoyaltyScheme(tx);
-    if (scheme.welcomeBonusPoints > 0) {
-      await postLoyaltyEntry(tx, {
-        userId: verification.userId,
-        kind: "WELCOME_BONUS",
-        points: scheme.welcomeBonusPoints,
-        sourceRef: `user:${verification.userId}`,
-      });
-    }
-
-    return tx.user.update({
-      where: { id: verification.userId },
-      data: { emailVerifiedAt: now },
-    });
+    return markEmailVerified(tx, verification.userId, now);
   });
   if (!user) return invalid;
 

@@ -46,14 +46,17 @@ function routeFilesUnder(directory: string): string[] {
 const SIGNED_SERVER_TO_SERVER = new Set(["payments/webhook/route.ts"]);
 
 /**
- * Routes that issue a session, so there is none yet to require (ADR-016). They
- * are still mutations a cross-site form could send, so each must refuse a foreign
- * Origin itself -- the test below holds them to `crossOriginRefusal`.
+ * Routes that issue a session, so there is none yet to require (ADR-016), and the
+ * reset request, made by somebody who cannot sign in (ADR-040). They are still
+ * mutations a cross-site form could send, so each must refuse a foreign Origin
+ * itself -- the test below holds them to `crossOriginRefusal`.
  */
 const SESSION_ISSUING = new Set([
   "auth/sign-in/route.ts",
   "auth/register/route.ts",
   "auth/verify-email/route.ts",
+  "auth/password-reset/route.ts",
+  "auth/password-reset/confirm/route.ts",
 ]);
 
 describe("every admin route is behind the operator guard", () => {

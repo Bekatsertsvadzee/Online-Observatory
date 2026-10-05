@@ -2,11 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const { requestHeaders, signIn, register, verifyEmail } = vi.hoisted(() => ({
+const {
+  requestHeaders,
+  signIn,
+  register,
+  verifyEmail,
+  requestPasswordReset,
+  confirmPasswordReset,
+} = vi.hoisted(() => ({
   requestHeaders: { origin: "https://darkview.test" as string | null },
   signIn: vi.fn(),
   register: vi.fn(),
   verifyEmail: vi.fn(),
+  requestPasswordReset: vi.fn(),
+  confirmPasswordReset: vi.fn(),
 }));
 
 vi.mock("next/headers", () => ({
@@ -18,9 +27,12 @@ vi.mock("@/lib/validation/env", () => ({
 }));
 vi.mock("@/lib/auth/session", () => ({ getCurrentSession: vi.fn() }));
 vi.mock("@/features/auth/authenticate", () => ({ signIn, register, verifyEmail }));
+vi.mock("@/features/auth/password", () => ({ requestPasswordReset, confirmPasswordReset }));
 
 import { zUser } from "@darkview/contracts/zod";
 
+import { POST as confirmPasswordResetRoute } from "./password-reset/confirm/route";
+import { POST as requestPasswordResetRoute } from "./password-reset/route";
 import { POST as registerRoute } from "./register/route";
 import { POST as signInRoute } from "./sign-in/route";
 import { POST as verifyEmailRoute } from "./verify-email/route";
@@ -49,6 +61,16 @@ const routes = [
     body: { displayName: "Observer", email: user.email, password: "long-enough-pw", locale: "en" },
   },
   { name: "verify-email", route: verifyEmailRoute, body: { token: "a".repeat(43) } },
+  {
+    name: "password-reset",
+    route: requestPasswordResetRoute,
+    body: { email: user.email, locale: "en" },
+  },
+  {
+    name: "password-reset/confirm",
+    route: confirmPasswordResetRoute,
+    body: { token: "a".repeat(43), password: "long-enough-pw" },
+  },
 ];
 
 beforeEach(() => {
@@ -66,6 +88,8 @@ describe.each(routes)("POST /auth/$name", ({ route, body }) => {
     expect(signIn).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
     expect(verifyEmail).not.toHaveBeenCalled();
+    expect(requestPasswordReset).not.toHaveBeenCalled();
+    expect(confirmPasswordReset).not.toHaveBeenCalled();
   });
 
   it("refuses a missing Origin rather than waving it through", async () => {
@@ -126,6 +150,51 @@ describe("POST /auth/register", () => {
     const response = await registerRoute(
       post({ displayName: "O", email: "not-an-email", password, locale: "en" }),
     );
+
+    expect(response.status).toBe(422);
+    expect(await response.text()).not.toContain(password);
+  });
+});
+
+describe("POST /auth/password-reset", () => {
+  it("answers 202 with no body", async () => {
+    requestPasswordReset.mockResolvedValueOnce({ ok: true });
+
+    const response = await requestPasswordResetRoute(post(routes[3].body));
+
+    expect(response.status).toBe(202);
+    expect(await response.text()).toBe("");
+  });
+});
+
+describe("POST /auth/password-reset/confirm", () => {
+  it("returns a User the contract's own schema accepts", async () => {
+    confirmPasswordReset.mockResolvedValueOnce({ ok: true, user });
+
+    const response = await confirmPasswordResetRoute(post(routes[4].body));
+
+    expect(response.status).toBe(200);
+    expect(zUser.parse(await response.json())).toEqual(user);
+  });
+
+  it("passes a used or expired link through as 404", async () => {
+    confirmPasswordReset.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      code: "NOT_FOUND",
+      message: "The reset link is invalid, used or expired.",
+    });
+
+    const response = await confirmPasswordResetRoute(post(routes[4].body));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("never echoes the submitted password in a validation error", async () => {
+    const password = "short-pw";
+
+    const response = await confirmPasswordResetRoute(post({ token: "a".repeat(43), password }));
 
     expect(response.status).toBe(422);
     expect(await response.text()).not.toContain(password);
