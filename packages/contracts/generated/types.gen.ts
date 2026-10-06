@@ -122,6 +122,16 @@ export type PasswordResetConfirmRequest = {
     password: string;
 };
 
+export type UpdateProfileRequest = {
+    displayName?: string;
+    locale?: Locale;
+};
+
+export type ChangeEmailRequest = {
+    email: string;
+    currentPassword: string;
+};
+
 export type ChangePasswordRequest = {
     currentPassword: string;
     password: string;
@@ -3169,6 +3179,90 @@ export type GetCurrentUserResponses = {
 };
 
 export type GetCurrentUserResponse = GetCurrentUserResponses[keyof GetCurrentUserResponses];
+
+export type UpdateProfileData = {
+    body: UpdateProfileRequest;
+    path?: never;
+    query?: never;
+    url: '/me';
+};
+
+export type UpdateProfileErrors = {
+    /**
+     * Malformed request.
+     */
+    400: ApiError;
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+    /**
+     * Rate limited. The body does not say how much budget remains or when it returns.
+     */
+    429: ApiError;
+};
+
+export type UpdateProfileError = UpdateProfileErrors[keyof UpdateProfileErrors];
+
+export type UpdateProfileResponses = {
+    /**
+     * The updated user.
+     */
+    200: User;
+};
+
+export type UpdateProfileResponse = UpdateProfileResponses[keyof UpdateProfileResponses];
+
+export type ChangeEmailData = {
+    body: ChangeEmailRequest;
+    path?: never;
+    query?: never;
+    url: '/me/email';
+};
+
+export type ChangeEmailErrors = {
+    /**
+     * Malformed request.
+     */
+    400: ApiError;
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+    /**
+     * Rate limited. The body does not say how much budget remains or when it returns.
+     */
+    429: ApiError;
+    /**
+     * A dependency this request needs is not configured or not reachable.
+     */
+    503: ApiError;
+};
+
+export type ChangeEmailError = ChangeEmailErrors[keyof ChangeEmailErrors];
+
+export type ChangeEmailResponses = {
+    /**
+     * Accepted. A link is on its way if the address is free.
+     */
+    202: unknown;
+};
 
 export type ChangePasswordData = {
     body: ChangePasswordRequest;

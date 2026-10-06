@@ -198,7 +198,9 @@ paths:
       description: |
         ADR-016. A token is single-use and expires thirty minutes after it was sent.
         Verifying ends every other session the user held, then issues the session
-        cookies described under the userSession security scheme.
+        cookies described under the userSession security scheme. Since ADR-042 it also
+        takes the token from a change of address: following that link moves the account
+        to the new address, which the returned User carries.
       security: []
       requestBody:
         required: true
@@ -349,6 +351,69 @@ paths:
                 $ref: "#/components/schemas/User"
         "401":
           $ref: "#/components/responses/Unauthorized"
+    patch:
+      operationId: updateProfile
+      tags: [identity]
+      summary: Change the signed-in user's name or language.
+      description: |
+        ADR-042. `locale` is the language the platform writes to the customer in, so the
+        next email arrives in it. A body naming neither field is 422.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileRequest"
+      responses:
+        "200":
+          description: The updated user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /me/email:
+    post:
+      operationId: changeEmail
+      tags: [identity]
+      summary: Ask to move the signed-in user to a new email address.
+      description: |
+        ADR-042. Requires the current password; a wrong one is 422 VALIDATION_FAILED
+        with `details.fields: ["currentPassword"]`, as for changePassword. The answer
+        is 202 whether or not the new address holds an account. A free address is sent
+        a link to `/{locale}/verify-email/{token}`, which verifyEmail consumes; the
+        account keeps its current address until then, and that address is told a
+        change was asked for.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeEmailRequest"
+      responses:
+        "202":
+          description: Accepted. A link is on its way if the address is free.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /me/password:
     post:
       operationId: changePassword
@@ -2625,6 +2690,32 @@ components:
         password:
           type: string
           minLength: 12
+          maxLength: 128
+
+    UpdateProfileRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        displayName:
+          type: string
+          minLength: 2
+          maxLength: 80
+        locale:
+          $ref: "#/components/schemas/Locale"
+
+    ChangeEmailRequest:
+      type: object
+      additionalProperties: false
+      required: [email, currentPassword]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        currentPassword:
+          type: string
+          minLength: 1
           maxLength: 128
 
     ChangePasswordRequest:

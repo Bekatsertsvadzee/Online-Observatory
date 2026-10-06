@@ -124,6 +124,9 @@ export async function confirmPasswordReset(
 
     await tx.account.update({ where: { userId: reset.userId }, data: { passwordHash } });
     await tx.session.deleteMany({ where: { userId: reset.userId } });
+    // ADR-042: whoever takes the account back should not find it moving to an address
+    // somebody else chose.
+    await tx.emailChangeToken.deleteMany({ where: { userId: reset.userId } });
 
     const user = await tx.user.findUniqueOrThrow({ where: { id: reset.userId } });
     if (user.emailVerifiedAt) return user;
@@ -165,6 +168,8 @@ export async function changePassword(
     database.session.deleteMany({ where: { userId, id: { not: session.id } } }),
     // A reset link still in a mailbox would undo the change.
     database.passwordResetToken.deleteMany({ where: { userId } }),
+    // And a pending change of address (ADR-042).
+    database.emailChangeToken.deleteMany({ where: { userId } }),
   ]);
 
   await recordAuthEvent("PASSWORD_CHANGED", { userId });

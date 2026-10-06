@@ -96,6 +96,16 @@ export const zPasswordResetConfirmRequest = z.strictObject({
     password: z.string().min(12).max(128)
 });
 
+export const zUpdateProfileRequest = z.strictObject({
+    displayName: z.string().min(2).max(80).optional(),
+    locale: zLocale.optional()
+});
+
+export const zChangeEmailRequest = z.strictObject({
+    email: z.email().max(254),
+    currentPassword: z.string().min(1).max(128)
+});
+
 export const zChangePasswordRequest = z.strictObject({
     currentPassword: z.string().min(1).max(128),
     password: z.string().min(12).max(128)
@@ -2145,6 +2155,15 @@ export const zConfirmPasswordResetResponse = zUser;
  * The current user.
  */
 export const zGetCurrentUserResponse = zUser;
+
+export const zUpdateProfileBody = zUpdateProfileRequest;
+
+/**
+ * The updated user.
+ */
+export const zUpdateProfileResponse = zUser;
+
+export const zChangeEmailBody = zChangeEmailRequest;
 
 export const zChangePasswordBody = zChangePasswordRequest;
 
