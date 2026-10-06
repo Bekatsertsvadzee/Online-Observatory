@@ -1,8 +1,9 @@
 # ADR-042 — Edit the profile, and change the email address
 
 - **Date:** 2026-10-06
-- **Status:** PROPOSED
+- **Status:** APPROVED
 - **Decided by:** project maintainer
+- **Approved:** 2026-10-06, as written
 - **Settles:** issue #172, the clients' platform request
   `docs/platform-requests/account-profile.md`
 - **Amends:** `ADR-016-http-authentication-boundary.md`, which listed email change
