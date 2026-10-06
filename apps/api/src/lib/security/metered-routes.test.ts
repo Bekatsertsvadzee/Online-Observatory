@@ -81,6 +81,9 @@ const UNMETERED_BY_DESIGN = [
   // guessing one less likely than it already is, and refusing the one real
   // attempt would strand a customer who clicked their own link twice.
   "auth/verify-email/route.ts",
+  // Asking for a new address is metered the same way, for the same reason (ADR-042):
+  // it takes the current password.
+  "me/email/route.ts",
   // Changing a password is metered, but by `features/auth/password.ts` under the
   // stricter AUTHENTICATION_POLICY on the account, because a wrong current password
   // is a guess at it (ADR-040). meterRequest's budget would allow far more guesses.

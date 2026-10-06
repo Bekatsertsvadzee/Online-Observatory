@@ -64,8 +64,8 @@ disagree, `CLAUDE.md`'s order of precedence decides.
    approval and token issuance are operator acts; nothing self-approves.
 
 8. **Email delivery is a server-to-server webhook** out of the platform. Requests are
-   signed with `EMAIL_VERIFICATION_WEBHOOK_SECRET`; neither the verification token nor
-   the password reset token is ever returned in a response. The verification and
+   signed with `EMAIL_VERIFICATION_WEBHOOK_SECRET`; no verification, password reset or
+   email change token is ever returned in a response. The verification and
    password reset emails may instead go straight to Resend over HTTPS with
    `RESEND_API_KEY` (ADR-035, ADR-040); each token still travels only in its email.
 
@@ -90,6 +90,12 @@ A forgotten password is reset through a link of the same kind (ADR-040): a rando
 whatever the address. Confirming sets the password, verifies the address if it was not,
 revokes every session and creates a fresh one. Changing a known password requires the
 current one, revokes every other session and every outstanding reset link.
+
+A change of address (ADR-042) requires the current password and moves nothing until a
+link of the same kind, sent to the new address, is followed; the old address is told a
+change was asked for. Asking answers 202 whether or not the new address holds an
+account. Following the link revokes every session, every outstanding reset link, and
+creates a fresh session. A password reset or change cancels a pending change.
 
 One email delivery path must be configured before registration or password reset is
 enabled, either:

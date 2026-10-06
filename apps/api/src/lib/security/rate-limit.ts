@@ -134,6 +134,19 @@ export const CAPTURE_VISIBILITY_POLICY: RateLimitPolicy = {
 };
 
 /**
+ * Name and language changes, per account (ADR-042).
+ *
+ * A change writes one row and one audit event and holds nothing scarce, so this keeps a
+ * stuck client from filling the audit log. Twenty an hour is far past a person editing
+ * their profile.
+ */
+export const PROFILE_POLICY: RateLimitPolicy = {
+  limit: 20,
+  windowMs: 60 * 60 * 1000,
+  blockMs: 60 * 60 * 1000,
+};
+
+/**
  * Accounts created from one address.
  *
  * `AUTHENTICATION_POLICY` meters registration by address *and* email, so a fresh

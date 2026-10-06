@@ -23,6 +23,9 @@ enum AuthEventType {
   PASSWORD_RESET_REQUESTED
   PASSWORD_RESET
   PASSWORD_CHANGED
+  PROFILE_UPDATED
+  EMAIL_CHANGE_REQUESTED
+  EMAIL_CHANGED
 }
 
 enum ObservatoryStatus {
@@ -376,6 +379,7 @@ model User {
   sessions            Session[]
   verificationTokens  EmailVerificationToken[]
   passwordResetTokens PasswordResetToken[]
+  emailChangeTokens   EmailChangeToken[]
   missions            Mission[]
   bookings            Booking[]
   payments            Payment[]
@@ -444,6 +448,23 @@ model PasswordResetToken {
   id         String    @id @default(uuid()) @db.Uuid
   tokenHash  String    @unique
   userId     String    @db.Uuid
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// ADR-042. A PasswordResetToken that also carries the address the account moves to
+/// when the link is followed. Its own table, so a registration link can never move an
+/// address and a change link can never verify a registration.
+model EmailChangeToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  tokenHash  String    @unique
+  userId     String    @db.Uuid
+  newEmail   String
   expiresAt  DateTime
   consumedAt DateTime?
   createdAt  DateTime  @default(now())

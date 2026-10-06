@@ -144,6 +144,22 @@ class PasswordResetConfirmRequest(BaseModel):
     password: str = Field(..., max_length=128, min_length=12)
 
 
+class UpdateProfileRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    display_name: str | None = Field(None, alias='displayName', max_length=80, min_length=2)
+    locale: Locale | None = None
+
+
+class ChangeEmailRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    email: EmailStr = Field(..., max_length=254)
+    current_password: str = Field(..., alias='currentPassword', max_length=128, min_length=1)
+
+
 class ChangePasswordRequest(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
