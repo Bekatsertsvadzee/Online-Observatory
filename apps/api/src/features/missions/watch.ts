@@ -52,10 +52,15 @@ export async function getMissionWatchView(input: {
       userId: true,
       state: true,
       joinPolicy: true,
-      user: { select: { name: true } },
+      user: { select: { name: true, deletedAt: true } },
       target: true,
       telescope: {
-        select: { manufacturer: true, model: true, apertureMm: true, focalLengthMm: true },
+        select: {
+          manufacturer: true,
+          model: true,
+          apertureMm: true,
+          focalLengthMm: true,
+        },
       },
       observatory: {
         select: {
@@ -76,7 +81,8 @@ export async function getMissionWatchView(input: {
       },
     },
   });
-  if (!row) return null;
+  // ADR-044: a deleted account's observations are no longer shared with anyone.
+  if (!row || row.user.deletedAt) return null;
 
   const seat = row.participants.at(0) ?? null;
   if (

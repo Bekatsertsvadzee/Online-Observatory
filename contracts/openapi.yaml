@@ -381,6 +381,42 @@ paths:
           $ref: "#/components/responses/UnprocessableEntity"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+    delete:
+      operationId: deleteAccount
+      tags: [identity]
+      summary: Delete the signed-in user's account.
+      description: |
+        ADR-044. Requires the current password; a wrong one is 422 VALIDATION_FAILED
+        with `details.fields: ["currentPassword"]`, as for changePassword. On success
+        it answers 204, ends every session and clears the cookies, as signOut does.
+        The captures and the Collection are deleted at once, and every link to them
+        stops working. Bookings and payments are kept with the name and email
+        replaced.
+
+        It answers 409 CONFLICT and deletes nothing while the account still has
+        something to settle. `details.blockers` names each one, as an
+        `AccountDeletionBlocker`, so the client can say what to do first.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteAccountRequest"
+      responses:
+        "204":
+          description: The account is deleted and the session has ended.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /me/email:
     post:
       operationId: changeEmail
@@ -2731,6 +2767,40 @@ components:
           type: string
           minLength: 12
           maxLength: 128
+
+    DeleteAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [currentPassword]
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+          maxLength: 128
+
+    AccountDeletionBlocker:
+      type: string
+      description: |
+        ADR-044. What stops an account being deleted, in `details.blockers` of
+        deleteAccount's 409. LIVE_MISSION: a mission of theirs is not yet over, a hold
+        included. UPCOMING_BOOKING: a paid slot is still ahead. HELD_BOOKING: a slot is
+        held awaiting payment; cancel it first. OPEN_ENTITLEMENT: a refund or a free
+        slot is owed and not yet taken. OBSERVER_SEAT: a seat on a mission not yet
+        over. SUBSCRIPTION: a subscription is running. GIFT_VOUCHER: a voucher they
+        bought is still unused or unpaid. NETWORK_NODE: they own a telescope on the
+        network. OPERATOR: an operator account is closed by another operator.
+      enum:
+        [
+          LIVE_MISSION,
+          UPCOMING_BOOKING,
+          HELD_BOOKING,
+          OPEN_ENTITLEMENT,
+          OBSERVER_SEAT,
+          SUBSCRIPTION,
+          GIFT_VOUCHER,
+          NETWORK_NODE,
+          OPERATOR,
+        ]
 
     # ---------------------------------------------------------------------------
     # Targets

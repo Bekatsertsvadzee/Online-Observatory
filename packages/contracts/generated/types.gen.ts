@@ -137,6 +137,46 @@ export type ChangePasswordRequest = {
     password: string;
 };
 
+export type DeleteAccountRequest = {
+    currentPassword: string;
+};
+
+/**
+ * ADR-044. What stops an account being deleted, in `details.blockers` of
+ * deleteAccount's 409. LIVE_MISSION: a mission of theirs is not yet over, a hold
+ * included. UPCOMING_BOOKING: a paid slot is still ahead. HELD_BOOKING: a slot is
+ * held awaiting payment; cancel it first. OPEN_ENTITLEMENT: a refund or a free
+ * slot is owed and not yet taken. OBSERVER_SEAT: a seat on a mission not yet
+ * over. SUBSCRIPTION: a subscription is running. GIFT_VOUCHER: a voucher they
+ * bought is still unused or unpaid. NETWORK_NODE: they own a telescope on the
+ * network. OPERATOR: an operator account is closed by another operator.
+ *
+ */
+export const AccountDeletionBlocker = {
+    LIVE_MISSION: 'LIVE_MISSION',
+    UPCOMING_BOOKING: 'UPCOMING_BOOKING',
+    HELD_BOOKING: 'HELD_BOOKING',
+    OPEN_ENTITLEMENT: 'OPEN_ENTITLEMENT',
+    OBSERVER_SEAT: 'OBSERVER_SEAT',
+    SUBSCRIPTION: 'SUBSCRIPTION',
+    GIFT_VOUCHER: 'GIFT_VOUCHER',
+    NETWORK_NODE: 'NETWORK_NODE',
+    OPERATOR: 'OPERATOR'
+} as const;
+
+/**
+ * ADR-044. What stops an account being deleted, in `details.blockers` of
+ * deleteAccount's 409. LIVE_MISSION: a mission of theirs is not yet over, a hold
+ * included. UPCOMING_BOOKING: a paid slot is still ahead. HELD_BOOKING: a slot is
+ * held awaiting payment; cancel it first. OPEN_ENTITLEMENT: a refund or a free
+ * slot is owed and not yet taken. OBSERVER_SEAT: a seat on a mission not yet
+ * over. SUBSCRIPTION: a subscription is running. GIFT_VOUCHER: a voucher they
+ * bought is still unused or unpaid. NETWORK_NODE: they own a telescope on the
+ * network. OPERATOR: an operator account is closed by another operator.
+ *
+ */
+export type AccountDeletionBlocker = typeof AccountDeletionBlocker[keyof typeof AccountDeletionBlocker];
+
 /**
  * Phase 1 catalogue classes only. Every class in this enum is one the
  * NexStar 6SE + ASI585MC combination can present convincingly from a Bortle 8-9
@@ -3162,6 +3202,51 @@ export type ConfirmPasswordResetResponses = {
 };
 
 export type ConfirmPasswordResetResponse = ConfirmPasswordResetResponses[keyof ConfirmPasswordResetResponses];
+
+export type DeleteAccountData = {
+    body: DeleteAccountRequest;
+    path?: never;
+    query?: never;
+    url: '/me';
+};
+
+export type DeleteAccountErrors = {
+    /**
+     * Malformed request.
+     */
+    400: ApiError;
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+    /**
+     * Rate limited. The body does not say how much budget remains or when it returns.
+     */
+    429: ApiError;
+};
+
+export type DeleteAccountError = DeleteAccountErrors[keyof DeleteAccountErrors];
+
+export type DeleteAccountResponses = {
+    /**
+     * The account is deleted and the session has ended.
+     */
+    204: void;
+};
+
+export type DeleteAccountResponse = DeleteAccountResponses[keyof DeleteAccountResponses];
 
 export type GetCurrentUserData = {
     body?: never;

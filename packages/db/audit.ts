@@ -45,6 +45,7 @@ export type AuditAction =
   | "PROFILE_UPDATED"
   | "EMAIL_CHANGE_REQUESTED"
   | "EMAIL_CHANGED"
+  | "ACCOUNT_DELETED"
   // LOYALTY (DV-090 to DV-096): one action per ledger entry kind, and a tier change.
   | "LOYALTY_WELCOME_BONUS"
   | "LOYALTY_REFERRAL_BONUS"

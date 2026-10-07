@@ -1,8 +1,10 @@
-import { zUpdateProfileBody } from "@darkview/contracts/zod";
+import { zDeleteAccountBody, zUpdateProfileBody } from "@darkview/contracts/zod";
 
+import { deleteAccount } from "@/features/auth/deletion";
 import { updateProfile } from "@/features/auth/profile";
 import { toContractUser } from "@/features/identity/user";
 import { requireApiMutation, requireApiSession } from "@/lib/auth/api-guard";
+import { deleteCurrentSession } from "@/lib/auth/session";
 import { apiError } from "@/lib/http/api-error";
 import { meterRequest, PROFILE_POLICY } from "@/lib/security/rate-limit";
 
@@ -48,7 +50,11 @@ export async function PATCH(request: Request) {
   }
   // The contract's minProperties, which the generated validator does not carry.
   if (body.data.displayName === undefined && body.data.locale === undefined) {
-    return apiError(422, "VALIDATION_FAILED", "Name at least one of displayName and locale.");
+    return apiError(
+      422,
+      "VALIDATION_FAILED",
+      "Name at least one of displayName and locale.",
+    );
   }
 
   const result = await updateProfile(guard.session, body.data);
@@ -57,4 +63,37 @@ export async function PATCH(request: Request) {
   }
 
   return Response.json(result.user);
+}
+
+/**
+ * DELETE /me -- ADR-044. 204 and the cookies cleared, as signing out does; 409 with
+ * `details.blockers` while something is unsettled. Validation issues are reported by
+ * path only: the current password is in this body.
+ */
+export async function DELETE(request: Request) {
+  const guard = await requireApiMutation();
+  if (!guard.ok) return guard.response;
+
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return apiError(400, "BAD_REQUEST", "Body must be JSON.");
+  }
+
+  const body = zDeleteAccountBody.safeParse(payload);
+  if (!body.success) {
+    return apiError(422, "VALIDATION_FAILED", "DeleteAccountRequest is malformed.", {
+      fields: [...new Set(body.error.issues.map((issue) => issue.path.join(".")))],
+    });
+  }
+
+  const result = await deleteAccount(guard.session, body.data);
+  if (!result.ok) {
+    return apiError(result.status, result.code, result.message, result.details);
+  }
+
+  // Every session row is already gone; this clears the cookies that named one.
+  await deleteCurrentSession();
+  return new Response(null, { status: 204 });
 }
