@@ -1,5 +1,7 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+
 import type {
   ErrorCode,
   ObserverPack,
@@ -10,6 +12,7 @@ import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
 
 import { LIVE_MISSION_STATES } from "@/features/missions/session";
+import { sandboxCheckoutUrl } from "@/features/payments/sandbox-checkout";
 import { getDatabase } from "@/lib/db/client";
 import { sandboxMoneyAllowed } from "@/lib/deployment";
 import { getServerEnvironment } from "@/lib/validation/env";
@@ -282,11 +285,16 @@ export async function purchaseObserverPack(input: {
       } satisfies ObserverPackFailure;
     }
 
+    // #170. The sandbox is its own provider, so the cloud supplies the redirect, as
+    // `createBooking` does: a checkout page it serves, keyed by this payment's id.
+    const paymentId = randomUUID();
     const payment = await tx.payment.create({
       data: {
+        id: paymentId,
         userId,
         purpose: "OBSERVER_PACK",
         provider: PHASE_1_PROVIDER,
+        redirectUrl: sandboxCheckoutUrl(paymentId),
         status: "PENDING",
         amountMinor: PROVISIONAL_OBSERVER_PACK_PRICE_MINOR,
         currency: "GEL",

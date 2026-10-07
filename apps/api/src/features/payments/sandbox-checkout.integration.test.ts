@@ -23,6 +23,9 @@ const { PAYMENT_HOLD_MINUTES, reserveSlot } = await import("@/features/booking/r
 const { confirmSandboxCheckout, readSandboxCheckout } = await import(
   "@/features/payments/sandbox-checkout"
 );
+const { OBSERVER_PACK_HOLD_MINUTES, purchaseObserverPack } = await import(
+  "@/features/missions/observer-pack"
+);
 const { nightWindow } = await import("@/lib/slots/darkness");
 const { generateSlots, SLOT_DURATION_MINUTES } = await import("@/lib/slots/generate");
 
@@ -363,5 +366,189 @@ describe("the sandbox checkout (#149)", () => {
         now: NOW,
       }),
     ).toMatchObject({ ok: true, returnUrl: `https://darkview.test/ka/app/bookings/${booking.id}` });
+  });
+});
+
+/**
+ * #170: an Observer Pack is paid at the same checkout, settles through the same
+ * `settlePayment`, and returns its buyer to the watch page of the pack's mission.
+ */
+describe("the sandbox checkout for an Observer Pack (#170)", () => {
+  const AFTER_PACK_HOLD = new Date(NOW.getTime() + (OBSERVER_PACK_HOLD_MINUTES + 1) * 60_000);
+
+  beforeEach(() => {
+    environment.NODE_ENV = "test";
+    environment.PAYMENT_SANDBOX_WEBHOOK_SECRET = "s".repeat(32);
+  });
+
+  /** A live session somebody else controls, open to observers. */
+  async function openSession() {
+    const owner = await createUser();
+    const mission = await database.mission.create({
+      data: {
+        userId: owner,
+        observatoryId,
+        telescopeId,
+        targetId,
+        state: "OBSERVING",
+        joinPolicy: "OPEN",
+      },
+    });
+    return mission.id;
+  }
+
+  async function buySeat(missionId: string, buyer: string = userId, now: Date = NOW) {
+    const result = await purchaseObserverPack({ missionId, userId: buyer, now });
+    if (!result.ok) throw new Error(`fixture purchase failed: ${result.message}`);
+    return result.value;
+  }
+
+  it("is where a seat's payment intent redirects", async () => {
+    const { paymentIntent } = await buySeat(await openSession());
+
+    expect(paymentIntent.redirectUrl).toBe(
+      `https://darkview.test/api/payments/${paymentIntent.paymentId}/sandbox-checkout`,
+    );
+    expect(
+      await readSandboxCheckout({ userId, paymentId: paymentIntent.paymentId, now: NOW }),
+    ).toMatchObject({ ok: true, purpose: "OBSERVER_PACK", payable: true });
+  });
+
+  it("pays for the seat and returns the buyer to the watch page", async () => {
+    const missionId = await openSession();
+    const { observerPack, paymentIntent } = await buySeat(missionId);
+
+    expect(
+      await confirmSandboxCheckout({
+        userId,
+        paymentId: paymentIntent.paymentId,
+        result: "CAPTURED",
+        now: NOW,
+      }),
+    ).toEqual({
+      ok: true,
+      applied: true,
+      returnUrl: `https://darkview.test/en/app/missions/${missionId}/watch`,
+    });
+
+    const pack = await database.observerPack.findUniqueOrThrow({ where: { id: observerPack.id } });
+    expect(pack).toMatchObject({ status: "PAID", holdExpiresAt: null });
+    const payment = await database.payment.findUniqueOrThrow({ where: { id: paymentIntent.paymentId } });
+    expect(payment.status).toBe("CAPTURED");
+
+    // A second submit of the same answer is a no-op.
+    expect(
+      await confirmSandboxCheckout({
+        userId,
+        paymentId: paymentIntent.paymentId,
+        result: "CAPTURED",
+        now: NOW,
+      }),
+    ).toMatchObject({ ok: true, applied: false });
+  });
+
+  it("returns a Georgian buyer to the Georgian watch page", async () => {
+    const missionId = await openSession();
+    const georgian = await createUser("ka");
+    const { paymentIntent } = await buySeat(missionId, georgian);
+
+    expect(
+      await confirmSandboxCheckout({
+        userId: georgian,
+        paymentId: paymentIntent.paymentId,
+        result: "CAPTURED",
+        now: NOW,
+      }),
+    ).toMatchObject({ ok: true, returnUrl: `https://darkview.test/ka/app/missions/${missionId}/watch` });
+  });
+
+  it("puts the seat back on sale when the buyer declines", async () => {
+    const { observerPack, paymentIntent } = await buySeat(await openSession());
+
+    expect(
+      await confirmSandboxCheckout({ userId, paymentId: paymentIntent.paymentId, result: "FAILED", now: NOW }),
+    ).toMatchObject({ ok: true, applied: true });
+
+    const pack = await database.observerPack.findUniqueOrThrow({ where: { id: observerPack.id } });
+    expect(pack.status).toBe("CANCELLED");
+  });
+
+  it("refuses a seat whose hold has lapsed, and takes no money", async () => {
+    const { observerPack, paymentIntent } = await buySeat(await openSession());
+
+    expect(
+      await confirmSandboxCheckout({
+        userId,
+        paymentId: paymentIntent.paymentId,
+        result: "CAPTURED",
+        now: AFTER_PACK_HOLD,
+      }),
+    ).toMatchObject({ ok: false, status: 409, code: "CONFLICT" });
+    expect(
+      (await database.payment.findUniqueOrThrow({ where: { id: paymentIntent.paymentId } })).status,
+    ).toBe("PENDING");
+    expect(
+      (await database.observerPack.findUniqueOrThrow({ where: { id: observerPack.id } })).status,
+    ).toBe("PENDING_PAYMENT");
+    expect(
+      await readSandboxCheckout({ userId, paymentId: paymentIntent.paymentId, now: AFTER_PACK_HOLD }),
+    ).toMatchObject({ ok: true, payable: false });
+  });
+
+  it("refuses a seat on a session that has ended, and takes no money", async () => {
+    const missionId = await openSession();
+    const { paymentIntent } = await buySeat(missionId);
+    await database.mission.update({ where: { id: missionId }, data: { state: "COMPLETE" } });
+
+    expect(
+      await readSandboxCheckout({ userId, paymentId: paymentIntent.paymentId, now: NOW }),
+    ).toMatchObject({ ok: true, payable: false });
+    expect(
+      await confirmSandboxCheckout({
+        userId,
+        paymentId: paymentIntent.paymentId,
+        result: "CAPTURED",
+        now: NOW,
+      }),
+    ).toMatchObject({ ok: false, status: 409 });
+    expect(
+      (await database.payment.findUniqueOrThrow({ where: { id: paymentIntent.paymentId } })).status,
+    ).toBe("PENDING");
+  });
+
+  it("will not take an old checkout's money once the seat is bought again on a new one", async () => {
+    const missionId = await openSession();
+    const first = await buySeat(missionId);
+    const second = await buySeat(missionId, userId, AFTER_PACK_HOLD);
+    expect(second.paymentIntent.paymentId).not.toBe(first.paymentIntent.paymentId);
+
+    expect(
+      await confirmSandboxCheckout({
+        userId,
+        paymentId: first.paymentIntent.paymentId,
+        result: "CAPTURED",
+        now: AFTER_PACK_HOLD,
+      }),
+    ).toMatchObject({ ok: false, status: 409 });
+    expect(
+      (await database.payment.findUniqueOrThrow({ where: { id: first.paymentIntent.paymentId } })).status,
+    ).toBe("PENDING");
+  });
+
+  it("refuses somebody else, and says nothing about the payment", async () => {
+    const { paymentIntent } = await buySeat(await openSession());
+    const stranger = await createUser();
+
+    expect(
+      await readSandboxCheckout({ userId: stranger, paymentId: paymentIntent.paymentId, now: NOW }),
+    ).toMatchObject({ ok: false, status: 404 });
+    expect(
+      await confirmSandboxCheckout({
+        userId: stranger,
+        paymentId: paymentIntent.paymentId,
+        result: "CAPTURED",
+        now: NOW,
+      }),
+    ).toMatchObject({ ok: false, status: 404 });
   });
 });

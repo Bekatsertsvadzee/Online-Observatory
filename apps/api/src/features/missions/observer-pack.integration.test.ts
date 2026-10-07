@@ -13,7 +13,11 @@ const { testDatabase } = vi.hoisted(() => ({
 
 vi.mock("@/lib/db/client", () => ({ getDatabase: () => testDatabase.current }));
 vi.mock("@/lib/validation/env", () => ({
-  getServerEnvironment: () => ({ NODE_ENV: process.env.NODE_ENV ?? "test" }),
+  // APP_URL: a seat's sandbox payment carries a checkout redirect built from it (#170).
+  getServerEnvironment: () => ({
+    NODE_ENV: process.env.NODE_ENV ?? "test",
+    APP_URL: "https://darkview.test",
+  }),
 }));
 
 const {
