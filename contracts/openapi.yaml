@@ -1565,10 +1565,12 @@ paths:
         caller's own observer seat.
 
         Readable by the session owner, by a caller holding an attached observer seat,
-        and -- only while the owner has opened the session to observers
-        (`Mission.observable`) and the mission is live -- by any signed-in user, who
-        needs it to decide whether to buy a seat. Everybody else gets 404, exactly as
-        for a mission that does not exist.
+        by a caller holding a PAID Observer Pack on the mission, in any mission state
+        (ADR-045: what they paid, and what a close gave back, stays readable after the
+        session ends or closes), and -- only while the owner has opened the session to
+        observers (`Mission.observable`) and the mission is live -- by any signed-in
+        user, who needs it to decide whether to buy a seat. Everybody else gets 404,
+        exactly as for a mission that does not exist.
 
         It grants nothing. ADR-007 stands: an observer receives mission state and the
         live view and nothing else, so this carries no captures and no way to save
@@ -4564,8 +4566,17 @@ components:
             refunded.
 
             Set only once the money has actually been returned. A refund the payment
-            provider cannot yet issue is recorded as owed on the platform and leaves
-            this null, so it is never shown as paid.
+            provider cannot yet issue is recorded in `refundOwedMinor` instead and
+            leaves this null, so it is never shown as paid.
+        refundOwedMinor:
+          type: [integer, "null"]
+          minimum: 0
+          description: |
+            ADR-045. A close refund decided but not yet issued, in minor units of
+            `currency`, because the payment's provider has no integrated refund API.
+            Null otherwise. Never set together with `refundedMinor`: a refund is owed
+            or issued, never both. A client says it "will be refunded", never that it
+            was.
         createdAt:
           type: string
           format: date-time
@@ -4604,6 +4615,7 @@ components:
         - ownerDisplayName
         - observerCount
         - myObserverSeat
+        - myObserverPack
       properties:
         mission:
           $ref: "#/components/schemas/Mission"
@@ -4625,6 +4637,14 @@ components:
             - $ref: "#/components/schemas/MissionObserver"
             - type: "null"
           description: The caller's attached observer seat, or null if they hold none.
+        myObserverPack:
+          oneOf:
+            - $ref: "#/components/schemas/ObserverPack"
+            - type: "null"
+          description: |
+            ADR-045. The caller's own Observer Pack on this mission, in whatever status
+            it is, or null if they never bought one: the price, the hold, and what a
+            close refunded or owes. Null for the owner, who cannot buy one.
 
     MissionEventSource:
       type: string

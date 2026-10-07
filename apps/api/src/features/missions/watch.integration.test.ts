@@ -53,6 +53,42 @@ async function seat(userId: string, status: "JOINED" | "LEFT" = "JOINED") {
   });
 }
 
+/** A pack for this mission, paid or still held, with the payment it needs. */
+async function pack(
+  userId: string,
+  options: {
+    status: "PAID" | "PENDING_PAYMENT";
+    refundedMinor?: number;
+    refundOwedMinor?: number;
+  },
+) {
+  const paid = options.status === "PAID";
+  const payment = await database.payment.create({
+    data: {
+      userId,
+      purpose: "OBSERVER_PACK",
+      provider: "SANDBOX",
+      status: paid ? "CAPTURED" : "PENDING",
+      amountMinor: 1000,
+      capturedAt: paid ? NOW : null,
+    },
+  });
+  return database.observerPack.create({
+    data: {
+      missionId,
+      userId,
+      paymentId: payment.id,
+      status: options.status,
+      priceMinor: 1000,
+      paidAt: paid ? NOW : null,
+      holdExpiresAt: paid ? null : new Date(NOW.getTime() + 5 * 60_000),
+      refundedMinor: options.refundedMinor ?? null,
+      refundedAt: options.refundedMinor === undefined ? null : NOW,
+      refundOwedMinor: options.refundOwedMinor ?? null,
+    },
+  });
+}
+
 async function setMission(data: { joinPolicy?: "OPEN" | "DISABLED"; state?: "OBSERVING" | "COMPLETE" }) {
   await database.mission.update({ where: { id: missionId }, data });
 }
@@ -166,6 +202,7 @@ describe("the owner", () => {
     });
     expect(view?.ownerDisplayName).toBe("Controller");
     expect(view?.myObserverSeat).toBeNull();
+    expect(view?.myObserverPack).toBeNull();
   });
 
   it("reads their session after it has ended", async () => {
@@ -202,9 +239,16 @@ describe("a seated observer", () => {
     await seat(observerId);
     const view = await getMissionWatchView({ missionId, actorId: observerId });
 
-    expect(Object.keys(view ?? {}).sort()).toEqual(
-      ["mission", "myObserverSeat", "observatory", "observerCount", "ownerDisplayName", "target"],
-    );
+    // myObserverPack (ADR-045) is the caller's purchase: a price and a refund, no capture.
+    expect(Object.keys(view ?? {}).sort()).toEqual([
+      "mission",
+      "myObserverPack",
+      "myObserverSeat",
+      "observatory",
+      "observerCount",
+      "ownerDisplayName",
+      "target",
+    ]);
   });
 });
 
@@ -241,5 +285,85 @@ describe("any other signed-in user", () => {
 
   it("gets the same nothing as for a mission that does not exist", async () => {
     expect(await getMissionWatchView({ missionId: randomUUID(), actorId: strangerId })).toBeNull();
+  });
+});
+
+/**
+ * ADR-045 (#169): a buyer who paid for a seat keeps reading the session after the
+ * owner closes it or it ends, so the watch page can say what they paid and what the
+ * close gave back.
+ */
+describe("a buyer with a paid seat", () => {
+  it("reads a closed session after their seat was ended, with the refund issued", async () => {
+    await setMission({ joinPolicy: "DISABLED" });
+    const buyerId = await createUser("Buyer");
+    const bought = await pack(buyerId, { status: "PAID", refundedMinor: 400 });
+    await seat(buyerId, "LEFT");
+
+    const view = await getMissionWatchView({ missionId, actorId: buyerId });
+
+    expect(zMissionWatchView.parse(view)).toEqual(view);
+    expect(view?.myObserverSeat).toBeNull();
+    expect(view?.myObserverPack).toMatchObject({
+      id: bought.id,
+      status: "PAID",
+      priceMinor: 1000,
+      refundedMinor: 400,
+      refundOwedMinor: null,
+    });
+  });
+
+  it("says a refund the provider cannot yet issue is owed, never refunded", async () => {
+    const buyerId = await createUser("Buyer");
+    await pack(buyerId, { status: "PAID", refundOwedMinor: 400 });
+
+    const view = await getMissionWatchView({ missionId, actorId: buyerId });
+
+    expect(view?.myObserverPack).toMatchObject({
+      refundedMinor: null,
+      refundOwedMinor: 400,
+    });
+  });
+
+  it("keeps reading once the session has ended", async () => {
+    const buyerId = await createUser("Buyer");
+    await pack(buyerId, { status: "PAID" });
+    await setMission({ state: "COMPLETE" });
+
+    expect(await getMissionWatchView({ missionId, actorId: buyerId })).not.toBeNull();
+  });
+
+  it("is a seat holder's own pack, shown to the observer watching", async () => {
+    await setMission({ joinPolicy: "OPEN" });
+    const buyerId = await createUser("Buyer");
+    const bought = await pack(buyerId, { status: "PAID" });
+    await seat(buyerId);
+
+    const view = await getMissionWatchView({ missionId, actorId: buyerId });
+
+    expect(view?.myObserverPack?.id).toBe(bought.id);
+  });
+});
+
+describe("a buyer whose seat is not paid for", () => {
+  it("gets nothing for a private session: a hold grants no read", async () => {
+    const holderId = await createUser("Holder");
+    await pack(holderId, { status: "PENDING_PAYMENT" });
+
+    expect(await getMissionWatchView({ missionId, actorId: holderId })).toBeNull();
+  });
+
+  it("sees their own held pack on a live session the owner opened", async () => {
+    await setMission({ joinPolicy: "OPEN" });
+    const holderId = await createUser("Holder");
+    await pack(holderId, { status: "PENDING_PAYMENT" });
+
+    const view = await getMissionWatchView({ missionId, actorId: holderId });
+
+    expect(zMissionWatchView.parse(view)).toEqual(view);
+    expect(view?.myObserverPack).toMatchObject({
+      status: "PENDING_PAYMENT",
+      refundedMinor: null,
+    });
   });
 });
