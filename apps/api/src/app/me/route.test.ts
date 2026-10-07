@@ -2,15 +2,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const { getCurrentSession, requestHeaders, updateProfile, meterRequest } = vi.hoisted(
-  () => ({
-    getCurrentSession: vi.fn(),
-    requestHeaders: { origin: "https://darkview.test" as string | null },
-    updateProfile: vi.fn(),
-    meterRequest: vi.fn(),
-  }),
-);
-vi.mock("@/lib/auth/session", () => ({ getCurrentSession }));
+const {
+  getCurrentSession,
+  deleteCurrentSession,
+  requestHeaders,
+  updateProfile,
+  deleteAccount,
+  meterRequest,
+} = vi.hoisted(() => ({
+  getCurrentSession: vi.fn(),
+  deleteCurrentSession: vi.fn(),
+  requestHeaders: { origin: "https://darkview.test" as string | null },
+  updateProfile: vi.fn(),
+  deleteAccount: vi.fn(),
+  meterRequest: vi.fn(),
+}));
+vi.mock("@/lib/auth/session", () => ({ getCurrentSession, deleteCurrentSession }));
 vi.mock("next/headers", () => ({
   headers: async () =>
     new Headers(requestHeaders.origin ? { origin: requestHeaders.origin } : {}),
@@ -19,11 +26,12 @@ vi.mock("@/lib/validation/env", () => ({
   getServerEnvironment: () => ({ APP_URL: "https://darkview.test" }),
 }));
 vi.mock("@/features/auth/profile", () => ({ updateProfile }));
+vi.mock("@/features/auth/deletion", () => ({ deleteAccount }));
 vi.mock("@/lib/security/rate-limit", () => ({ meterRequest, PROFILE_POLICY: {} }));
 
 import { zUser } from "@darkview/contracts/zod";
 
-import { GET, PATCH } from "./route";
+import { DELETE, GET, PATCH } from "./route";
 
 const session = (role: "USER" | "OPERATOR") => ({
   id: "session-1",
@@ -147,10 +155,84 @@ describe("PATCH /me", () => {
 
   it("is metered before anything else is read", async () => {
     meterRequest.mockResolvedValueOnce(
-      Response.json({ code: "RATE_LIMITED", message: "Too many requests." }, { status: 429 }),
+      Response.json(
+        { code: "RATE_LIMITED", message: "Too many requests." },
+        { status: 429 },
+      ),
     );
 
     expect((await PATCH(patch({ locale: "ka" }))).status).toBe(429);
     expect(updateProfile).not.toHaveBeenCalled();
+  });
+});
+
+const remove = (value: unknown) =>
+  new Request("https://darkview.test/api/me", {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: typeof value === "string" ? value : JSON.stringify(value),
+  });
+
+describe("DELETE /me", () => {
+  beforeEach(() => {
+    requestHeaders.origin = "https://darkview.test";
+    vi.clearAllMocks();
+    getCurrentSession.mockResolvedValue(session("USER"));
+  });
+
+  it("refuses a foreign Origin with 403 before doing any work", async () => {
+    requestHeaders.origin = "https://attacker.test";
+
+    expect((await DELETE(remove({ currentPassword: "pw" }))).status).toBe(403);
+    expect(deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it("answers 401 without a session", async () => {
+    getCurrentSession.mockResolvedValueOnce(null);
+
+    expect((await DELETE(remove({ currentPassword: "pw" }))).status).toBe(401);
+    expect(deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it("answers 400 to a body that is not JSON, and 422 without the password", async () => {
+    expect((await DELETE(remove("{not json"))).status).toBe(400);
+    const response = await DELETE(remove({}));
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      details: { fields: ["currentPassword"] },
+    });
+    expect(deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it("answers 204 and clears the cookies once the account is deleted", async () => {
+    deleteAccount.mockResolvedValueOnce({ ok: true });
+
+    const response = await DELETE(remove({ currentPassword: "pw" }));
+
+    expect(response.status).toBe(204);
+    expect(deleteAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-1" }),
+      { currentPassword: "pw" },
+    );
+    expect(deleteCurrentSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes a 409's blockers through and keeps the session", async () => {
+    deleteAccount.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      code: "CONFLICT",
+      message: "The account has something to settle first.",
+      details: { blockers: ["UPCOMING_BOOKING"] },
+    });
+
+    const response = await DELETE(remove({ currentPassword: "pw" }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "CONFLICT",
+      details: { blockers: ["UPCOMING_BOOKING"] },
+    });
+    expect(deleteCurrentSession).not.toHaveBeenCalled();
   });
 });

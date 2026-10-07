@@ -168,6 +168,36 @@ class ChangePasswordRequest(BaseModel):
     password: str = Field(..., max_length=128, min_length=12)
 
 
+class DeleteAccountRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    current_password: str = Field(..., alias='currentPassword', max_length=128, min_length=1)
+
+
+class AccountDeletionBlocker(StrEnum):
+    """
+    ADR-044. What stops an account being deleted, in `details.blockers` of
+    deleteAccount's 409. LIVE_MISSION: a mission of theirs is not yet over, a hold
+    included. UPCOMING_BOOKING: a paid slot is still ahead. HELD_BOOKING: a slot is
+    held awaiting payment; cancel it first. OPEN_ENTITLEMENT: a refund or a free
+    slot is owed and not yet taken. OBSERVER_SEAT: a seat on a mission not yet
+    over. SUBSCRIPTION: a subscription is running. GIFT_VOUCHER: a voucher they
+    bought is still unused or unpaid. NETWORK_NODE: they own a telescope on the
+    network. OPERATOR: an operator account is closed by another operator.
+
+    """
+    live_mission = 'LIVE_MISSION'
+    upcoming_booking = 'UPCOMING_BOOKING'
+    held_booking = 'HELD_BOOKING'
+    open_entitlement = 'OPEN_ENTITLEMENT'
+    observer_seat = 'OBSERVER_SEAT'
+    subscription = 'SUBSCRIPTION'
+    gift_voucher = 'GIFT_VOUCHER'
+    network_node = 'NETWORK_NODE'
+    operator = 'OPERATOR'
+
+
 class TargetType(StrEnum):
     """
     Phase 1 catalogue classes only. Every class in this enum is one the

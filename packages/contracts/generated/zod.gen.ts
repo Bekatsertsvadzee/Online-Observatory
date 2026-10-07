@@ -111,6 +111,33 @@ export const zChangePasswordRequest = z.strictObject({
     password: z.string().min(12).max(128)
 });
 
+export const zDeleteAccountRequest = z.strictObject({
+    currentPassword: z.string().min(1).max(128)
+});
+
+/**
+ * ADR-044. What stops an account being deleted, in `details.blockers` of
+ * deleteAccount's 409. LIVE_MISSION: a mission of theirs is not yet over, a hold
+ * included. UPCOMING_BOOKING: a paid slot is still ahead. HELD_BOOKING: a slot is
+ * held awaiting payment; cancel it first. OPEN_ENTITLEMENT: a refund or a free
+ * slot is owed and not yet taken. OBSERVER_SEAT: a seat on a mission not yet
+ * over. SUBSCRIPTION: a subscription is running. GIFT_VOUCHER: a voucher they
+ * bought is still unused or unpaid. NETWORK_NODE: they own a telescope on the
+ * network. OPERATOR: an operator account is closed by another operator.
+ *
+ */
+export const zAccountDeletionBlocker = z.enum([
+    'LIVE_MISSION',
+    'UPCOMING_BOOKING',
+    'HELD_BOOKING',
+    'OPEN_ENTITLEMENT',
+    'OBSERVER_SEAT',
+    'SUBSCRIPTION',
+    'GIFT_VOUCHER',
+    'NETWORK_NODE',
+    'OPERATOR'
+]);
+
 /**
  * Phase 1 catalogue classes only. Every class in this enum is one the
  * NexStar 6SE + ASI585MC combination can present convincingly from a Bortle 8-9
@@ -2151,6 +2178,13 @@ export const zConfirmPasswordResetBody = zPasswordResetConfirmRequest;
  * Password set and signed in. Sets the session cookies.
  */
 export const zConfirmPasswordResetResponse = zUser;
+
+export const zDeleteAccountBody = zDeleteAccountRequest;
+
+/**
+ * The account is deleted and the session has ended.
+ */
+export const zDeleteAccountResponse = z.void();
 
 /**
  * The current user.
