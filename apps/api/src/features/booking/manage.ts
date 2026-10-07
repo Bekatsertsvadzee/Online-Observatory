@@ -6,6 +6,7 @@ import { zBookingId } from "@darkview/contracts/zod";
 import { getDatabase } from "@/lib/db/client";
 import {
   BOOKING_ENTITLEMENT_SELECT,
+  BOOKING_PAYMENT_SELECT,
   releaseHeldSlot,
   toContractBooking,
 } from "@/features/booking/reserve";
@@ -21,7 +22,7 @@ export async function getMyBooking(input: {
 }): Promise<Booking | null> {
   const row = await getDatabase().booking.findFirst({
     where: { id: input.bookingId, userId: input.userId },
-    include: { entitlement: BOOKING_ENTITLEMENT_SELECT },
+    include: { entitlement: BOOKING_ENTITLEMENT_SELECT, payment: BOOKING_PAYMENT_SELECT },
   });
   return row ? toContractBooking(row) : null;
 }
@@ -61,7 +62,7 @@ export async function listMyBookings(input: {
     orderBy: [{ slotStartAt: "desc" }, { id: "desc" }],
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    include: { entitlement: BOOKING_ENTITLEMENT_SELECT },
+    include: { entitlement: BOOKING_ENTITLEMENT_SELECT, payment: BOOKING_PAYMENT_SELECT },
   });
 
   const items = rows.slice(0, limit);

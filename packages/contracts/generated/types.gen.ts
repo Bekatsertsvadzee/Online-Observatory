@@ -849,6 +849,14 @@ export type Booking = {
     priceMinor: number;
     currency: Currency;
     paymentId?: string | null;
+    /**
+     * ADR-043. The payment to continue, while the booking is PENDING_PAYMENT: the
+     * intent `createBooking` answered, read again, with `expiresAt` the hold's
+     * deadline. Null in every other status, and for a booking a voucher or
+     * subscription minutes paid for.
+     *
+     */
+    paymentIntent: PaymentIntent | null;
     missionId?: string | null;
     /**
      * What the customer's loyalty tier took off the slot price (DV-095).

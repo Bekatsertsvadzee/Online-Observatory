@@ -117,6 +117,12 @@ type BookingRow = {
   missionId: string | null;
   holdExpiresAt: Date | null;
   createdAt: Date;
+  /**
+   * Present when the caller selected it (ADR-043). A PENDING_PAYMENT booking read
+   * without it reports no intent, so every read that can answer one includes
+   * `BOOKING_PAYMENT_SELECT`.
+   */
+  payment?: PaymentRow | null;
   tierDiscountMinor?: number;
   loyaltyPointsRedeemed?: number;
   subscriptionMinutesSpent?: number;
@@ -190,6 +196,11 @@ type PaymentRow = {
   redirectUrl: string | null;
 };
 
+/** What a booking read selects so a held booking's intent reaches the contract (ADR-043). */
+export const BOOKING_PAYMENT_SELECT = {
+  select: { id: true, provider: true, status: true, redirectUrl: true },
+} as const;
+
 export function toContractBooking(row: BookingRow): ContractBooking {
   return {
     id: row.id,
@@ -202,6 +213,12 @@ export function toContractBooking(row: BookingRow): ContractBooking {
     priceMinor: row.priceMinor,
     currency: row.currency as ContractBooking["currency"],
     paymentId: row.paymentId,
+    // ADR-043: the intent is only for a slot still held. Once the payment settles
+    // or the hold ends there is nothing to continue, whatever the payment row says.
+    paymentIntent:
+      row.status === "PENDING_PAYMENT" && row.payment
+        ? toPaymentIntent(row.payment, row.holdExpiresAt)
+        : null,
     missionId: row.missionId,
     tierDiscountMinor: row.tierDiscountMinor ?? 0,
     loyaltyPointsRedeemed: row.loyaltyPointsRedeemed ?? 0,
@@ -604,7 +621,7 @@ export async function reserveSlot(input: {
       ok: true,
       replayed: false,
       body: {
-        booking: toContractBooking(created.booking as BookingRow),
+        booking: toContractBooking({ ...created.booking, payment: created.payment } as BookingRow),
         paymentIntent: toPaymentIntent(created.payment as PaymentRow, holdExpiresAt),
       },
     };

@@ -19,8 +19,8 @@ vi.mock("@/lib/validation/env", () => ({
   }),
 }));
 
-const { listMyBookings } = await import("@/features/booking/manage");
-const { zBookingPage } = await import("@darkview/contracts/zod");
+const { getMyBooking, listMyBookings } = await import("@/features/booking/manage");
+const { zBookingPage, zGetBookingResponse } = await import("@darkview/contracts/zod");
 
 /**
  * `listBookings` (#152) against a real PostgreSQL instance: the caller's own
@@ -216,5 +216,67 @@ describe("listing the caller's bookings", () => {
       items: [],
       page: { hasMore: false, nextCursor: null },
     });
+  });
+});
+
+/**
+ * ADR-043: a held booking carries the intent `createBooking` answered, so the
+ * customer who left the checkout can come back and pay from the booking itself.
+ */
+describe("reading a held booking", () => {
+  const HOLD_EXPIRES_AT = new Date("2026-12-15T12:15:00.000Z");
+
+  async function heldBooking(options: { status: "PENDING_PAYMENT" | "CONFIRMED" }) {
+    const payment = await database.payment.create({
+      data: {
+        userId,
+        provider: "SANDBOX",
+        status: options.status === "CONFIRMED" ? "CAPTURED" : "PENDING",
+        amountMinor: 4500,
+        redirectUrl: "https://darkview.test/api/payments/checkout",
+      },
+      select: { id: true },
+    });
+    const created = await database.booking.create({
+      data: {
+        userId,
+        targetId,
+        observatoryId,
+        telescopeId,
+        paymentId: payment.id,
+        slotStartAt: FIRST_SLOT,
+        durationMinutes: 30,
+        status: options.status,
+        holdExpiresAt: options.status === "PENDING_PAYMENT" ? HOLD_EXPIRES_AT : null,
+        priceMinor: 4500,
+      },
+      select: { id: true },
+    });
+    return { bookingId: created.id, paymentId: payment.id };
+  }
+
+  it("answers the intent, with the hold's deadline, while the booking awaits payment", async () => {
+    const { bookingId, paymentId } = await heldBooking({ status: "PENDING_PAYMENT" });
+
+    const read = await getMyBooking({ userId, bookingId });
+    expect(zGetBookingResponse.safeParse(read).success).toBe(true);
+    expect(read?.paymentIntent).toEqual({
+      paymentId,
+      provider: "SANDBOX",
+      status: "PENDING",
+      redirectUrl: "https://darkview.test/api/payments/checkout",
+      expiresAt: HOLD_EXPIRES_AT.toISOString(),
+    });
+
+    const page = await listMyBookings({ userId, limit: 10 });
+    expect(page.items.map((item) => item.paymentIntent?.paymentId)).toEqual([paymentId]);
+  });
+
+  it("answers null once the booking is paid, although the payment row remains", async () => {
+    const { bookingId } = await heldBooking({ status: "CONFIRMED" });
+
+    const read = await getMyBooking({ userId, bookingId });
+    expect(read?.paymentId).not.toBeNull();
+    expect(read?.paymentIntent).toBeNull();
   });
 });

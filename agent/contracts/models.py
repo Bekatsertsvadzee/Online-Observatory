@@ -2379,6 +2379,7 @@ class Booking(BaseModel):
     price_minor: int = Field(..., alias='priceMinor', ge=0)
     currency: Currency
     payment_id: UUID | None = Field(None, alias='paymentId')
+    payment_intent: PaymentIntent | None = Field(..., alias='paymentIntent', description="ADR-043. The payment to continue, while the booking is PENDING_PAYMENT: the\nintent `createBooking` answered, read again, with `expiresAt` the hold's\ndeadline. Null in every other status, and for a booking a voucher or\nsubscription minutes paid for.\n")
     mission_id: UUID | None = Field(None, alias='missionId')
     tier_discount_minor: int | None = Field(None, alias='tierDiscountMinor', description="What the customer's loyalty tier took off the slot price (DV-095).", ge=0)
     loyalty_points_redeemed: int | None = Field(None, alias='loyaltyPointsRedeemed', description='Points spent on this booking (DV-095).', ge=0)
