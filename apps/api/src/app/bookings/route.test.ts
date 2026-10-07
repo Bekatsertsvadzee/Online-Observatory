@@ -61,6 +61,13 @@ const reserved = {
     priceMinor: 4500,
     currency: "GEL" as const,
     paymentId: "3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e02",
+    paymentIntent: {
+      paymentId: "3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e02",
+      provider: "SANDBOX" as const,
+      status: "PENDING" as const,
+      redirectUrl: null,
+      expiresAt: "2026-12-15T12:15:00.000Z",
+    },
     missionId: null,
     createdAt: "2026-12-15T12:00:00.000Z",
   },

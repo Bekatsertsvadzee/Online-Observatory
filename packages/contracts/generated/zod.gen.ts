@@ -584,25 +584,6 @@ export const zBookingEntitlement = z.strictObject({
     rescheduledBookingId: z.uuid().nullable()
 });
 
-export const zBooking = z.strictObject({
-    id: z.uuid(),
-    userId: z.uuid(),
-    observatoryId: z.uuid(),
-    targetId: z.uuid(),
-    slotStartAt: z.iso.datetime(),
-    durationMinutes: z.int().gt(0),
-    status: zBookingStatus,
-    priceMinor: z.int().gte(0),
-    currency: zCurrency,
-    paymentId: z.uuid().nullish(),
-    missionId: z.uuid().nullish(),
-    tierDiscountMinor: z.int().gte(0).optional(),
-    loyaltyPointsRedeemed: z.int().gte(0).optional(),
-    subscriptionMinutesSpent: z.int().gte(0).optional(),
-    entitlement: zBookingEntitlement.nullish(),
-    createdAt: z.iso.datetime()
-});
-
 export const zRescheduleBookingRequest = z.strictObject({
     slotStartAt: z.iso.datetime(),
     targetId: z.uuid().optional()
@@ -653,6 +634,26 @@ export const zPaymentIntent = z.strictObject({
     status: zPaymentStatus,
     redirectUrl: z.url().nullish(),
     expiresAt: z.iso.datetime().nullish()
+});
+
+export const zBooking = z.strictObject({
+    id: z.uuid(),
+    userId: z.uuid(),
+    observatoryId: z.uuid(),
+    targetId: z.uuid(),
+    slotStartAt: z.iso.datetime(),
+    durationMinutes: z.int().gt(0),
+    status: zBookingStatus,
+    priceMinor: z.int().gte(0),
+    currency: zCurrency,
+    paymentId: z.uuid().nullish(),
+    paymentIntent: zPaymentIntent.nullable(),
+    missionId: z.uuid().nullish(),
+    tierDiscountMinor: z.int().gte(0).optional(),
+    loyaltyPointsRedeemed: z.int().gte(0).optional(),
+    subscriptionMinutesSpent: z.int().gte(0).optional(),
+    entitlement: zBookingEntitlement.nullish(),
+    createdAt: z.iso.datetime()
 });
 
 export const zSandboxCheckoutResult = z.enum(['CAPTURED', 'FAILED']);

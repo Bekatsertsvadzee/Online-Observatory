@@ -3646,6 +3646,7 @@ components:
           status,
           priceMinor,
           currency,
+          paymentIntent,
           createdAt,
         ]
       properties:
@@ -3678,6 +3679,15 @@ components:
         paymentId:
           type: [string, "null"]
           format: uuid
+        paymentIntent:
+          description: |
+            ADR-043. The payment to continue, while the booking is PENDING_PAYMENT: the
+            intent `createBooking` answered, read again, with `expiresAt` the hold's
+            deadline. Null in every other status, and for a booking a voucher or
+            subscription minutes paid for.
+          oneOf:
+            - $ref: "#/components/schemas/PaymentIntent"
+            - type: "null"
         missionId:
           type: [string, "null"]
           format: uuid
