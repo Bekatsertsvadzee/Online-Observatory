@@ -126,7 +126,7 @@ function renderPage(view: SandboxCheckoutView): string {
 <h1>Sandbox checkout</h1>
 <p>This is the development payment sandbox. No card is asked for and no money moves.</p>
 ${body}
-<p><a href="${back}">Back to the booking</a></p>
+<p><a href="${back}">${view.purpose === "BOOKING" ? "Back to the booking" : "Back to the session"}</a></p>
 </body>
 </html>
 `;
