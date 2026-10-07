@@ -914,9 +914,9 @@ model ObserverPack {
   refundedMinor Int?
   refundedAt    DateTime?
   /// ADR-036. A close refund decided but not issued, because the payment's provider
-  /// has no integrated refund API (DV-111's PROVIDER_REFUND_UNAVAILABLE). Not a
-  /// contract field: an owed refund is never shown as paid. Issued or owed, never
-  /// both -- ObserverPack_refund_issued_or_owed.
+  /// has no integrated refund API (DV-111's PROVIDER_REFUND_UNAVAILABLE). Contract:
+  /// ObserverPack.refundOwedMinor since ADR-045, said as owed and never as paid.
+  /// Issued or owed, never both -- ObserverPack_refund_issued_or_owed.
   refundOwedMinor Int?
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt

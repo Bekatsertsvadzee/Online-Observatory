@@ -96,6 +96,7 @@ type PackRow = {
   priceMinor: number;
   currency: string;
   refundedMinor: number | null;
+  refundOwedMinor: number | null;
   createdAt: Date;
 };
 
@@ -106,7 +107,7 @@ const NO_SUCH_MISSION: ObserverPackFailure = {
   message: "No such mission.",
 };
 
-function toContractPack(row: PackRow): ObserverPack {
+export function toContractPack(row: PackRow): ObserverPack {
   return {
     id: row.id,
     missionId: row.missionId,
@@ -117,6 +118,8 @@ function toContractPack(row: PackRow): ObserverPack {
     paymentId: row.paymentId,
     holdExpiresAt: row.holdExpiresAt?.toISOString() ?? null,
     refundedMinor: row.refundedMinor,
+    // ADR-045: owed is said as owed; the database keeps the two apart.
+    refundOwedMinor: row.refundOwedMinor,
     createdAt: row.createdAt.toISOString(),
   };
 }

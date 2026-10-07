@@ -8,8 +8,13 @@ const { mayWatch } = await import("@/features/missions/watch");
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
 
-const privateLive = { ownerId: OWNER, joinPolicy: "DISABLED", state: "OBSERVING" };
-const openLive = { ownerId: OWNER, joinPolicy: "OPEN", state: "OBSERVING" };
+const privateLive = {
+  ownerId: OWNER,
+  joinPolicy: "DISABLED",
+  state: "OBSERVING",
+  paid: false,
+};
+const openLive = { ownerId: OWNER, joinPolicy: "OPEN", state: "OBSERVING", paid: false };
 
 describe("mayWatch (ADR-034)", () => {
   it("lets the owner watch their own session, private or not, live or not", () => {
@@ -25,6 +30,20 @@ describe("mayWatch (ADR-034)", () => {
 
   it("lets any signed-in user watch a live session its owner opened", () => {
     expect(mayWatch({ ...openLive, actorId: OTHER, seated: false })).toBe(true);
+  });
+
+  it("lets a buyer with a paid seat read the session in any state, closed or ended (ADR-045)", () => {
+    for (const state of [
+      "OBSERVING",
+      "COMPLETE",
+      "CANCELLED",
+      "FAILED",
+      "WEATHER_HOLD",
+    ]) {
+      expect(
+        mayWatch({ ...privateLive, state, actorId: OTHER, seated: false, paid: true }),
+      ).toBe(true);
+    }
   });
 
   it("refuses a stranger on a private session", () => {

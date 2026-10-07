@@ -1543,11 +1543,20 @@ export type ObserverPack = {
      * refunded.
      *
      * Set only once the money has actually been returned. A refund the payment
-     * provider cannot yet issue is recorded as owed on the platform and leaves
-     * this null, so it is never shown as paid.
+     * provider cannot yet issue is recorded in `refundOwedMinor` instead and
+     * leaves this null, so it is never shown as paid.
      *
      */
     refundedMinor?: number | null;
+    /**
+     * ADR-045. A close refund decided but not yet issued, in minor units of
+     * `currency`, because the payment's provider has no integrated refund API.
+     * Null otherwise. Never set together with `refundedMinor`: a refund is owed
+     * or issued, never both. A client says it "will be refunded", never that it
+     * was.
+     *
+     */
+    refundOwedMinor?: number | null;
     createdAt: string;
 };
 
@@ -1588,6 +1597,13 @@ export type MissionWatchView = {
      * The caller's attached observer seat, or null if they hold none.
      */
     myObserverSeat: MissionObserver | null;
+    /**
+     * ADR-045. The caller's own Observer Pack on this mission, in whatever status
+     * it is, or null if they never bought one: the price, the hold, and what a
+     * close refunded or owes. Null for the owner, who cannot buy one.
+     *
+     */
+    myObserverPack: ObserverPack | null;
 };
 
 export const MissionEventSource = {

@@ -1016,6 +1016,7 @@ export const zObserverPack = z.strictObject({
     paymentId: z.uuid().nullish(),
     holdExpiresAt: z.iso.datetime().nullish(),
     refundedMinor: z.int().gte(0).nullish(),
+    refundOwedMinor: z.int().gte(0).nullish(),
     createdAt: z.iso.datetime()
 });
 
@@ -1397,7 +1398,8 @@ export const zMissionWatchView = z.strictObject({
     observatory: zBookableObservatory,
     ownerDisplayName: z.string().nullable(),
     observerCount: z.int().gte(0),
-    myObserverSeat: zMissionObserver.nullable()
+    myObserverSeat: zMissionObserver.nullable(),
+    myObserverPack: zObserverPack.nullable()
 });
 
 /**
