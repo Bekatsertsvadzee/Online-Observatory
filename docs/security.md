@@ -345,15 +345,18 @@ require an audited administrative path; public registration always creates `USER
 
 ## Dependency advisories
 
-Triaged 2026-09-14, from the P2 finding in `docs/audits/2026-09-13-review.md`. `npm audit`
-reports eight high-severity packages, four of them with `--omit=dev`. None is fixed by an
-upgrade the version policy allows, and none is reachable from a request.
+Triaged 2026-09-14, from the P2 finding in `docs/audits/2026-09-13-review.md`, and again
+on 2026-10-08. Next.js went to 16.4.0 (#183) for its October advisories, and `fast-uri`,
+`source-map-js` and `brace-expansion` were lifted to fixed releases inside their parents'
+own ranges by a lockfile refresh, with no override. What remains is below: none is fixed
+by an upgrade the version policy allows, and none is reachable from a request.
 
 | Package | Installed | Reached through | When it runs | Reachable from a request |
 | --- | --- | --- | --- | --- |
 | `js-yaml` | 4.2.0 | `@hey-api/openapi-ts` 0.99.0 → `@hey-api/json-schema-ref-parser` 1.4.4 | `contracts:generate` and `contracts:check`, parsing this repository's own `contracts/openapi.yaml` | No |
 | `deepmerge-ts` | 7.1.5 | `prisma` 7.9.1 → `@prisma/config` 7.9.1 | The Prisma CLI loading `packages/db/prisma.config.ts` | No |
 | `mysql2` | 3.15.3 | `prisma` 7.9.1 | Never: the datasource is PostgreSQL | No |
+| `braces` | 3.0.3 | `eslint-config-next` → `@next/eslint-plugin-next` → `fast-glob` 3.3.1 → `micromatch` 4.0.8 | ESLint, matching this repository's own globs. No fixed release exists | No |
 | `prisma`, `@prisma/config`, `@hey-api/openapi-ts`, `@hey-api/json-schema-ref-parser`, `@hey-api/shared` | — | the three above | as above | No |
 
 **Why nothing is patched.**
