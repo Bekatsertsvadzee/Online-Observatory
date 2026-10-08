@@ -26,9 +26,12 @@ describe("development seed data", () => {
   });
 
   it("uses unmistakable demo identifiers", () => {
-    expect(DEMO_CAPTURES.every((capture) => capture.id.startsWith("CAP-DEMO-"))).toBe(
-      true,
-    );
+    // Fixed, obviously-seeded uuids: the contract types every capture id `format: uuid`.
+    expect(
+      DEMO_CAPTURES.every((capture) =>
+        /^00000000-0000-4000-8000-0000000003\d\d$/.test(capture.id),
+      ),
+    ).toBe(true);
   });
 });
 
