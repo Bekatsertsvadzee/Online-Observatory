@@ -93,31 +93,34 @@ describe("a starting GOTO the agent never ran releases the observatory", () => {
   });
 });
 
-describe("a network blip still ends the mission — open, see the comment", () => {
-  // STILL FAILING, DELIBERATELY. This one is a conflict between controlling
-  // documents, which docs/ENGINEERING.md says to report rather than resolve.
-  //
-  // `AgentHello.resumeMissionId` is documented as "set when the agent restarts
-  // holding a mission recovered from its local state store" (openapi.yaml:4986).
-  // The agent sets it on every hello while a mission is active, including a
-  // reconnect after a two-second blip with the process still running
-  // (agent/tests/test_supervisor.py asserts exactly that, for a good reason: an
-  // agent that said nothing would look idle and the cloud would schedule against
-  // a telescope in use). The cloud reads it as the contract does and closes the
-  // mission out (agent-link.ts -> resolveResumedMission), so a blip ends a
-  // customer's observation.
-  //
-  // Resolving it is a decision: either the field means "currently held" and the
-  // cloud resumes instead of closing, or the hello needs a way to distinguish a
-  // new process -- `bootedAt` is already in the message and could carry it, at
-  // the cost of a column to remember the last one seen. Both change the contract
-  // or the schema.
-  // `it.fails` rather than `it.skip`: the suite stays green, the defect stays
-  // visible, and the day somebody fixes it this test fails for passing.
-  it.fails("keeps an OBSERVING mission live when the agent reconnects holding it", async () => {
+describe("a network blip leaves the mission live (ADR-046)", () => {
+  // `AgentHello.resumeMissionId` is sent on every hello while a mission is active, a
+  // reconnect after a two-second blip included. Only a new process -- a different
+  // `bootedAt` -- has parked and lost the state machine's progress.
+  it("keeps an OBSERVING mission live when the agent reconnects holding it", async () => {
     const store = new FakeLinkStore();
     store.addMission(MISSION, { observatoryId: OBS, state: "OBSERVING" });
-    await store.resolveResumedMission({ observatoryId: OBS, missionId: MISSION, now: new Date() });
+    const outcome = await store.resolveResumedMission({
+      observatoryId: OBS,
+      missionId: MISSION,
+      restarted: false,
+      now: new Date(),
+    });
+    expect(outcome).toBe("STILL_LIVE");
     expect(store.mission(MISSION)?.state).toBe("OBSERVING");
   });
+
+  it("still closes it out when the agent restarted holding it", async () => {
+    const store = new FakeLinkStore();
+    store.addMission(MISSION, { observatoryId: OBS, state: "OBSERVING" });
+    const outcome = await store.resolveResumedMission({
+      observatoryId: OBS,
+      missionId: MISSION,
+      restarted: true,
+      now: new Date(),
+    });
+    expect(outcome).toBe("RESOLVED");
+    expect(store.mission(MISSION)?.state).toBe("FAILED");
+  });
 });
+

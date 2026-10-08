@@ -1,6 +1,9 @@
 # ADR-010 — The Observatory Agent's local state store
 
 - **Status:** Accepted
+- **Amended by:** `ADR-046-a-reconnect-is-not-a-restart.md` (2026-10-08): the agent
+  sends `resumeMissionId` on every hello while it holds a mission, and the cloud closes
+  the mission out only when `bootedAt` shows a new process. A reconnect keeps it.
 - **Date:** 2026-09-04
 - **Issue:** DV-027
 - **Supersedes:** nothing

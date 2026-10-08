@@ -1793,9 +1793,9 @@ class AgentHello(BaseModel):
     mode: ObservatoryMode
     posture: AgentPosture
     disarm_reason: DisarmReason | None = Field(None, alias='disarmReason', description='Set only while posture is DISARMED.')
-    booted_at: AwareDatetime = Field(..., alias='bootedAt')
+    booted_at: AwareDatetime = Field(..., alias='bootedAt', description='When the agent process started, taken once at start-up. The cloud compares it to the last one it accepted to tell a reconnect from a restart (ADR-046).')
     safety_envelope_configured: bool | None = Field(None, alias='safetyEnvelopeConfigured', description='False while maxAltitudeDegrees is unmeasured. The cloud must not schedule a mission against an agent reporting false.')
-    resume_mission_id: UUID | None = Field(None, alias='resumeMissionId', description='Set when the agent restarts holding a mission recovered from its local state store.')
+    resume_mission_id: UUID | None = Field(None, alias='resumeMissionId', description='The mission the agent is holding, sent on every hello while one is active. With the same bootedAt as before it is a reconnect and the mission stands; otherwise a restart, and the cloud closes the mission out (ADR-046).')
 
 
 class AgentHeartbeat(BaseModel):

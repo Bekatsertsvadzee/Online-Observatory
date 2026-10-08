@@ -321,6 +321,72 @@ describe("restart recovery (#26)", () => {
   });
 });
 
+describe("a reconnect is not a restart (ADR-046)", () => {
+  const BOOTED = "2026-12-15T19:00:00.000Z";
+
+  beforeEach(async () => {
+    store.setActiveSession(observatory.id, {
+      sessionId: SESSION_ID,
+      missionId: MISSION_ID,
+      userId: USER_ID,
+      expiresAt: new Date(now + 600_000),
+    });
+    // The process the cloud last accepted, before the link dropped.
+    await makeLink().receive(hello({ bootedAt: BOOTED }));
+    sent = [];
+  });
+
+  it("keeps the mission live and the session standing when the same process comes back", async () => {
+    now += 2_000;
+    const link = makeLink();
+    await link.receive(hello({ bootedAt: BOOTED, resumeMissionId: MISSION_ID }));
+
+    expect(store.mission(MISSION_ID)?.state).toBe("CAPTURING");
+    expect(store.revoked).toEqual([]);
+    expect(store.missionEvents).toEqual([]);
+    expect(sent).toEqual([
+      expect.objectContaining({ type: "CLOUD_WELCOME", expectedMissionId: MISSION_ID }),
+    ]);
+    expect(link.currentState).toBe("ONLINE");
+  });
+
+  it("closes the mission out when a new process comes back holding it", async () => {
+    now += 60_000;
+    await makeLink().receive(
+      hello({ bootedAt: new Date(now).toISOString(), resumeMissionId: MISSION_ID }),
+    );
+
+    expect(store.mission(MISSION_ID)).toMatchObject({
+      state: "FAILED",
+      failureReason: "AGENT_LINK_LOST",
+    });
+    expect(store.revoked).toEqual([{ sessionId: SESSION_ID, reason: "AGENT_LINK_LOST" }]);
+  });
+
+  it("tells the same process it holds nobody when the mission ended during the gap", async () => {
+    store.addMission(MISSION_ID, { observatoryId: observatory.id, state: "COMPLETE" });
+
+    await makeLink().receive(hello({ bootedAt: BOOTED, resumeMissionId: MISSION_ID }));
+
+    expect(store.missionEvents).toEqual([]);
+    expect(sent.at(1)).toMatchObject({
+      type: "CLOUD_SESSION_UPDATE",
+      missionId: MISSION_ID,
+      sessionId: null,
+    });
+  });
+
+  it("reads a hello with nothing remembered as a restart", async () => {
+    const fresh = new FakeLinkStore();
+    expect((await fresh.markLinkUp(observatory.id, new Date(BOOTED))).restarted).toBe(
+      true,
+    );
+    expect((await fresh.markLinkUp(observatory.id, new Date(BOOTED))).restarted).toBe(
+      false,
+    );
+  });
+});
+
 describe("command acknowledgements (#27)", () => {
   beforeEach(() => {
     store.addCommand({ observatoryId: observatory.id, envelope: envelopeFor() });
