@@ -8,6 +8,14 @@ set -eu
 : "${DEMO_NIGHT_OBSERVATORY_ID:?}" "${DEMO_NIGHT_AGENT_DEVICE_TOKEN:?}"
 : "${API_UPSTREAM:?}" "${WEB_UPSTREAM:?}"
 
+# `fly storage create` sets the Tigris bucket's credentials under the AWS names; the
+# storage package reads S3_* (ADR-012). An S3_* secret, if set, wins.
+export S3_ENDPOINT="${S3_ENDPOINT:-${AWS_ENDPOINT_URL_S3:-}}"
+export S3_REGION="${S3_REGION:-${AWS_REGION:-}}"
+export S3_BUCKET="${S3_BUCKET:-${BUCKET_NAME:-}}"
+export S3_ACCESS_KEY_ID="${S3_ACCESS_KEY_ID:-${AWS_ACCESS_KEY_ID:-}}"
+export S3_SECRET_ACCESS_KEY="${S3_SECRET_ACCESS_KEY:-${AWS_SECRET_ACCESS_KEY:-}}"
+
 mkdir -p /data
 
 cd /app
