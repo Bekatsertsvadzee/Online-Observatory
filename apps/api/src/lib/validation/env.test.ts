@@ -23,6 +23,14 @@ describe("the API environment (ADR-035)", () => {
     expect(getServerEnvironment().DARKVIEW_DEPLOYMENT).toBe("production");
   });
 
+  it("takes either PostgreSQL URL scheme and nothing else", () => {
+    stubRequired();
+    vi.stubEnv("DATABASE_URL", "postgres://user:pass@db.prisma.io:5432/postgres");
+    expect(() => getServerEnvironment()).not.toThrow();
+    vi.stubEnv("DATABASE_URL", "mysql://user:pass@localhost:3306/stellar");
+    expect(() => getServerEnvironment()).toThrow(/DATABASE_URL/);
+  });
+
   it("accepts demo and refuses anything else", () => {
     stubRequired();
     vi.stubEnv("DARKVIEW_DEPLOYMENT", "demo");

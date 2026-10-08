@@ -15,11 +15,15 @@ primary_region = "fra"
 [http_service]
   internal_port = 8080
   force_https = true
-  # Always on: the agents hold the observatory link, and CLAUDE.md forbids holding
-  # it anywhere that sleeps.
-  auto_stop_machines = "off"
+  # Free-tier start (Nika, 2026-10-08): the machine sleeps when no visitor holds a
+  # connection through Fly's proxy and wakes on the next request. The agents' link is
+  # loopback, so it does not keep the machine up; while it sleeps the observatories
+  # read offline and realtime's sweeps do not run. The agents still live in a
+  # long-lived process, not a serverless function. For an always-on demo set
+  # auto_stop_machines = "off" and min_machines_running = 1.
+  auto_stop_machines = "stop"
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
   [http_service.concurrency]
     type = "connections"
@@ -28,4 +32,4 @@ primary_region = "fra"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "1gb"
+  memory = "512mb"
