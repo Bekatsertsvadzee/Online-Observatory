@@ -152,6 +152,40 @@ it yet.
 If `GET /observatories` comes back empty on a deployment that should be selling, this is
 the first thing to check.
 
+### The hosted demo (ADR-035) — **[NOT YET LIVE]**
+
+`stellar.astroman.ge`, a CNAME at the astroman.ge registrar to the Fly app. Nothing
+else on astroman.ge is touched.
+
+| Piece | Where | Notes |
+| --- | --- | --- |
+| Front, realtime, two simulated agents | Fly app `stellar-demo`, `fra`, one always-on machine | `deploy/fly/`. Caddy routes `/ws/mission/*` and `/stream/mission/*` to realtime, `/api/*` (prefix stripped) to the API, everything else to the website; `/internal*` is 404 at the front, and `/ws/agent` never reaches realtime from outside |
+| API | Vercel project `stellar-platform`, root `apps/api` | Same environment table as above, `DARKVIEW_DEPLOYMENT=demo` |
+| Website | Vercel project `part-2-clients` (the clients repository) | `APP_URL`, `DARKVIEW_PLATFORM_API_URL`, `DARKVIEW_REALTIME_URL`, `DARKVIEW_STORAGE_ORIGIN` |
+| Database | Prisma Postgres, `fra1`, connected to `stellar-platform` | `btree_gist` once, then `db:deploy` and the demo seed |
+| Captures | Tigris bucket on the Fly org, private | `fly storage create` sets `AWS_*` secrets; `start.sh` maps them to `S3_*` |
+
+Deploy the machine from the repository root:
+
+```bash
+fly deploy --config deploy/fly/fly.toml --dockerfile deploy/fly/Dockerfile .
+```
+
+Secrets go in with `fly secrets set` and `vercel env add`, never in `fly.toml`.
+`VOUCHER_CODE_SECRET` and `REALTIME_INTERNAL_SECRET` hold the same value on Fly and on
+the API. The machine also needs `DATABASE_URL`, `DEMO_AGENT_DEVICE_TOKEN` and
+`DEMO_NIGHT_AGENT_DEVICE_TOKEN`.
+
+**The seed's public values do not survive the first deploy.** The demo seed writes the
+two agent device tokens and the demo accounts' password from constants in this
+repository. After seeding a hosted database, rotate both device tokens through
+`POST /admin/network/nodes/{nodeId}/device-token/rotate` (nodes `…0027` and `…0044`) and set the rotated values
+as the Fly secrets, and change the demo operator's password. Until then anyone who reads
+the source can connect an agent or sign in as the operator.
+
+`REALTIME_INTERNAL_URL` is unset on the demo: the API cannot reach `/internal/*` through
+the front, by design, so operator telemetry answers 503 there.
+
 ## 3. Bringing the observatory up
 
 ### Simulated — the default, and the only mode used in normal work

@@ -1,0 +1,9 @@
+# deploy/fly/Dockerfile copies named paths only; this keeps host-built and secret files
+# out of what it copies.
+**/node_modules
+**/.env
+**/.env.*
+**/.venv
+**/__pycache__
+**/.next
+.git
