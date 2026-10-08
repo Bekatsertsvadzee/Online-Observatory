@@ -1,0 +1,35 @@
+# One host for the website, the API and realtime (RUNBOOK §1, ADR-016 §4): the session
+# cookie is __Host- prefixed, so the browser sends it only to the host that set it. Fly
+# terminates TLS; this listens on plain HTTP inside the machine.
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	# handle blocks are mutually exclusive and tried in this order.
+
+	# Never from the internet (RUNBOOK §2, REALTIME_INTERNAL_SECRET).
+	handle /internal* {
+		respond 404
+	}
+
+	# The mission channel's WebSocket and the MJPEG stream (ADR-011).
+	@realtime path /ws/mission/* /stream/mission/*
+	handle @realtime {
+		reverse_proxy 127.0.0.1:4001
+	}
+
+	# The API, without its /api prefix, as the website's development rewrite does.
+	handle_path /api/* {
+		reverse_proxy {$API_UPSTREAM} {
+			header_up Host {upstream_hostport}
+		}
+	}
+
+	handle {
+		reverse_proxy {$WEB_UPSTREAM} {
+			header_up Host {upstream_hostport}
+		}
+	}
+}
