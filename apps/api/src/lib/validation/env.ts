@@ -11,7 +11,8 @@ const serverEnvironmentSchema = z.object({
    * check holds. Turned off for the real launch.
    */
   DARKVIEW_DEPLOYMENT: z.enum(["production", "demo"]).default("production"),
-  DATABASE_URL: z.url().startsWith("postgresql://"),
+  // Both schemes are libpq's; Prisma Postgres hands out postgres://.
+  DATABASE_URL: z.url().regex(/^postgres(ql)?:\/\//),
   APP_URL: z.url(),
   AUTH_SECRET: z.string().min(32),
   EMAIL_VERIFICATION_WEBHOOK_URL: z.url().optional(),
