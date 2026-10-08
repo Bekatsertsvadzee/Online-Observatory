@@ -1,8 +1,9 @@
 # ADR-046 — A reconnect is not a restart
 
 - **Date:** 2026-10-07
-- **Status:** PROPOSED
-- **Decided by:** project maintainer, not yet
+- **Status:** APPROVED
+- **Approved:** 2026-10-08, as written
+- **Decided by:** project maintainer
 - **Settles:** the expected failure `keeps an OBSERVING mission live when the agent
   reconnects holding it` (`apps/realtime/src/link/mission-state.test.ts`), raised again as
   P1 by the clients' test audit of 2026-10-07

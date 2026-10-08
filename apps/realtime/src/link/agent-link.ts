@@ -650,15 +650,21 @@ export class AgentLink {
 
     await this.record(message);
     this.state = "ONLINE";
-    await this.store.markLinkUp(this.observatory.id);
+    const { restarted } = await this.store.markLinkUp(
+      this.observatory.id,
+      new Date(message.bootedAt),
+    );
     await this.applyPosture(message.posture, message.disarmReason ?? null);
 
-    // resumeMissionId is the agent telling us what it recovered from its local
-    // state store (DV-027). It has already parked the mount, because it lost the
-    // state machine's progress and will not guess where a telescope is pointing.
-    // What is left is bookkeeping -- and until it is done, the mission sits in a
-    // live state and Mission_active_per_observatory_unique holds the observatory
-    // shut against every later booking.
+    // resumeMissionId is the mission the agent is holding, sent on every hello while
+    // one is active. ADR-046: `bootedAt` says whether this is the process the cloud
+    // last accepted. If it is, the link only blipped: the agent's watchdog rode it
+    // out and still drives the mission, so it stands. If not, the agent restarted,
+    // recovered the id from its local state store (DV-027) and has already parked,
+    // because it lost the state machine's progress. What is left is bookkeeping --
+    // and until it is done, the mission sits in a live state and
+    // Mission_active_per_observatory_unique holds the observatory shut against
+    // every later booking.
     const resumeMissionId = message.resumeMissionId ?? null;
     const resumed =
       resumeMissionId === null
@@ -666,6 +672,7 @@ export class AgentLink {
         : await this.store.resolveResumedMission({
             observatoryId: this.observatory.id,
             missionId: resumeMissionId,
+            restarted,
             now: new Date(this.now()),
           });
 
@@ -682,7 +689,7 @@ export class AgentLink {
     // holding a mission that is over. Told explicitly, because ownership is the
     // difference between a command being obeyed and refused, and an agent left
     // believing in a revoked session is exactly what this message prevents.
-    if (resumed !== null && resumeMissionId !== null) {
+    if (resumed !== null && resumed !== "STILL_LIVE" && resumeMissionId !== null) {
       this.send(cloudSessionUpdate(resumeMissionId, null));
     }
   }

@@ -97,6 +97,8 @@ export type FakeCommandVerdict = {
 export class FakeLinkStore implements LinkStore, MissionChannelStore {
   readonly recorded: InboundMessageRecord[] = [];
   readonly linkUp: string[] = [];
+  /** Observatory.agentBootedAt (ADR-046). */
+  readonly agentBootedAt = new Map<string, Date>();
   readonly linkLost: { observatoryId: string; at: Date }[] = [];
   readonly postures: {
     observatoryId: string;
@@ -144,9 +146,12 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     return true;
   }
 
-  async markLinkUp(observatoryId: string) {
+  async markLinkUp(observatoryId: string, bootedAt: Date) {
     this.linkUp.push(observatoryId);
     this.audit("AGENT_LINK", "AGENT_LINK_UP", { entityId: observatoryId });
+    const previous = this.agentBootedAt.get(observatoryId);
+    this.agentBootedAt.set(observatoryId, bootedAt);
+    return { restarted: previous?.getTime() !== bootedAt.getTime() };
   }
 
   async markLinkLost(observatoryId: string, at: Date) {
@@ -400,12 +405,14 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   async resolveResumedMission(input: {
     observatoryId: string;
     missionId: string;
+    restarted: boolean;
     now: Date;
   }): Promise<ResumeOutcome> {
     const mission = this.missions.get(input.missionId);
     if (!mission) return "NOT_FOUND";
     if (mission.observatoryId !== input.observatoryId) return "WRONG_OBSERVATORY";
     if (!isLive(mission.state)) return "NOT_LIVE";
+    if (!input.restarted) return "STILL_LIVE";
 
     mission.state = "FAILED";
     mission.failureReason = "AGENT_LINK_LOST";

@@ -314,6 +314,58 @@ describe("an agent that restarted mid-mission", () => {
   });
 });
 
+// ADR-046
+describe("an agent that only reconnected mid-mission", () => {
+  it("keeps the mission live and its session standing, and remembers the process", async () => {
+    const booted = new Date(NOW.getTime() - 3_600_000);
+    const session = await database.missionSession.create({
+      data: {
+        missionId,
+        userId: ownerId,
+        issuedAt: NOW,
+        expiresAt: new Date(NOW.getTime() + 30 * 60_000),
+      },
+    });
+    await makeLink().receive(hello({ bootedAt: booted.toISOString() }));
+    sent = [];
+
+    const before = await database.mission.findUniqueOrThrow({ where: { id: missionId } });
+    await makeLink().receive(
+      hello({ bootedAt: booted.toISOString(), resumeMissionId: missionId }),
+    );
+
+    const after = await database.mission.findUniqueOrThrow({ where: { id: missionId } });
+    expect(after.state).toBe(before.state);
+    expect(after.failureReason).toBeNull();
+    const standing = await database.missionSession.findUniqueOrThrow({
+      where: { id: session.id },
+    });
+    expect(standing.revokedAt).toBeNull();
+    expect(await database.missionEvent.count({ where: { missionId } })).toBe(0);
+    expect(sent).toEqual([
+      expect.objectContaining({ type: "CLOUD_WELCOME", expectedMissionId: missionId }),
+    ]);
+
+    const row = await database.observatory.findUniqueOrThrow({
+      where: { id: observatory.id },
+    });
+    expect(row.agentBootedAt).toEqual(booted);
+  });
+
+  it("still ends it when the process that comes back is a new one", async () => {
+    await makeLink().receive(
+      hello({ bootedAt: new Date(NOW.getTime() - 3_600_000).toISOString() }),
+    );
+    await makeLink().receive(
+      hello({ bootedAt: NOW.toISOString(), resumeMissionId: missionId }),
+    );
+
+    const after = await database.mission.findUniqueOrThrow({ where: { id: missionId } });
+    expect(after.state).toBe("FAILED");
+    expect(after.failureReason).toBe("AGENT_LINK_LOST");
+  });
+});
+
 // #27 criterion 6
 /**
  * ADR-024 §5. The posture reaches the Observatory row, which is what the booking

@@ -515,6 +515,9 @@ model Observatory {
   agentPosture        AgentPosture?
   /// Why it disarmed. Set only while agentPosture is DISARMED.
   agentDisarmReason   DisarmReason?
+  /// The AgentHello.bootedAt last accepted (ADR-046). A hello naming a mission with
+  /// this same value is a reconnect and the mission stands; any other is a restart.
+  agentBootedAt       DateTime?
   isDemo              Boolean                 @default(false)
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt

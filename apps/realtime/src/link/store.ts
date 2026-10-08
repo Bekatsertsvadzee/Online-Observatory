@@ -239,7 +239,12 @@ export interface LinkStore {
    */
   recordInboundMessage(message: InboundMessageRecord): Promise<boolean>;
 
-  markLinkUp(observatoryId: string): Promise<void>;
+  /**
+   * ADR-046: also remembers the hello's `bootedAt` as `Observatory.agentBootedAt`, in
+   * the same step, and says whether it differs from the one remembered before. A
+   * different or unremembered process is a restart; the same one is a reconnect.
+   */
+  markLinkUp(observatoryId: string, bootedAt: Date): Promise<{ restarted: boolean }>;
   markLinkLost(observatoryId: string, at: Date): Promise<void>;
 
   /**
@@ -317,10 +322,15 @@ export interface LinkStore {
    * machine's progress, and reports the id in `AgentHello.resumeMissionId`. The
    * mount is already safe by the time this runs; what is left is the bookkeeping
    * the observatory cannot run another mission without.
+   *
+   * ADR-046: an agent that only reconnected -- the same process, `restarted` false --
+   * has not parked and still drives the mission, so a live mission is left as it is.
+   * Its own mission events say what happened during the gap.
    */
   resolveResumedMission(input: {
     observatoryId: string;
     missionId: string;
+    restarted: boolean;
     now: Date;
   }): Promise<ResumeOutcome>;
 
@@ -437,10 +447,12 @@ export type MissionEventOutcome =
 
 /**
  * - `RESOLVED` -- a live mission was failed and its session revoked.
+ * - `STILL_LIVE` -- a reconnect (ADR-046): the mission is live and left alone.
  * - `NOT_LIVE` -- nothing to do. The agent may report the same id twice if it
  *   restarted again before reaching the cloud, and that is not an error.
  */
-export type ResumeOutcome = "RESOLVED" | "NOT_LIVE" | "WRONG_OBSERVATORY" | "NOT_FOUND";
+export type ResumeOutcome =
+  "RESOLVED" | "STILL_LIVE" | "NOT_LIVE" | "WRONG_OBSERVATORY" | "NOT_FOUND";
 
 export type CommandVerdictRecord = {
   /** The observatory the reporting agent authenticated as. Scopes the write. */

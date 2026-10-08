@@ -2361,13 +2361,16 @@ export type AgentHello = {
      * Set only while posture is DISARMED.
      */
     disarmReason?: DisarmReason | null;
+    /**
+     * When the agent process started, taken once at start-up. The cloud compares it to the last one it accepted to tell a reconnect from a restart (ADR-046).
+     */
     bootedAt: string;
     /**
      * False while maxAltitudeDegrees is unmeasured. The cloud must not schedule a mission against an agent reporting false.
      */
     safetyEnvelopeConfigured?: boolean;
     /**
-     * Set when the agent restarts holding a mission recovered from its local state store.
+     * The mission the agent is holding, sent on every hello while one is active. With the same bootedAt as before it is a reconnect and the mission stands; otherwise a restart, and the cloud closes the mission out (ADR-046).
      */
     resumeMissionId?: string | null;
 };

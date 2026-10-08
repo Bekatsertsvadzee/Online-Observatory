@@ -80,11 +80,18 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
      * that is what these rows are for. Both writes are in one transaction with the
      * status change so the account and the state cannot disagree.
      */
-    async markLinkUp(observatoryId: string): Promise<void> {
-      await database.$transaction(async (tx) => {
+    async markLinkUp(
+      observatoryId: string,
+      bootedAt: Date,
+    ): Promise<{ restarted: boolean }> {
+      return database.$transaction(async (tx) => {
+        const previous = await tx.observatory.findUnique({
+          where: { id: observatoryId },
+          select: { agentBootedAt: true },
+        });
         await tx.observatory.update({
           where: { id: observatoryId },
-          data: { status: "ONLINE", linkLostAt: null },
+          data: { status: "ONLINE", linkLostAt: null, agentBootedAt: bootedAt },
         });
         await recordAuditEvent(
           {
@@ -95,6 +102,9 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
           },
           tx,
         );
+        return {
+          restarted: previous?.agentBootedAt?.getTime() !== bootedAt.getTime(),
+        };
       });
     },
 
@@ -481,17 +491,23 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
     async resolveResumedMission(input: {
       observatoryId: string;
       missionId: string;
+      restarted: boolean;
       now: Date;
     }): Promise<ResumeOutcome> {
-      const { observatoryId, missionId, now } = input;
+      const { observatoryId, missionId, restarted, now } = input;
 
       return database.$transaction(async (tx) => {
         const mission = await tx.mission.findUnique({
           where: { id: missionId },
-          select: { observatoryId: true, mode: true, isDemo: true },
+          select: { observatoryId: true, mode: true, isDemo: true, state: true },
         });
         if (!mission) return "NOT_FOUND";
         if (mission.observatoryId !== observatoryId) return "WRONG_OBSERVATORY";
+        // ADR-046: the same process is still driving it. Nothing to close.
+        if (!restarted)
+          return (LIVE_MISSION_STATES as readonly string[]).includes(mission.state)
+            ? "STILL_LIVE"
+            : "NOT_LIVE";
 
         const { count } = await tx.mission.updateMany({
           where: {
