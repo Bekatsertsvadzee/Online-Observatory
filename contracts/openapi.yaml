@@ -169,6 +169,11 @@ paths:
 
         The link points at the web client, APP_URL/{locale}/verify-email/{token},
         which posts the token to /auth/verify-email.
+
+        ADR-049: on the demo deployment, when the platform has no way to send email, a
+        new address is verified at once and signed in -- 200 with the User and the
+        session cookies set, as /auth/sign-in answers. An address that already holds
+        an account is still 202 with no session.
       security: []
       requestBody:
         required: true
@@ -177,6 +182,12 @@ paths:
             schema:
               $ref: "#/components/schemas/RegisterRequest"
       responses:
+        "200":
+          description: ADR-049. Verified at once and signed in. Sets the session cookies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
         "202":
           description: Accepted. A verification link is sent if one is owed.
         "400":
