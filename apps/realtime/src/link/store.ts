@@ -240,11 +240,32 @@ export interface LinkStore {
   recordInboundMessage(message: InboundMessageRecord): Promise<boolean>;
 
   /**
-   * ADR-046: also remembers the hello's `bootedAt` as `Observatory.agentBootedAt`, in
-   * the same step, and says whether it differs from the one remembered before. A
-   * different or unremembered process is a restart; the same one is a reconnect.
+   * The hello, in one step: the link is up, the process is remembered, and the
+   * mission the agent holds -- or does not -- is settled against the cloud's.
+   *
+   * ADR-046: `bootedAt` is remembered as `Observatory.agentBootedAt` and compared to
+   * the one remembered before. The same process only reconnected, so the mission it
+   * names is left as it is. A different or unremembered one restarted: it has parked
+   * and lost the state machine's progress (DV-027), so the mission it names is closed
+   * out -- FAILED, `AGENT_LINK_LOST`, its session revoked. The mount is already safe
+   * by the time this runs; what is left is the bookkeeping the observatory cannot
+   * run another mission without.
+   *
+   * ADR-047: a restarted process that names no mission lost its local state store
+   * too, and the observatory's live mission, if there is one, has nothing driving
+   * it. It is closed out the same way. Nothing remembered closes nothing in that
+   * case: the cloud cannot say which process drove it.
+   *
+   * One transaction. Remembering the process and settling the mission in two steps
+   * would let a crash between them turn a stranded mission into a "reconnect" on
+   * the next hello, and it would never close.
    */
-  markLinkUp(observatoryId: string, bootedAt: Date): Promise<{ restarted: boolean }>;
+  markLinkUp(input: {
+    observatoryId: string;
+    bootedAt: Date;
+    resumeMissionId: string | null;
+    now: Date;
+  }): Promise<{ restarted: boolean; resumed: ResumeOutcome | null }>;
   markLinkLost(observatoryId: string, at: Date): Promise<void>;
 
   /**
@@ -313,26 +334,6 @@ export interface LinkStore {
    * observatory and must not be able to move another's mission.
    */
   applyMissionEvent(event: MissionEventRecord): Promise<MissionEventOutcome>;
-
-  /**
-   * Close out the mission an agent came back holding.
-   *
-   * DV-027: an agent that restarts mid-observation recovers the mission id from
-   * its local state store, parks the mount because it has lost the state
-   * machine's progress, and reports the id in `AgentHello.resumeMissionId`. The
-   * mount is already safe by the time this runs; what is left is the bookkeeping
-   * the observatory cannot run another mission without.
-   *
-   * ADR-046: an agent that only reconnected -- the same process, `restarted` false --
-   * has not parked and still drives the mission, so a live mission is left as it is.
-   * Its own mission events say what happened during the gap.
-   */
-  resolveResumedMission(input: {
-    observatoryId: string;
-    missionId: string;
-    restarted: boolean;
-    now: Date;
-  }): Promise<ResumeOutcome>;
 
   /**
    * ADR-018 §4: close every booked mission nobody started before its slot ended.
@@ -446,6 +447,9 @@ export type MissionEventOutcome =
   "APPLIED" | "RECORDED" | "WRONG_OBSERVATORY" | "NOT_FOUND";
 
 /**
+ * What `markLinkUp` did about the mission the agent named, or -- after a restart
+ * that named none (ADR-047) -- about the observatory's live mission.
+ *
  * - `RESOLVED` -- a live mission was failed and its session revoked.
  * - `STILL_LIVE` -- a reconnect (ADR-046): the mission is live and left alone.
  * - `NOT_LIVE` -- nothing to do. The agent may report the same id twice if it

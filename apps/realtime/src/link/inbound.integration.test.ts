@@ -364,6 +364,41 @@ describe("an agent that only reconnected mid-mission", () => {
     expect(after.state).toBe("FAILED");
     expect(after.failureReason).toBe("AGENT_LINK_LOST");
   });
+
+  // ADR-047: the hosted demo's machine sleeps with no volume under it, so the agent
+  // that wakes has neither the process nor the state store that held the mission.
+  it("ends it when a new process comes back holding nothing, and frees the observatory", async () => {
+    const session = await database.missionSession.create({
+      data: {
+        missionId,
+        userId: ownerId,
+        issuedAt: NOW,
+        expiresAt: new Date(NOW.getTime() + 30 * 60_000),
+      },
+    });
+    await makeLink().receive(
+      hello({ bootedAt: new Date(NOW.getTime() - 3_600_000).toISOString() }),
+    );
+    sent = [];
+
+    await makeLink().receive(hello({ bootedAt: NOW.toISOString() }));
+
+    const after = await database.mission.findUniqueOrThrow({ where: { id: missionId } });
+    expect(after.state).toBe("FAILED");
+    expect(after.failureReason).toBe("AGENT_LINK_LOST");
+    const revoked = await database.missionSession.findUniqueOrThrow({
+      where: { id: session.id },
+    });
+    expect(revoked.revokedFor).toBe("AGENT_LINK_LOST");
+    const event = await database.missionEvent.findFirstOrThrow({ where: { missionId } });
+    expect(event.source).toBe("CLOUD");
+    expect(sent).toEqual([
+      expect.objectContaining({ type: "CLOUD_WELCOME", expectedMissionId: null }),
+    ]);
+
+    const second = await startAnotherMission();
+    expect(second.id).not.toBe(missionId);
+  });
 });
 
 // #27 criterion 6

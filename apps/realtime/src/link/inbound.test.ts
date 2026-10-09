@@ -378,12 +378,45 @@ describe("a reconnect is not a restart (ADR-046)", () => {
 
   it("reads a hello with nothing remembered as a restart", async () => {
     const fresh = new FakeLinkStore();
-    expect((await fresh.markLinkUp(observatory.id, new Date(BOOTED))).restarted).toBe(
-      true,
-    );
-    expect((await fresh.markLinkUp(observatory.id, new Date(BOOTED))).restarted).toBe(
-      false,
-    );
+    const linkUp = {
+      observatoryId: observatory.id,
+      bootedAt: new Date(BOOTED),
+      resumeMissionId: null,
+      now: new Date(now),
+    };
+    expect((await fresh.markLinkUp(linkUp)).restarted).toBe(true);
+    expect((await fresh.markLinkUp(linkUp)).restarted).toBe(false);
+  });
+
+  // ADR-047: the hosted demo's machine sleeps with no volume under it, so the agent
+  // that wakes has neither the process nor the state store that held the mission.
+  it("closes the live mission out when a new process comes back holding nothing", async () => {
+    now += 60_000;
+    await makeLink().receive(hello({ bootedAt: new Date(now).toISOString() }));
+
+    expect(store.mission(MISSION_ID)).toMatchObject({
+      state: "FAILED",
+      failureReason: "AGENT_LINK_LOST",
+    });
+    expect(store.revoked).toEqual([{ sessionId: SESSION_ID, reason: "AGENT_LINK_LOST" }]);
+    expect(store.missionEvents.at(-1)).toMatchObject({ state: "FAILED", source: "CLOUD" });
+    // Nothing to tell it: the agent holds no mission to be relieved of.
+    expect(sent).toEqual([
+      expect.objectContaining({ type: "CLOUD_WELCOME", expectedMissionId: null }),
+    ]);
+  });
+
+  it("leaves the live mission alone when the same process comes back holding nothing", async () => {
+    // A blip between the mission being minted and its GOTO reaching the agent: the
+    // pending command is relayed on reconnect, so the mission is still going somewhere.
+    now += 2_000;
+    await makeLink().receive(hello({ bootedAt: BOOTED }));
+
+    expect(store.mission(MISSION_ID)?.state).toBe("CAPTURING");
+    expect(store.revoked).toEqual([]);
+    expect(sent).toEqual([
+      expect.objectContaining({ type: "CLOUD_WELCOME", expectedMissionId: MISSION_ID }),
+    ]);
   });
 });
 

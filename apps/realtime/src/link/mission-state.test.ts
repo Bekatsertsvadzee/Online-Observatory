@@ -97,30 +97,45 @@ describe("a network blip leaves the mission live (ADR-046)", () => {
   // `AgentHello.resumeMissionId` is sent on every hello while a mission is active, a
   // reconnect after a two-second blip included. Only a new process -- a different
   // `bootedAt` -- has parked and lost the state machine's progress.
+  const BOOTED = new Date("2026-12-15T19:00:00.000Z");
+
+  function linkUp(store: FakeLinkStore, bootedAt: Date, resumeMissionId: string | null) {
+    return store.markLinkUp({ observatoryId: OBS, bootedAt, resumeMissionId, now: new Date() });
+  }
+
   it("keeps an OBSERVING mission live when the agent reconnects holding it", async () => {
     const store = new FakeLinkStore();
     store.addMission(MISSION, { observatoryId: OBS, state: "OBSERVING" });
-    const outcome = await store.resolveResumedMission({
-      observatoryId: OBS,
-      missionId: MISSION,
-      restarted: false,
-      now: new Date(),
-    });
-    expect(outcome).toBe("STILL_LIVE");
+    await linkUp(store, BOOTED, null);
+    const { resumed } = await linkUp(store, BOOTED, MISSION);
+    expect(resumed).toBe("STILL_LIVE");
     expect(store.mission(MISSION)?.state).toBe("OBSERVING");
   });
 
   it("still closes it out when the agent restarted holding it", async () => {
     const store = new FakeLinkStore();
     store.addMission(MISSION, { observatoryId: OBS, state: "OBSERVING" });
-    const outcome = await store.resolveResumedMission({
-      observatoryId: OBS,
-      missionId: MISSION,
-      restarted: true,
-      now: new Date(),
-    });
-    expect(outcome).toBe("RESOLVED");
+    await linkUp(store, BOOTED, null);
+    const { resumed } = await linkUp(store, new Date(BOOTED.getTime() + 60_000), MISSION);
+    expect(resumed).toBe("RESOLVED");
     expect(store.mission(MISSION)?.state).toBe("FAILED");
   });
-});
 
+  // ADR-047
+  it("closes it out when the agent restarted holding nothing", async () => {
+    const store = new FakeLinkStore();
+    store.addMission(MISSION, { observatoryId: OBS, state: "OBSERVING" });
+    await linkUp(store, BOOTED, null);
+    const { resumed } = await linkUp(store, new Date(BOOTED.getTime() + 60_000), null);
+    expect(resumed).toBe("RESOLVED");
+    expect(store.mission(MISSION)?.state).toBe("FAILED");
+  });
+
+  it("closes nothing when nothing is remembered and nothing is held", async () => {
+    const store = new FakeLinkStore();
+    store.addMission(MISSION, { observatoryId: OBS, state: "OBSERVING" });
+    const { resumed } = await linkUp(store, BOOTED, null);
+    expect(resumed).toBeNull();
+    expect(store.mission(MISSION)?.state).toBe("OBSERVING");
+  });
+});

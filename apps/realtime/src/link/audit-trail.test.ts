@@ -139,7 +139,12 @@ describe("the link's own history", () => {
   it("writes a row every time it drops, not just the latest", async () => {
     const lostAt = new Date(now);
     await store.markLinkLost(observatory.id, lostAt);
-    await store.markLinkUp(observatory.id, new Date(now));
+    await store.markLinkUp({
+      observatoryId: observatory.id,
+      bootedAt: new Date(now),
+      resumeMissionId: null,
+      now: new Date(now),
+    });
     await store.markLinkLost(observatory.id, new Date(now + 60_000));
 
     // Observatory.status answers "is it up now". Reconstructing a night needs the

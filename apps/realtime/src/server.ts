@@ -110,6 +110,14 @@ export function createRealtimeServer(
   const live = new LiveStream(appUrl, streamSecret);
   const broadcast = new MissionRelay(store, missions, live);
   const httpServer = createServer((request, response) => {
+    // The hosted demo's health check (deploy/fly). Database-free on purpose: it says
+    // the process is up and listening, which is what the front needs to know to send
+    // traffic here; the database dropping is reported by the requests that need it.
+    if (request.method === "GET" && request.url === "/healthz") {
+      response.writeHead(204).end();
+      return;
+    }
+
     // ADR-017: the API's read of live telemetry. Synchronous and database-free, so
     // it is answered before the stream handler and cannot reject.
     if (

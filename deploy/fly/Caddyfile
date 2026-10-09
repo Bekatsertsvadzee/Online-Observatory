@@ -14,6 +14,12 @@
 		respond 404
 	}
 
+	# Fly's health check (fly.toml). Proxied to realtime, not answered here: a front
+	# whose realtime is gone is not healthy. Realtime answers it without a database.
+	handle /healthz {
+		reverse_proxy 127.0.0.1:4001
+	}
+
 	# The mission channel's WebSocket and the MJPEG stream (ADR-011).
 	@realtime path /ws/mission/* /stream/mission/*
 	handle @realtime {

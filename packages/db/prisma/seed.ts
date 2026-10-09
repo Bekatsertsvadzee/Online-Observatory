@@ -113,14 +113,14 @@ async function seedDevelopmentDatabase() {
       create: {
         id: DEMO_IDS.observer,
         email: DEMO_ACCOUNT_EMAILS.observer,
-        name: "[DEMO] Darkview Observer",
+        name: "[DEMO] Stellar Observer",
         role: "USER",
         emailVerifiedAt: new Date("2026-08-01T00:00:00.000Z"),
         isDemo: true,
       },
       update: {
         email: DEMO_ACCOUNT_EMAILS.observer,
-        name: "[DEMO] Darkview Observer",
+        name: "[DEMO] Stellar Observer",
         role: "USER",
         emailVerifiedAt: new Date("2026-08-01T00:00:00.000Z"),
         isDemo: true,
@@ -185,8 +185,8 @@ async function seedDevelopmentDatabase() {
       create: {
         id: DEMO_IDS.observatory,
         slug: "demo-tbilisi",
-        nameEn: "[DEMO] Darkview Tbilisi Observatory",
-        nameKa: "[დემო] Darkview თბილისის ობსერვატორია",
+        nameEn: "[DEMO] Stellar Tbilisi Observatory",
+        nameKa: "[დემო] სტელარის თბილისის ობსერვატორია",
         city: "Tbilisi",
         countryCode: "GE",
         latitude: 41.7151,
@@ -198,8 +198,8 @@ async function seedDevelopmentDatabase() {
         isDemo: true,
       },
       update: {
-        nameEn: "[DEMO] Darkview Tbilisi Observatory",
-        nameKa: "[დემო] Darkview თბილისის ობსერვატორია",
+        nameEn: "[DEMO] Stellar Tbilisi Observatory",
+        nameKa: "[დემო] სტელარის თბილისის ობსერვატორია",
         status: "ONLINE",
         mode: "SIMULATED",
         deviceTokenHash: demoDeviceTokenHash,
@@ -338,8 +338,8 @@ async function seedDevelopmentDatabase() {
       create: {
         id: DEMO_IDS.nightObservatory,
         slug: "demo-night-side",
-        nameEn: "[DEMO] Darkview Night-side Simulator",
-        nameKa: "[დემო] Darkview ღამის მხარის სიმულატორი",
+        nameEn: "[DEMO] Stellar Night-side Simulator",
+        nameKa: "[დემო] სტელარის ღამის მხარის სიმულატორი",
         city: "Mauna Kea",
         countryCode: "US",
         latitude: DEMO_NIGHT_SITE.latitude,
@@ -351,8 +351,8 @@ async function seedDevelopmentDatabase() {
         isDemo: true,
       },
       update: {
-        nameEn: "[DEMO] Darkview Night-side Simulator",
-        nameKa: "[დემო] Darkview ღამის მხარის სიმულატორი",
+        nameEn: "[DEMO] Stellar Night-side Simulator",
+        nameKa: "[დემო] სტელარის ღამის მხარის სიმულატორი",
         latitude: DEMO_NIGHT_SITE.latitude,
         longitude: DEMO_NIGHT_SITE.longitude,
         timezone: DEMO_NIGHT_SITE.timezone,
@@ -494,7 +494,7 @@ async function seedDevelopmentDatabase() {
       [DEMO_MISSIONS[2].id, "PREPARING", "[DEMO] Simulator safety checks passed", "186"],
       [DEMO_MISSIONS[2].id, "COMPLETE", "[DEMO] Simulated mission completed", "187"],
       [DEMO_MISSIONS[3].id, "SCHEDULED", "[DEMO] Simulated mission scheduled", "188"],
-      [DEMO_MISSIONS[4].id, "OBSERVING", "[DEMO] Shared mission is live", "189"],
+      [DEMO_MISSIONS[4].id, "COMPLETE", "[DEMO] Shared mission completed", "189"],
     ] as const;
 
     for (const [missionId, state, message, suffix] of missionEvents) {
@@ -601,14 +601,15 @@ async function seedDevelopmentDatabase() {
         id: DEMO_IDS.liveParticipant,
         missionId: DEMO_MISSIONS[4].id,
         userId: DEMO_IDS.viewer,
-        status: "JOINED",
+        status: "LEFT",
         canSaveCaptures: false,
+        leftAt: DEMO_MISSIONS[4].completedAt,
         isDemo: true,
       },
       update: {
-        status: "JOINED",
+        status: "LEFT",
         canSaveCaptures: false,
-        leftAt: null,
+        leftAt: DEMO_MISSIONS[4].completedAt,
         isDemo: true,
       },
     });

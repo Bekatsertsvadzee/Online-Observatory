@@ -18,11 +18,24 @@ export S3_SECRET_ACCESS_KEY="${S3_SECRET_ACCESS_KEY:-${AWS_SECRET_ACCESS_KEY:-}}
 
 mkdir -p /data
 
+# This script is PID 1. Fly stops the machine with a signal to it, and a shell does
+# not pass one on to background jobs by itself; without this the stop waits out
+# kill_timeout and the agents are killed mid-heartbeat instead of exiting.
+trap 'kill 0' TERM INT
+
 cd /app
 npm start --workspace @darkview/realtime &
 
-# No health route: listening on the port is the signal.
+# Bounded. A realtime that never listens -- the database unreachable, a secret
+# missing -- used to leave this loop spinning for the life of the machine, with no
+# front up to fail the health check: a machine "started" and serving nothing.
+waited=0
 until node -e "require('net').connect(4001,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"; do
+  waited=$((waited + 1))
+  if [ "$waited" -ge 60 ]; then
+    echo "start.sh: realtime did not listen on 4001 within 60 s" >&2
+    exit 1
+  fi
   sleep 1
 done
 

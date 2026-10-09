@@ -33,6 +33,7 @@ class ErrorCode(StrEnum):
     bad_request = 'BAD_REQUEST'
     unauthenticated = 'UNAUTHENTICATED'
     forbidden = 'FORBIDDEN'
+    email_unverified = 'EMAIL_UNVERIFIED'
     not_found = 'NOT_FOUND'
     conflict = 'CONFLICT'
     validation_failed = 'VALIDATION_FAILED'

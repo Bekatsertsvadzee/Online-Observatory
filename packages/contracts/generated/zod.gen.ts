@@ -15,6 +15,7 @@ export const zErrorCode = z.enum([
     'BAD_REQUEST',
     'UNAUTHENTICATED',
     'FORBIDDEN',
+    'EMAIL_UNVERIFIED',
     'NOT_FOUND',
     'CONFLICT',
     'VALIDATION_FAILED',

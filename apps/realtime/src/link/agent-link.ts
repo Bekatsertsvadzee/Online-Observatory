@@ -650,31 +650,24 @@ export class AgentLink {
 
     await this.record(message);
     this.state = "ONLINE";
-    const { restarted } = await this.store.markLinkUp(
-      this.observatory.id,
-      new Date(message.bootedAt),
-    );
-    await this.applyPosture(message.posture, message.disarmReason ?? null);
-
     // resumeMissionId is the mission the agent is holding, sent on every hello while
     // one is active. ADR-046: `bootedAt` says whether this is the process the cloud
     // last accepted. If it is, the link only blipped: the agent's watchdog rode it
     // out and still drives the mission, so it stands. If not, the agent restarted,
     // recovered the id from its local state store (DV-027) and has already parked,
-    // because it lost the state machine's progress. What is left is bookkeeping --
-    // and until it is done, the mission sits in a live state and
-    // Mission_active_per_observatory_unique holds the observatory shut against
+    // because it lost the state machine's progress. ADR-047: a restarted agent that
+    // names no mission lost the store too, and whatever the observatory had live is
+    // closed out the same way. Until that is done, the mission sits in a live state
+    // and Mission_active_per_observatory_unique holds the observatory shut against
     // every later booking.
     const resumeMissionId = message.resumeMissionId ?? null;
-    const resumed =
-      resumeMissionId === null
-        ? null
-        : await this.store.resolveResumedMission({
-            observatoryId: this.observatory.id,
-            missionId: resumeMissionId,
-            restarted,
-            now: new Date(this.now()),
-          });
+    const { resumed } = await this.store.markLinkUp({
+      observatoryId: this.observatory.id,
+      bootedAt: new Date(message.bootedAt),
+      resumeMissionId,
+      now: new Date(this.now()),
+    });
+    await this.applyPosture(message.posture, message.disarmReason ?? null);
 
     // Read after the recovery above, not assumed. After one it is null -- stated,
     // which is not the same as defaulted.

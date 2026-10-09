@@ -145,13 +145,16 @@ export const DEMO_MISSIONS = [
     isDemo: true,
   },
   {
+    // The shared mission. COMPLETE, not OBSERVING: a seeded live mission never ends,
+    // and Mission_active_per_observatory_unique would then refuse every real session
+    // at the demo observatory (the hosted demo's 409 on session start, 2026-10-08).
     id: "00000000-0000-4000-8000-000000000205",
     targetId: PHASE1_TARGETS[0].id,
-    state: "OBSERVING",
+    state: "COMPLETE",
     requestedAt: new Date("2026-08-25T21:00:00.000Z"),
     scheduledFor: new Date("2026-08-25T21:30:00.000Z"),
     startedAt: new Date("2026-08-25T21:32:00.000Z"),
-    completedAt: null,
+    completedAt: new Date("2026-08-25T21:58:00.000Z"),
     sharingMode: "PUBLIC",
     joinPolicy: "OPEN",
     allowSharedCaptures: false,

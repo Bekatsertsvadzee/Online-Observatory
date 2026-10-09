@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { PrismaPg } from "@prisma/adapter-pg";
 
-import { PrismaClient } from "@darkview/db";
+import { type Prisma, PrismaClient } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
 import { CAPTURE_CONTRACT_COLUMNS, toContractCapture } from "@darkview/db/capture";
 import { queueEmail } from "@darkview/db/notifications";
@@ -80,15 +80,47 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
      * that is what these rows are for. Both writes are in one transaction with the
      * status change so the account and the state cannot disagree.
      */
-    async markLinkUp(
-      observatoryId: string,
-      bootedAt: Date,
-    ): Promise<{ restarted: boolean }> {
+    async markLinkUp({ observatoryId, bootedAt, resumeMissionId, now }) {
       return database.$transaction(async (tx) => {
         const previous = await tx.observatory.findUnique({
           where: { id: observatoryId },
           select: { agentBootedAt: true },
         });
+        const remembered = previous?.agentBootedAt ?? null;
+        const restarted = remembered?.getTime() !== bootedAt.getTime();
+
+        // Settled before the process is remembered, inside the same transaction:
+        // a hello that is rolled back leaves the next one reading this process as
+        // unremembered, which is the restart it is.
+        let resumed: ResumeOutcome | null = null;
+        if (resumeMissionId !== null) {
+          resumed = await settleHeldMission(tx, {
+            observatoryId,
+            missionId: resumeMissionId,
+            restarted,
+            now,
+            message:
+              "Agent restarted holding this mission. The mount parked locally and the cloud closed the mission out.",
+          });
+        } else if (restarted && remembered !== null) {
+          // ADR-047: a new process that names no mission has lost its state store
+          // as well. Whatever was live under the old one has nothing driving it.
+          const live = await tx.mission.findFirst({
+            where: { observatoryId, state: { in: [...LIVE_MISSION_STATES] } },
+            select: { id: true },
+          });
+          if (live) {
+            resumed = await settleHeldMission(tx, {
+              observatoryId,
+              missionId: live.id,
+              restarted,
+              now,
+              message:
+                "Agent restarted without the mission it was holding. Nothing is driving it, so the cloud closed the mission out.",
+            });
+          }
+        }
+
         await tx.observatory.update({
           where: { id: observatoryId },
           data: { status: "ONLINE", linkLostAt: null, agentBootedAt: bootedAt },
@@ -102,9 +134,7 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
           },
           tx,
         );
-        return {
-          restarted: previous?.agentBootedAt?.getTime() !== bootedAt.getTime(),
-        };
+        return { restarted, resumed };
       });
     },
 
@@ -488,79 +518,6 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       });
     },
 
-    async resolveResumedMission(input: {
-      observatoryId: string;
-      missionId: string;
-      restarted: boolean;
-      now: Date;
-    }): Promise<ResumeOutcome> {
-      const { observatoryId, missionId, restarted, now } = input;
-
-      return database.$transaction(async (tx) => {
-        const mission = await tx.mission.findUnique({
-          where: { id: missionId },
-          select: { observatoryId: true, mode: true, isDemo: true, state: true },
-        });
-        if (!mission) return "NOT_FOUND";
-        if (mission.observatoryId !== observatoryId) return "WRONG_OBSERVATORY";
-        // ADR-046: the same process is still driving it. Nothing to close.
-        if (!restarted)
-          return (LIVE_MISSION_STATES as readonly string[]).includes(mission.state)
-            ? "STILL_LIVE"
-            : "NOT_LIVE";
-
-        const { count } = await tx.mission.updateMany({
-          where: {
-            id: missionId,
-            observatoryId,
-            state: { in: [...LIVE_MISSION_STATES] },
-          },
-          data: { state: "FAILED", failureReason: "AGENT_LINK_LOST" },
-        });
-        // Already finished. The agent reports the same id on every attempt until
-        // the link is genuinely online, so a second restart before it got through
-        // arrives here twice; that is the recovery path working, not an error.
-        if (count === 0) return "NOT_LIVE";
-
-        // CLOUD, not AGENT: the agent reported which mission it was holding, the
-        // cloud decided the outcome. Who resolved a mission belongs in the trail.
-        await tx.missionEvent.create({
-          data: {
-            missionId,
-            state: "FAILED",
-            source: "CLOUD",
-            message:
-              "Agent restarted holding this mission. The mount parked locally and the cloud closed the mission out.",
-            occurredAt: now,
-            simulated: mission.mode === "SIMULATED",
-            isDemo: mission.isDemo,
-          },
-        });
-
-        // The mission is over, so nobody owns it. Leaving the session alive would
-        // leave the agent holding an owner for a mission that no longer exists.
-        await tx.missionSession.updateMany({
-          where: { missionId, revokedAt: null },
-          data: { revokedAt: now, revokedFor: "AGENT_LINK_LOST" },
-        });
-
-        await recordAuditEvent(
-          {
-            category: "MISSION",
-            action: "MISSION_RESOLVED_AFTER_AGENT_RESTART",
-            missionId,
-            entityType: "Observatory",
-            entityId: observatoryId,
-            detail: { failureReason: "AGENT_LINK_LOST" },
-            isDemo: mission.isDemo,
-          },
-          tx,
-        );
-
-        return "RESOLVED";
-      });
-    },
-
     async recordCommandVerdict(
       verdict: CommandVerdictRecord,
     ): Promise<CommandVerdictOutcome> {
@@ -792,6 +749,84 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
  * state, the event, the revocation and the audit row, and the agent is told nobody
  * owns the mission on the same commit, as the API tells it about a new owner.
  */
+/**
+ * Close out the mission an agent came back holding, or -- after a restart that named
+ * none (ADR-047) -- the one the observatory had live. `markLinkUp`'s transaction.
+ */
+async function settleHeldMission(
+  tx: Prisma.TransactionClient,
+  input: {
+    observatoryId: string;
+    missionId: string;
+    restarted: boolean;
+    now: Date;
+    message: string;
+  },
+): Promise<ResumeOutcome> {
+  const { observatoryId, missionId, restarted, now } = input;
+
+  const mission = await tx.mission.findUnique({
+    where: { id: missionId },
+    select: { observatoryId: true, mode: true, isDemo: true, state: true },
+  });
+  if (!mission) return "NOT_FOUND";
+  if (mission.observatoryId !== observatoryId) return "WRONG_OBSERVATORY";
+  // ADR-046: the same process is still driving it. Nothing to close.
+  if (!restarted)
+    return (LIVE_MISSION_STATES as readonly string[]).includes(mission.state)
+      ? "STILL_LIVE"
+      : "NOT_LIVE";
+
+  const { count } = await tx.mission.updateMany({
+    where: {
+      id: missionId,
+      observatoryId,
+      state: { in: [...LIVE_MISSION_STATES] },
+    },
+    data: { state: "FAILED", failureReason: "AGENT_LINK_LOST" },
+  });
+  // Already finished. The agent reports the same id on every attempt until the
+  // link is genuinely online, so a second restart before it got through arrives
+  // here twice; that is the recovery path working, not an error.
+  if (count === 0) return "NOT_LIVE";
+
+  // CLOUD, not AGENT: the agent reported what it held, the cloud decided the
+  // outcome. Who resolved a mission belongs in the trail.
+  await tx.missionEvent.create({
+    data: {
+      missionId,
+      state: "FAILED",
+      source: "CLOUD",
+      message: input.message,
+      occurredAt: now,
+      simulated: mission.mode === "SIMULATED",
+      isDemo: mission.isDemo,
+    },
+  });
+
+  // The mission is over, so nobody owns it. Leaving the session alive would leave
+  // the agent holding an owner for a mission that no longer exists.
+  await tx.missionSession.updateMany({
+    where: { missionId, revokedAt: null },
+    data: { revokedAt: now, revokedFor: "AGENT_LINK_LOST" },
+  });
+
+  await recordAuditEvent(
+    {
+      category: "MISSION",
+      action: "MISSION_RESOLVED_AFTER_AGENT_RESTART",
+      missionId,
+      entityType: "Observatory",
+      entityId: observatoryId,
+      detail: { failureReason: "AGENT_LINK_LOST" },
+      isDemo: mission.isDemo,
+    },
+    tx,
+  );
+
+  return "RESOLVED";
+}
+
 async function failRefusedStart(
   database: PrismaClient,
   input: {

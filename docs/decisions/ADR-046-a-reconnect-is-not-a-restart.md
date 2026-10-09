@@ -9,6 +9,8 @@
   P1 by the clients' test audit of 2026-10-07
 - **Amends:** `ADR-010-agent-local-state-store.md`, which gave `AgentHello.resumeMissionId`
   its meaning
+- **Amended by:** `ADR-047-a-restart-that-forgot-its-mission-still-ends-it.md`, for a
+  restart whose hello names no mission
 
 ## Context
 
