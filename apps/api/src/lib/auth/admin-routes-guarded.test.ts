@@ -59,6 +59,17 @@ const SESSION_ISSUING = new Set([
   "auth/password-reset/confirm/route.ts",
 ]);
 
+/**
+ * ADR-048: the two legs of a Google sign-in. GET navigations a browser follows, so
+ * they carry no Origin to check; the callback is held to the state cookie the
+ * start set instead, and nothing changes until it matches. They issue a session
+ * too, but through a redirect rather than a JSON answer.
+ */
+const GOOGLE_NAVIGATIONS = new Set([
+  "auth/google/start/route.ts",
+  "auth/google/callback/route.ts",
+]);
+
 describe("every admin route is behind the operator guard", () => {
   const adminRoutes = routeFilesUnder(adminDirectory);
 
@@ -116,7 +127,8 @@ describe("every admin route is behind the operator guard", () => {
           !publicRoutes.has(segment) &&
           !publicFiles.has(relative) &&
           !SIGNED_SERVER_TO_SERVER.has(relative) &&
-          !SESSION_ISSUING.has(relative)
+          !SESSION_ISSUING.has(relative) &&
+          !GOOGLE_NAVIGATIONS.has(relative)
         );
       })
       .filter((file) => {

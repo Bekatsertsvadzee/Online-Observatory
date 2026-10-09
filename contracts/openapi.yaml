@@ -258,6 +258,55 @@ paths:
         "429":
           $ref: "#/components/responses/TooManyRequests"
 
+  /auth/google/start:
+    get:
+      operationId: googleSignInStart
+      tags: [identity]
+      summary: Send the browser to Google to sign in.
+      description: |
+        ADR-048. A navigation, not an API call: the client links to it. Sets a short-lived
+        state cookie and answers 303 to Google's consent page. Google sends the browser
+        back to /auth/google/callback. When Google is not configured on the platform the
+        303 goes to APP_URL/{locale}/sign-in?error=google instead.
+      security: []
+      parameters:
+        - name: locale
+          in: query
+          required: false
+          description: Where the visitor lands afterwards. Anything but `ka` is `en`.
+          schema:
+            $ref: "#/components/schemas/Locale"
+      responses:
+        "303":
+          description: See Other. Google's consent page, or the sign-in page with `error=google`.
+
+  /auth/google/callback:
+    get:
+      operationId: googleSignInCallback
+      tags: [identity]
+      summary: Complete a Google sign-in and issue a session.
+      description: |
+        ADR-048. Where Google sends the browser back. The state must match the cookie
+        /auth/google/start set; the code is exchanged for Google's ID token on the
+        platform, never in the browser. A verified Google address signs in the account
+        that holds it, or creates one. Sets the session cookies and answers 303 to
+        APP_URL/{locale}/app, or to APP_URL/{locale}/sign-in?error=google on any failure.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "303":
+          description: See Other. The app, or the sign-in page with `error=google`.
+
   /auth/sign-out:
     post:
       operationId: signOut
