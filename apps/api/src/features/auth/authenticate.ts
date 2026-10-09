@@ -85,8 +85,10 @@ export async function signIn(
     await recordAuthEvent("LOGIN_FAILED", { actor: identity });
     return refuse(401, "UNAUTHENTICATED", "Email or password is incorrect.");
   }
+  // Its own code: the cross-origin refusal is a 403 too, and a client reading the
+  // status alone told every visitor behind a misrouted proxy to go verify their email.
   if (!user.emailVerifiedAt) {
-    return refuse(403, "FORBIDDEN", "Verify the email address before signing in.");
+    return refuse(403, "EMAIL_UNVERIFIED", "Verify the email address before signing in.");
   }
 
   await createSession(user.id);

@@ -146,12 +146,46 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     return true;
   }
 
-  async markLinkUp(observatoryId: string, bootedAt: Date) {
+  async markLinkUp(input: {
+    observatoryId: string;
+    bootedAt: Date;
+    resumeMissionId: string | null;
+    now: Date;
+  }) {
+    const { observatoryId, bootedAt, resumeMissionId, now } = input;
     this.linkUp.push(observatoryId);
     this.audit("AGENT_LINK", "AGENT_LINK_UP", { entityId: observatoryId });
-    const previous = this.agentBootedAt.get(observatoryId);
+    const remembered = this.agentBootedAt.get(observatoryId) ?? null;
+    const restarted = remembered?.getTime() !== bootedAt.getTime();
+
+    let resumed: ResumeOutcome | null = null;
+    if (resumeMissionId !== null) {
+      resumed = this.settleHeldMission({
+        observatoryId,
+        missionId: resumeMissionId,
+        restarted,
+        now,
+        message:
+          "Agent restarted holding this mission. The mount parked locally and the cloud closed the mission out.",
+      });
+    } else if (restarted && remembered !== null) {
+      const live = [...this.missions.entries()].find(
+        ([, mission]) => mission.observatoryId === observatoryId && isLive(mission.state),
+      );
+      if (live) {
+        resumed = this.settleHeldMission({
+          observatoryId,
+          missionId: live[0],
+          restarted,
+          now,
+          message:
+            "Agent restarted without the mission it was holding. Nothing is driving it, so the cloud closed the mission out.",
+        });
+      }
+    }
+
     this.agentBootedAt.set(observatoryId, bootedAt);
-    return { restarted: previous?.getTime() !== bootedAt.getTime() };
+    return { restarted, resumed };
   }
 
   async markLinkLost(observatoryId: string, at: Date) {
@@ -402,12 +436,13 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     return "APPLIED";
   }
 
-  async resolveResumedMission(input: {
+  private settleHeldMission(input: {
     observatoryId: string;
     missionId: string;
     restarted: boolean;
     now: Date;
-  }): Promise<ResumeOutcome> {
+    message: string;
+  }): ResumeOutcome {
     const mission = this.missions.get(input.missionId);
     if (!mission) return "NOT_FOUND";
     if (mission.observatoryId !== input.observatoryId) return "WRONG_OBSERVATORY";
@@ -423,8 +458,7 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
       failureReason: "AGENT_LINK_LOST",
       source: "CLOUD",
       commandId: null,
-      message:
-        "Agent restarted holding this mission. The mount parked locally and the cloud closed the mission out.",
+      message: input.message,
       occurredAt: input.now,
       simulated: mission.mode === "SIMULATED",
       isDemo: mission.isDemo,

@@ -105,6 +105,14 @@ append to the header, not the hops the packet takes; if the number is wrong in t
 direction every request is unattributed, and in the low direction a caller can name their
 own bucket.
 
+Behind the hosted demo's front it stays at zero. The chain there is the browser, Fly's
+proxy, Caddy on the machine, then Vercel in front of the API -- and Vercel rewrites
+`X-Forwarded-For` to the address it saw, which is the Fly machine's. Every visitor
+arrives as one address, so any positive value would put the whole demo in one bucket:
+the eleventh registration anywhere would be refused for an hour, and one visitor's
+failed sign-ins would lock out the rest. Zero meters by account instead. A front that
+can name the client to the API is a decision for the real domain.
+
 ### Seeding
 
 `npm run db:seed` refuses to run unless `NODE_ENV=development`. It writes demo users, two
@@ -123,7 +131,7 @@ append-only credit ledger is only ever inserted into.
   to a SIMULATED demo observatory; the API and realtime loaders, the admin envelope route,
   the switch to REAL, node approval and the agent all treat it as UNMEASURED anywhere else.
   It is not MAX_ALT_SAFE, and DV-034 still has to measure the real one.
-- **Night-side simulator (#146).** `[DEMO] Darkview Night-side Simulator`
+- **Night-side simulator (#146).** `[DEMO] Stellar Night-side Simulator`
   (`DEMO_IDS.nightObservatory`, Mauna Kea, `Pacific/Honolulu`), with its own token
   `DEMO_NIGHT_AGENT_DEVICE_TOKEN` and availability over its whole local night. Its dark
   hours fall roughly 09:30–18:30 Tbilisi time. No safety rule is relaxed for it. Its agent
@@ -159,7 +167,7 @@ else on astroman.ge is touched.
 
 | Piece | Where | Notes |
 | --- | --- | --- |
-| Front, realtime, two simulated agents | Fly app `stellar-demo`, `fra`, one always-on machine | `deploy/fly/`. Caddy routes `/ws/mission/*` and `/stream/mission/*` to realtime, `/api/*` (prefix stripped) to the API, everything else to the website; `/internal*` is 404 at the front, and `/ws/agent` never reaches realtime from outside |
+| Front, realtime, two simulated agents | Fly app `stellar-demo`, `fra`, one machine that stops when idle and starts on the next request (free tier; `fly.toml` says how to make it always-on). No volume: a stop loses the agents' state stores, which ADR-047 covers | `deploy/fly/`. Caddy routes `/ws/mission/*` and `/stream/mission/*` to realtime, `/api/*` (prefix stripped) to the API, everything else to the website; `/internal*` is 404 at the front, and `/ws/agent` never reaches realtime from outside |
 | API | Vercel project `stellar-platform`, root `apps/api` | Same environment table as above, `DARKVIEW_DEPLOYMENT=demo` |
 | Website | Vercel project `part-2-clients` (the clients repository) | `APP_URL`, `DARKVIEW_PLATFORM_API_URL`, `DARKVIEW_REALTIME_URL`, `DARKVIEW_STORAGE_ORIGIN` |
 | Database | Prisma Postgres, `fra1`, connected to `stellar-platform` | `btree_gist` once, then `db:deploy` and the demo seed |

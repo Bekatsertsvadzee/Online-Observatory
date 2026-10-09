@@ -155,8 +155,10 @@ describe("sign-in", () => {
     await expect(signIn({ email, password: "not the password" })).resolves.toMatchObject({
       status: 401,
     });
+    // Told apart from the Origin refusal, which is also a 403 and not the visitor's to fix.
     await expect(signIn({ email, password: PASSWORD })).resolves.toMatchObject({
       status: 403,
+      code: "EMAIL_UNVERIFIED",
     });
     expect(cookieJar.size).toBe(0);
   });

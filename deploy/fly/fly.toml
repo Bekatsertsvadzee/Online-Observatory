@@ -30,6 +30,16 @@ primary_region = "fra"
     soft_limit = 200
     hard_limit = 250
 
+  # Answered by Caddy only once realtime is listening (Caddyfile, start.sh). A machine
+  # whose realtime never came up, or whose front is wedged, fails this and is replaced
+  # instead of sitting there "started" and serving nothing.
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "15s"
+    timeout = "5s"
+    method = "GET"
+    path = "/healthz"
+
 [[vm]]
   size = "shared-cpu-1x"
   memory = "512mb"

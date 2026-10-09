@@ -229,8 +229,10 @@ paths:
       summary: Exchange an email and password for a session.
       description: |
         ADR-016. A wrong email and a wrong password receive the same 401, and take the
-        same time. An address that has not been verified receives 403 only once the
-        password has been checked. Sets the session cookies on success.
+        same time. An address that has not been verified receives 403 with the code
+        EMAIL_UNVERIFIED, only once the password has been checked; a 403 with FORBIDDEN is
+        the cross-origin refusal, which the visitor cannot fix. Sets the session cookies
+        on success.
       security: []
       requestBody:
         required: true
@@ -2554,6 +2556,7 @@ components:
         - BAD_REQUEST
         - UNAUTHENTICATED
         - FORBIDDEN
+        - EMAIL_UNVERIFIED
         - NOT_FOUND
         - CONFLICT
         - VALIDATION_FAILED
