@@ -6,7 +6,8 @@ import { apiError } from "@/lib/http/api-error";
 
 /**
  * POST /auth/register -- ADR-016. 202 whether or not the address already holds an
- * account, so the answer cannot be used to find out which addresses do.
+ * account, so the answer cannot be used to find out which addresses do. ADR-049:
+ * 200 with the user when the demo verified the address at once and signed it in.
  *
  * Validation issues are reported by path only. The password is in this body, and
  * an issue message can quote the value it rejected.
@@ -33,6 +34,7 @@ export async function POST(request: Request) {
 
   const result = await register(body.data);
   if (!result.ok) return apiError(result.status, result.code, result.message);
+  if (result.user) return Response.json(result.user);
 
   return new Response(null, { status: 202 });
 }

@@ -135,6 +135,14 @@ describe("POST /auth/sign-in", () => {
 });
 
 describe("POST /auth/register", () => {
+  // ADR-049: the demo verified the address at once and signed it in.
+  it("answers 200 with the user when the address was verified at once", async () => {
+    register.mockResolvedValueOnce({ ok: true, user });
+    const response = await registerRoute(post(routes[1].body));
+    expect(response.status).toBe(200);
+    expect(zUser.parse(await response.json())).toEqual(user);
+  });
+
   it("answers 202 with no body", async () => {
     register.mockResolvedValueOnce({ ok: true });
 

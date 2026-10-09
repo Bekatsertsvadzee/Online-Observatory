@@ -3039,10 +3039,16 @@ export type RegisterError = RegisterErrors[keyof RegisterErrors];
 
 export type RegisterResponses = {
     /**
+     * ADR-049. Verified at once and signed in. Sets the session cookies.
+     */
+    200: User;
+    /**
      * Accepted. A verification link is sent if one is owed.
      */
     202: unknown;
 };
+
+export type RegisterResponse = RegisterResponses[keyof RegisterResponses];
 
 export type VerifyEmailData = {
     body: VerifyEmailRequest;

@@ -2154,6 +2154,11 @@ export const zIdempotencyKey = z.string().min(8).max(128).regex(/^[A-Za-z0-9_.:-
 
 export const zRegisterBody = zRegisterRequest;
 
+export const zRegisterResponse = z.union([
+    zUser,
+    z.unknown()
+]);
+
 export const zVerifyEmailBody = zVerifyEmailRequest;
 
 /**

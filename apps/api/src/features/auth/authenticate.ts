@@ -100,19 +100,28 @@ export async function signIn(
  * `{ ok: true }` for a new address, an unverified one and a verified one alike.
  * The route answers 202 to all three, so the response cannot say which addresses
  * hold an account.
+ *
+ * ADR-049: on the demo deployment with no email delivery configured, a new address
+ * is verified at once and signed in -- `{ ok: true, user }`, which the route
+ * answers 200 with the session cookies set. An address that already holds an
+ * account is still `{ ok: true }` alone: nobody is signed into it by re-registering.
  */
-export async function register(request: RegisterRequest): Promise<{ ok: true } | Refusal> {
+export async function register(
+  request: RegisterRequest,
+): Promise<{ ok: true; user?: User } | Refusal> {
   const displayName = request.displayName.trim();
   if (displayName.length < 2) {
     return refuse(422, "VALIDATION_FAILED", "displayName must be at least two characters.");
   }
 
-  // Either delivery path is enough: Resend (ADR-035) or the signed webhook.
+  // Either delivery path is enough: Resend (ADR-035) or the signed webhook. Neither,
+  // on the demo, is ADR-049's case; neither anywhere else is a misconfiguration.
   const environment = getServerEnvironment();
   const resend = environment.RESEND_API_KEY && environment.EMAIL_FROM;
   const webhook =
     environment.EMAIL_VERIFICATION_WEBHOOK_URL && environment.EMAIL_VERIFICATION_WEBHOOK_SECRET;
-  if (!resend && !webhook) {
+  const verifyAtOnce = !resend && !webhook && environment.DARKVIEW_DEPLOYMENT === "demo";
+  if (!resend && !webhook && !verifyAtOnce) {
     return refuse(503, "INTERNAL", "Email verification delivery is not configured.");
   }
 
@@ -137,6 +146,9 @@ export async function register(request: RegisterRequest): Promise<{ ok: true } |
   const database = getDatabase();
   const existingUser = await database.user.findUnique({ where: { email } });
   if (existingUser?.emailVerifiedAt) return { ok: true };
+  // ADR-049: re-registering an address somebody else began with must not sign the
+  // second person into it. Without a link to send there is nothing more to do.
+  if (existingUser && verifyAtOnce) return { ok: true };
 
   const user =
     existingUser ??
@@ -145,6 +157,8 @@ export async function register(request: RegisterRequest): Promise<{ ok: true } |
         name: displayName,
         email,
         locale: request.locale,
+        // ADR-049: the demo's word for the address, in place of the link's.
+        emailVerifiedAt: verifyAtOnce ? new Date() : null,
         account: { create: { passwordHash: await hashPassword(request.password) } },
       },
     }));
@@ -161,6 +175,13 @@ export async function register(request: RegisterRequest): Promise<{ ok: true } |
   await database.$transaction((tx) =>
     ensureLoyaltyAccount(tx, user.id, { referredByUserId: referrer?.userId ?? null }),
   );
+
+  if (verifyAtOnce) {
+    await createSession(user.id);
+    await recordAuthEvent("REGISTERED", { userId: user.id, actor });
+    await recordAuthEvent("LOGIN_SUCCEEDED", { userId: user.id, actor });
+    return { ok: true, user: toContractUser(user) };
+  }
 
   try {
     await sendVerificationLink(user, request.locale);
