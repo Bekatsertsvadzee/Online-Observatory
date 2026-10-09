@@ -373,6 +373,9 @@ model User {
   /// so every user has one and the contract User requires it.
   locale              Locale                   @default(en)
   emailVerifiedAt     DateTime?
+  /// ADR-048. Google's stable account id (`sub`) for a customer who signs in with
+  /// Google. Null for everyone else; cleared by deletion with the rest of the identity.
+  googleSubject       String?                  @unique
   /// ADR-044. Set when the customer deleted the account. The row stays, with the name
   /// and email replaced, because bookings, payments and the ledgers refuse to lose
   /// their owner; nothing else that named the person survives it.

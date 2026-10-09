@@ -204,6 +204,7 @@ export async function deleteAccount(
             name: DELETED_NAME,
             email: deletedEmail(userId),
             emailVerifiedAt: null,
+            googleSubject: null,
             deletedAt: now,
           },
         });

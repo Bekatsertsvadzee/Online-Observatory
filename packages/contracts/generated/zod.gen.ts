@@ -2168,6 +2168,15 @@ export const zSignInBody = zSignInRequest;
  */
 export const zSignInResponse = zUser;
 
+export const zGoogleSignInStartQuery = z.object({
+    locale: zLocale.optional()
+});
+
+export const zGoogleSignInCallbackQuery = z.object({
+    code: z.string().optional(),
+    state: z.string().optional()
+});
+
 /**
  * Signed out.
  */

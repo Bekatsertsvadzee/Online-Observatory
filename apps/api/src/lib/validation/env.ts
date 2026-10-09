@@ -26,6 +26,14 @@ const serverEnvironmentSchema = z.object({
   RESEND_API_KEY: z.string().min(1).optional(),
   EMAIL_FROM: z.string().includes("@").optional(),
   /**
+   * ADR-048. The OAuth client that lets a customer sign in with Google. Both or
+   * neither; unset, `GET /auth/google/start` sends the visitor back to the sign-in
+   * page with `error=google` and nothing else is affected. The redirect URI
+   * registered with Google is `APP_URL/api/auth/google/callback`.
+   */
+  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
+  GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
+  /**
    * How many proxies sit in front of this app. Decides how far from the right of
    * `X-Forwarded-For` the real client address is. Zero means the header is not
    * trusted at all, which is the only safe default: the left of that header is
@@ -59,10 +67,19 @@ const serverEnvironmentSchema = z.object({
    * unknown sooner.
    */
   VIEWING_CONDITIONS_MAX_AGE_MINUTES: z.coerce.number().int().min(60).max(1440).default(180),
-}).refine(
-  (environment) => Boolean(environment.RESEND_API_KEY) === Boolean(environment.EMAIL_FROM),
-  { message: "RESEND_API_KEY and EMAIL_FROM are set together.", path: ["RESEND_API_KEY"] },
-);
+})
+  .refine(
+    (environment) => Boolean(environment.RESEND_API_KEY) === Boolean(environment.EMAIL_FROM),
+    { message: "RESEND_API_KEY and EMAIL_FROM are set together.", path: ["RESEND_API_KEY"] },
+  )
+  .refine(
+    (environment) =>
+      Boolean(environment.GOOGLE_CLIENT_ID) === Boolean(environment.GOOGLE_CLIENT_SECRET),
+    {
+      message: "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are set together.",
+      path: ["GOOGLE_CLIENT_ID"],
+    },
+  );
 
 export type ServerEnvironment = z.infer<typeof serverEnvironmentSchema>;
 

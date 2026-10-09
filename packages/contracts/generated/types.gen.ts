@@ -3118,6 +3118,28 @@ export type SignInResponses = {
 
 export type SignInResponse = SignInResponses[keyof SignInResponses];
 
+export type GoogleSignInStartData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Where the visitor lands afterwards. Anything but `ka` is `en`.
+         */
+        locale?: Locale;
+    };
+    url: '/auth/google/start';
+};
+
+export type GoogleSignInCallbackData = {
+    body?: never;
+    path?: never;
+    query?: {
+        code?: string;
+        state?: string;
+    };
+    url: '/auth/google/callback';
+};
+
 export type SignOutData = {
     body?: never;
     path?: never;
