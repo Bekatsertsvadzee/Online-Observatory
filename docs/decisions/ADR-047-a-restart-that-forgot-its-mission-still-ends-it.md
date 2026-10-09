@@ -1,8 +1,8 @@
 # ADR-047 — A restart that forgot its mission still ends it
 
 - **Date:** 2026-10-09
-- **Status:** PROPOSED — built on the maintainer's instruction of 2026-10-09 to fix the
-  hosted demo's findings; approval of the record itself is still his
+- **Status:** APPROVED
+- **Approved:** 2026-10-09, as written
 - **Decided by:** project maintainer
 - **Settles:** finding F2 of the hosted demo's walkthrough of 2026-10-08: the Fly machine
   sleeps when idle and has no volume, so an agent that wakes mid-mission hellos with
