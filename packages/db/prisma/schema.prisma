@@ -411,6 +411,7 @@ model User {
   giftVouchersRedeemed GiftVoucher[]           @relation("GiftVoucherRedeemer")
   loyaltyAccount      LoyaltyAccount?
   loyaltyEntries      LoyaltyLedgerEntry[]
+  votes               Vote[]
 }
 
 model Account {
@@ -537,6 +538,7 @@ model Observatory {
   weatherState        WeatherState?
   networkNode         ObservatoryNetworkNode?
   viewingForecast     ViewingForecastHour[]
+  votes               Vote[]
 }
 
 /// Contract: SafetyEnvelopeConfig. The numbers that stop the telescope destroying
@@ -740,8 +742,28 @@ model Target {
   bookings                Booking[]
   missions                Mission[]
   captures                Capture[]
+  votes                   Vote[]
 
   @@index([type, enabled])
+}
+
+/// Contract: WeekVote (ADR-050). A customer's current vote for one week at one
+/// observatory: one row per customer, observatory and week, moved in place when the
+/// customer votes again. The week is its Monday in the observatory's local calendar.
+model Vote {
+  id            String      @id @default(uuid()) @db.Uuid
+  userId        String      @db.Uuid
+  observatoryId String      @db.Uuid
+  week          DateTime    @db.Date
+  targetId      String      @db.Uuid
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  observatory   Observatory @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
+  target        Target      @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, observatoryId, week])
+  @@index([observatoryId, week])
 }
 
 model TargetObservatory {

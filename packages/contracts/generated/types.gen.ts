@@ -37,6 +37,8 @@ export const ErrorCode = {
     MISSION_NOT_ACTIVE: 'MISSION_NOT_ACTIVE',
     MISSION_NOT_OBSERVABLE: 'MISSION_NOT_OBSERVABLE',
     TARGET_NOT_OBSERVABLE: 'TARGET_NOT_OBSERVABLE',
+    TARGET_NOT_A_CANDIDATE: 'TARGET_NOT_A_CANDIDATE',
+    VOTE_LOCKED: 'VOTE_LOCKED',
     OBSERVER_CAPACITY_REACHED: 'OBSERVER_CAPACITY_REACHED',
     OBSERVER_CANNOT_COMMAND: 'OBSERVER_CANNOT_COMMAND',
     OBSERVATORY_OFFLINE: 'OBSERVATORY_OFFLINE',
@@ -409,6 +411,46 @@ export type SlotTargetList = {
     startAt: string;
     durationMinutes: number;
     items: Array<SlotTarget>;
+};
+
+export type WeekVoteCandidate = {
+    targetId: string;
+    /**
+     * Customers whose current vote for the week is this target.
+     */
+    votes: number;
+};
+
+/**
+ * The week's ballot at one observatory (ADR-050).
+ */
+export type WeekVote = {
+    observatoryId: string;
+    /**
+     * The week's Monday, in the observatory's local calendar.
+     */
+    week: string;
+    /**
+     * Sunday 13:00 UTC of the week. No vote is accepted after it.
+     */
+    locksAt: string;
+    /**
+     * Observable on at least one night of the week, highest count first.
+     */
+    candidates: Array<WeekVoteCandidate>;
+    /**
+     * The caller's current vote, when the request carries a session.
+     */
+    mine: string | null;
+};
+
+export type CastVoteRequest = {
+    observatoryId: string;
+    /**
+     * The week's Monday, as `GET /votes` names it.
+     */
+    week: string;
+    targetId: string;
 };
 
 /**
@@ -3650,6 +3692,84 @@ export type GetTargetResponses = {
 };
 
 export type GetTargetResponse = GetTargetResponses[keyof GetTargetResponses];
+
+export type ListWeekVotesData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * An `id` from `GET /observatories`.
+         */
+        observatoryId: string;
+        /**
+         * The week's Monday, ISO 8601 (YYYY-MM-DD), in the observatory's local
+         * calendar. Omitted means the week the observatory's local date falls in.
+         * A date that is not a Monday is refused.
+         *
+         */
+        week?: string;
+    };
+    url: '/votes';
+};
+
+export type ListWeekVotesErrors = {
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type ListWeekVotesError = ListWeekVotesErrors[keyof ListWeekVotesErrors];
+
+export type ListWeekVotesResponses = {
+    /**
+     * The week's candidates and their counts.
+     */
+    200: WeekVote;
+};
+
+export type ListWeekVotesResponse = ListWeekVotesResponses[keyof ListWeekVotesResponses];
+
+export type CastVoteData = {
+    body: CastVoteRequest;
+    path?: never;
+    query?: never;
+    url: '/votes';
+};
+
+export type CastVoteErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type CastVoteError = CastVoteErrors[keyof CastVoteErrors];
+
+export type CastVoteResponses = {
+    /**
+     * The week's ballot with the caller's vote on it.
+     */
+    201: WeekVote;
+};
+
+export type CastVoteResponse = CastVoteResponses[keyof CastVoteResponses];
 
 export type ListSlotsData = {
     body?: never;
