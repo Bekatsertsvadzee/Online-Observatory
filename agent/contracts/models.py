@@ -44,6 +44,8 @@ class ErrorCode(StrEnum):
     mission_not_active = 'MISSION_NOT_ACTIVE'
     mission_not_observable = 'MISSION_NOT_OBSERVABLE'
     target_not_observable = 'TARGET_NOT_OBSERVABLE'
+    target_not_a_candidate = 'TARGET_NOT_A_CANDIDATE'
+    vote_locked = 'VOTE_LOCKED'
     observer_capacity_reached = 'OBSERVER_CAPACITY_REACHED'
     observer_cannot_command = 'OBSERVER_CANNOT_COMMAND'
     observatory_offline = 'OBSERVATORY_OFFLINE'
@@ -389,6 +391,37 @@ class SlotTargetList(BaseModel):
     start_at: AwareDatetime = Field(..., alias='startAt')
     duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
     items: list[SlotTarget]
+
+
+class WeekVoteCandidate(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    target_id: UUID = Field(..., alias='targetId')
+    votes: int = Field(..., description='Customers whose current vote for the week is this target.', ge=0)
+
+
+class WeekVote(BaseModel):
+    """
+    The week's ballot at one observatory (ADR-050).
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    week: date_aliased = Field(..., description="The week's Monday, in the observatory's local calendar.")
+    locks_at: AwareDatetime = Field(..., alias='locksAt', description='Sunday 13:00 UTC of the week. No vote is accepted after it.')
+    candidates: list[WeekVoteCandidate] = Field(..., description='Observable on at least one night of the week, highest count first.')
+    mine: UUID | None = Field(..., description="The caller's current vote, when the request carries a session.")
+
+
+class CastVoteRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    week: date_aliased = Field(..., description="The week's Monday, as `GET /votes` names it.")
+    target_id: UUID = Field(..., alias='targetId')
 
 
 class ObservatoryMode(StrEnum):

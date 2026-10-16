@@ -190,6 +190,7 @@ export async function deleteAccount(
         await tx.emailVerificationToken.deleteMany({ where: { userId } });
         await tx.passwordResetToken.deleteMany({ where: { userId } });
         await tx.emailChangeToken.deleteMany({ where: { userId } });
+        await tx.vote.deleteMany({ where: { userId } });
         await tx.session.deleteMany({ where: { userId } });
         await tx.account.delete({ where: { userId } });
         // Kept for accounting, but the people they were for are the buyer's to name,

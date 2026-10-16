@@ -88,6 +88,11 @@ const UNMETERED_BY_DESIGN = [
   // stricter AUTHENTICATION_POLICY on the account, because a wrong current password
   // is a guess at it (ADR-040). meterRequest's budget would allow far more guesses.
   "me/password/route.ts",
+  // Casting a vote (ADR-050) moves or creates the caller's one row for the week:
+  // an idempotent upsert behind the session guard, keyed on the account by the
+  // unique constraint itself. A flood changes nothing but that row's updatedAt and
+  // widens no access to the telescope.
+  "votes/route.ts",
 ];
 
 describe("every mutating route is metered", () => {

@@ -26,6 +26,8 @@ export const zErrorCode = z.enum([
     'MISSION_NOT_ACTIVE',
     'MISSION_NOT_OBSERVABLE',
     'TARGET_NOT_OBSERVABLE',
+    'TARGET_NOT_A_CANDIDATE',
+    'VOTE_LOCKED',
     'OBSERVER_CAPACITY_REACHED',
     'OBSERVER_CANNOT_COMMAND',
     'OBSERVATORY_OFFLINE',
@@ -302,6 +304,28 @@ export const zSlotTargetList = z.strictObject({
     startAt: z.iso.datetime(),
     durationMinutes: z.int().gt(0),
     items: z.array(zSlotTarget)
+});
+
+export const zWeekVoteCandidate = z.strictObject({
+    targetId: z.uuid(),
+    votes: z.int().gte(0)
+});
+
+/**
+ * The week's ballot at one observatory (ADR-050).
+ */
+export const zWeekVote = z.strictObject({
+    observatoryId: z.uuid(),
+    week: z.iso.date(),
+    locksAt: z.iso.datetime(),
+    candidates: z.array(zWeekVoteCandidate),
+    mine: z.uuid().nullable()
+});
+
+export const zCastVoteRequest = z.strictObject({
+    observatoryId: z.uuid(),
+    week: z.iso.date(),
+    targetId: z.uuid()
 });
 
 /**
@@ -2286,6 +2310,23 @@ export const zGetTargetPath = z.object({
  * The target.
  */
 export const zGetTargetResponse = zTarget;
+
+export const zListWeekVotesQuery = z.object({
+    observatoryId: z.uuid(),
+    week: z.iso.date().optional()
+});
+
+/**
+ * The week's candidates and their counts.
+ */
+export const zListWeekVotesResponse = zWeekVote;
+
+export const zCastVoteBody = zCastVoteRequest;
+
+/**
+ * The week's ballot with the caller's vote on it.
+ */
+export const zCastVoteResponse = zWeekVote;
 
 export const zListSlotsQuery = z.object({
     observatoryId: z.uuid(),

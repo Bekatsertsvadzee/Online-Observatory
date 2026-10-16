@@ -83,6 +83,8 @@ tags:
     description: Operator-approved target catalogue and live visibility.
   - name: booking
     description: Slots, bookings and payment.
+  - name: votes
+    description: The week's vote on what the observatory observes (ADR-050).
   - name: missions
     description: Mission lifecycle and the client command boundary.
   - name: captures
@@ -770,6 +772,91 @@ paths:
                 $ref: "#/components/schemas/Target"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /votes:
+    get:
+      operationId: listWeekVotes
+      tags: [votes]
+      summary: The week's vote at one observatory.
+      description: |
+        One target a week, chosen by vote among what the observatory can observe
+        (ADR-050). The candidates are every catalogue target observable on at least
+        one night of the week at that observatory -- the rules `GET /targets/tonight`
+        applies, judged across each night's astronomical darkness, without the
+        observatory's current state: a weather hold tonight does not strike a target
+        from the week's ballot.
+
+        `votes` counts the customers whose current vote is that target: one vote per
+        customer per observatory per week, and casting again moves it. `mine` is the
+        caller's own, when the request carries a session; null otherwise. The ballot
+        locks at `locksAt`, Sunday 13:00 UTC of the week; the observatory's operator
+        reads the winner, and nothing is scheduled automatically.
+
+        404 when no bookable observatory has that id, on the same rule `GET /slots`
+        applies.
+      security: []
+      parameters:
+        - name: observatoryId
+          in: query
+          required: true
+          description: An `id` from `GET /observatories`.
+          schema:
+            type: string
+            format: uuid
+        - name: week
+          in: query
+          required: false
+          description: |
+            The week's Monday, ISO 8601 (YYYY-MM-DD), in the observatory's local
+            calendar. Omitted means the week the observatory's local date falls in.
+            A date that is not a Monday is refused.
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: The week's candidates and their counts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeekVote"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+    post:
+      operationId: castVote
+      tags: [votes]
+      summary: Cast, or move, the caller's vote for the week.
+      description: |
+        One vote per customer per observatory per week (ADR-050). Casting for another
+        candidate moves the vote; casting for the same one again changes nothing.
+        Every customer's vote counts once.
+
+        422 `TARGET_NOT_A_CANDIDATE` for a target that is not on that week's ballot;
+        409 `VOTE_LOCKED` once `locksAt` has passed; 404 on the observatory as
+        `GET /votes`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CastVoteRequest"
+      responses:
+        "201":
+          description: The week's ballot with the caller's vote on it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeekVote"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
 
   /slots:
     get:
@@ -2627,6 +2714,8 @@ components:
         - MISSION_NOT_ACTIVE
         - MISSION_NOT_OBSERVABLE
         - TARGET_NOT_OBSERVABLE
+        - TARGET_NOT_A_CANDIDATE
+        - VOTE_LOCKED
         - OBSERVER_CAPACITY_REACHED
         - OBSERVER_CANNOT_COMMAND
         - OBSERVATORY_OFFLINE
@@ -3152,6 +3241,62 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SlotTarget"
+
+    WeekVoteCandidate:
+      type: object
+      additionalProperties: false
+      required: [targetId, votes]
+      properties:
+        targetId:
+          type: string
+          format: uuid
+        votes:
+          type: integer
+          minimum: 0
+          description: Customers whose current vote for the week is this target.
+
+    WeekVote:
+      type: object
+      description: The week's ballot at one observatory (ADR-050).
+      additionalProperties: false
+      required: [observatoryId, week, locksAt, candidates, mine]
+      properties:
+        observatoryId:
+          type: string
+          format: uuid
+        week:
+          type: string
+          format: date
+          description: The week's Monday, in the observatory's local calendar.
+        locksAt:
+          type: string
+          format: date-time
+          description: Sunday 13:00 UTC of the week. No vote is accepted after it.
+        candidates:
+          type: array
+          description: Observable on at least one night of the week, highest count first.
+          items:
+            $ref: "#/components/schemas/WeekVoteCandidate"
+        mine:
+          type: [string, "null"]
+          format: uuid
+          description: The caller's current vote, when the request carries a session.
+
+    CastVoteRequest:
+      type: object
+      additionalProperties: false
+      required: [observatoryId, week, targetId]
+      properties:
+        observatoryId:
+          type: string
+          format: uuid
+        week:
+          type: string
+          format: date
+          description: The week's Monday, as `GET /votes` names it.
+        targetId:
+          type: string
+          format: uuid
 
     # ---------------------------------------------------------------------------
     # Observatory state
