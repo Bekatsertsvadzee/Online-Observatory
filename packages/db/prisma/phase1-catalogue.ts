@@ -89,14 +89,14 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     descriptionEn:
       "The strongest object we can show. Crater shadows along the terminator, sharpest three to ten days after new moon.",
     descriptionKa:
-      "ყველაზე შთამბეჭდავი ობიექტი. კრატერების ჩრდილები ტერმინატორის გასწვრივ, საუკეთესოდ ახალმთვარობიდან 3–10 დღეში.",
+      "ყველაზე შთამბეჭდავი ობიექტი. კრატერების ჩრდილები ტერმინატორის გასწვრივ; საუკეთესოა ახალმთვარეობიდან 3–10 დღეში.",
   },
   {
     id: "00000000-0000-4000-8000-000000000102",
     slug: "jupiter",
     catalogId: null,
     nameEn: "Jupiter and its moons",
-    nameKa: "იუპიტერი და მისი მთვარეები",
+    nameKa: "იუპიტერი და მისი თანამგზავრები",
     type: "PLANET",
     positionSource: "EPHEMERIS",
     solarSystemBody: "JUPITER",
@@ -109,7 +109,7 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     minAltitudeDegrees: MIN_ALTITUDE_DEGREES,
     expectedMissionMinutes: SHORT_SESSION_MINUTES,
     descriptionEn: "Cloud belts and the four Galilean moons. Reliable, and best near opposition.",
-    descriptionKa: "ღრუბლოვანი სარტყლები და ოთხი გალილეური მთვარე. საიმედო ობიექტი, საუკეთესოდ დაპირისპირებასთან ახლოს.",
+    descriptionKa: "ღრუბლოვანი სარტყლები და ოთხი გალილეური თანამგზავრი. საიმედო ობიექტი; საუკეთესოდ დაპირისპირების მახლობლად ჩანს.",
   },
   {
     id: "00000000-0000-4000-8000-000000000103",
@@ -129,7 +129,7 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     minAltitudeDegrees: MIN_ALTITUDE_DEGREES,
     expectedMissionMinutes: SHORT_SESSION_MINUTES,
     descriptionEn: "The rings resolve clearly at 0.2 arcseconds per pixel. The object most people come back for.",
-    descriptionKa: "რგოლები მკაფიოდ ჩანს 0.2 რკალწამი/პიქსელზე. ობიექტი, რომლისთვისაც ადამიანები ბრუნდებიან.",
+    descriptionKa: "რგოლები მკაფიოდ ჩანს 0,2 რკალური წამი პიქსელზე. ობიექტი, რომლის გამოც ადამიანები ბრუნდებიან.",
   },
   {
     id: "00000000-0000-4000-8000-000000000104",
@@ -151,7 +151,7 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     minAltitudeDegrees: MIN_ALTITUDE_DEGREES,
     expectedMissionMinutes: SHORT_SESSION_MINUTES,
     descriptionEn: "Worth observing only near opposition, when the disc is large enough to show surface markings.",
-    descriptionKa: "დაკვირვების ღირსია მხოლოდ დაპირისპირებასთან ახლოს, როცა დისკი საკმარისად დიდია.",
+    descriptionKa: "დაკვირვების ღირსია მხოლოდ დაპირისპირების მახლობლად, როცა დისკი საკმარისად დიდია.",
   },
   {
     id: "00000000-0000-4000-8000-000000000105",
@@ -171,7 +171,7 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     minAltitudeDegrees: MIN_ALTITUDE_DEGREES,
     expectedMissionMinutes: SHORT_SESSION_MINUTES,
     descriptionEn: "A crescent, like a small moon. Reads well even in twilight, near greatest elongation.",
-    descriptionKa: "ნახევარმთვარისებრი ფაზა. კარგად ჩანს ბინდშიც, უდიდეს ელონგაციასთან ახლოს.",
+    descriptionKa: "ნამგლისებრი ფაზა. კარგად ჩანს ბინდშიც, მაქსიმალურ ელონგაციასთან ახლოს.",
   },
   {
     id: "00000000-0000-4000-8000-000000000106",
@@ -198,7 +198,7 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     slug: "mizar-alcor",
     catalogId: "Zeta Ursae Majoris",
     nameEn: "Mizar and Alcor",
-    nameKa: "მიწარი და ალკორი",
+    nameKa: "მიცარი და ალკორი",
     type: "DOUBLE_STAR",
     positionSource: "FIXED",
     solarSystemBody: null,
@@ -211,7 +211,7 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     minAltitudeDegrees: MIN_ALTITUDE_DEGREES,
     expectedMissionMinutes: SHORT_SESSION_MINUTES,
     descriptionEn: "Circumpolar from Tbilisi, so available on almost any clear night. Mizar itself splits at 14 arcseconds.",
-    descriptionKa: "თბილისიდან ცირკუმპოლარულია და თითქმის ყოველ მოწმენდილ ღამეს ხელმისაწვდომია.",
+    descriptionKa: "თბილისიდან ცირკუმპოლარულია — არასდროს ჩადის — და თითქმის ყოველ მოწმენდილ ღამეს ჩანს.",
   },
   {
     id: "00000000-0000-4000-8000-000000000108",
@@ -231,7 +231,7 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     minAltitudeDegrees: MIN_ALTITUDE_DEGREES,
     expectedMissionMinutes: STACKED_SESSION_MINUTES,
     descriptionEn: "Hundreds of thousands of stars. Live stacking is what resolves them from a city sky.",
-    descriptionKa: "ასიათასობით ვარსკვლავი. ცოცხალი დასტაკვა საჭიროა ქალაქის ცაზე მათ გასარჩევად.",
+    descriptionKa: "ასიათასობით ვარსკვლავი. ქალაქის ცაზე მათ გასარჩევად კადრების რეალურ დროში დაჯამებაა საჭირო.",
   },
   {
     id: "00000000-0000-4000-8000-000000000109",
@@ -251,14 +251,14 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     minAltitudeDegrees: MIN_ALTITUDE_DEGREES,
     expectedMissionMinutes: STACKED_SESSION_MINUTES,
     descriptionEn: "Small and bright per unit area, which is why it survives light pollution better than larger nebulae.",
-    descriptionKa: "მცირე, მაგრამ ზედაპირული სიკაშკაშით — ამიტომ ქალაქის განათებას სხვებზე უკეთ უძლებს.",
+    descriptionKa: "პატარა, მაგრამ მაღალი ზედაპირული სიკაშკაშის — ამიტომ ქალაქის განათებას სხვებზე უკეთ უძლებს.",
   },
   {
     id: "00000000-0000-4000-8000-000000000110",
     slug: "m27-dumbbell-nebula",
     catalogId: "M27",
     nameEn: "Dumbbell Nebula",
-    nameKa: "გირისებრი ნისლეული",
+    nameKa: "ჰანტელის ნისლეული",
     type: "PLANETARY_NEBULA",
     positionSource: "FIXED",
     solarSystemBody: null,
@@ -271,7 +271,7 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     minAltitudeDegrees: MIN_ALTITUDE_DEGREES,
     expectedMissionMinutes: STACKED_SESSION_MINUTES,
     descriptionEn: "A dying star's shed outer layers. One of the best live-stacking targets available to us.",
-    descriptionKa: "მკვდარი ვარსკვლავის მოცილებული გარსი. ცოცხალი დასტაკვის ერთ-ერთი საუკეთესო ობიექტი.",
+    descriptionKa: "მომაკვდავი ვარსკვლავის მიერ გადაყრილი გარსი. რეალურ დროში დაჯამებისთვის ერთ-ერთი საუკეთესო ობიექტი.",
   },
   {
     id: "00000000-0000-4000-8000-000000000111",
@@ -292,14 +292,14 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     minAltitudeDegrees: MIN_ALTITUDE_DEGREES,
     expectedMissionMinutes: STACKED_SESSION_MINUTES,
     descriptionEn: "The brightest deep-sky object we can offer, and the closest region of massive star formation.",
-    descriptionKa: "ყველაზე კაშკაშა ღრმა ცის ობიექტი და მასიური ვარსკვლავწარმოქმნის უახლოესი არე.",
+    descriptionKa: "ყველაზე კაშკაშა ღრმა ცის ობიექტი და მასიური ვარსკვლავების წარმოქმნის უახლოესი არე.",
   },
   {
     id: "00000000-0000-4000-8000-000000000112",
     slug: "m15-globular-cluster",
     catalogId: "M15",
     nameEn: "Messier 15",
-    nameKa: "M15 სფერული გროვა",
+    nameKa: "სფერული გროვა M15",
     type: "GLOBULAR_CLUSTER",
     positionSource: "FIXED",
     solarSystemBody: null,
@@ -312,7 +312,7 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     minAltitudeDegrees: MIN_ALTITUDE_DEGREES,
     expectedMissionMinutes: STACKED_SESSION_MINUTES,
     descriptionEn: "An unusually compact core, which holds together well against a bright sky.",
-    descriptionKa: "არაჩვეულებრივად კომპაქტური ბირთვი, რომელიც კაშკაშა ცაზეც კარგად ჩანს.",
+    descriptionKa: "არაჩვეულებრივად კომპაქტური ბირთვი, რომელიც განათებულ ცაზეც კარგად ჩანს.",
   },
 ];
 
