@@ -45,7 +45,7 @@ from darkview_agent.stream.mjpeg import StreamSettings, stretch_to_8bit
 #: streamed and the bandwidth argument that bounds a live frame does not apply.
 #: Still bounded: the ASI585MC's full 3840 of a stretched star field is a large
 #: JPEG, and the extra pixels past this are sensor noise rather than detail the
-#: optical train resolved. PROVISIONAL -- DV-035 measures what the C6 actually
+#: optical train resolved. PROVISIONAL -- DV-035 measures what the 8SE actually
 #: delivers and replaces it.
 DEFAULT_IMAGE_MAX_EDGE_PX = 2048
 

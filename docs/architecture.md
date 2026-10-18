@@ -17,7 +17,7 @@ Companion to `docs/ENGINEERING.md`, which governs. This describes *how* the syst
         │  authenticated OUTBOUND WSS  (the observatory dials out)
         │
   Observatory Agent  (Python 3.12, on the observatory mini-PC)
-    ├── Alpaca HTTP over 127.0.0.1  ──▶  ASCOM Remote / CPWI  ──▶  NexStar 6SE
+    ├── Alpaca HTTP over 127.0.0.1  ──▶  ASCOM Remote / CPWI  ──▶  NexStar 8SE
     └── ZWO ASI SDK                 ──▶  ASI585MC
 ```
 

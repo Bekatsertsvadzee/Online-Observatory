@@ -682,7 +682,7 @@ thumbnail from `capture.assets.at(0)` -- which today takes whichever asset happe
 to be first rather than the THUMBNAIL.
 
 **New optional setting: `DARKVIEW_AGENT_OPTICAL_CONFIG`.** Which optical train is
-fitted, reported on every capture. Defaults to `F10_NATIVE` -- the C6 with nothing
+fitted, reported on every capture. Defaults to `F10_NATIVE` -- the 8SE with nothing
 added, the only configuration that is true by default. Unlike `MAX_ALT_SAFE` it is
 not a safety value: getting it wrong mislabels a focal length rather than letting a
 telescope hit something, which is why it has a default at all.

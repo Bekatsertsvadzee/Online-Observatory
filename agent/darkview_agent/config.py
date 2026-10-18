@@ -76,7 +76,7 @@ class AgentConfig:
     optical_config: OpticalConfig = OpticalConfig.f10_native
     """Which optical train is fitted, reported on every capture.
 
-    F10_NATIVE is the C6 as it comes: 1500 mm, nothing added. That is the only
+    F10_NATIVE is the 8SE as it comes: 2032 mm, nothing added. That is the only
     configuration that is true by default, because fitting a barlow or a reducer
     is a physical act somebody performs and can therefore be asked to declare.
     Unlike MAX_ALT_SAFE this is not a safety value -- getting it wrong mislabels

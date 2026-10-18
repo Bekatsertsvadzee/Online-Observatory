@@ -26,7 +26,7 @@ from darkview_agent.devices.base import (
 )
 from darkview_agent.devices.frame import Frame
 
-# NexStar 6SE plausible values. DV-034 replaces these with figures measured from
+# NexStar 8SE plausible values. DV-034 replaces these with figures measured from
 # the physical mount. They are simulator behaviour, not safety limits: no number
 # here ever gates a real slew.
 SLEW_RATE_DEGREES_PER_SECOND = 4.0
@@ -176,7 +176,7 @@ class SimCamera(CameraDriver):
     DEFAULT_HEIGHT_PX = 1080
     #: Where the simulated optical train is in focus, and how many focuser steps
     #: away from it widen a star by one pixel. Simulator behaviour, not a figure
-    #: for the real C6; first light finds that one.
+    #: for the real 8SE; first light finds that one.
     BEST_FOCUS_POSITION = 16000
     STEPS_PER_PIXEL_OF_BLUR = 200.0
 

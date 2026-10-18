@@ -5,7 +5,7 @@ half of Darkview that talks to the telescope and owns the data.
 
 Darkview is a Live Remote Observatory in Tbilisi, Georgia. A customer reserves an
 Observation Slot, chooses an operator-approved Target, and during the Live Observation a
-real Celestron NexStar 6SE physically slews to it. Phase 1 is a **live-view / EAA**
+real Celestron NexStar 8SE physically slews to it. Phase 1 is a **live-view / EAA**
 experience using short exposures and live stacking — not a long-exposure astrophotography
 service.
 

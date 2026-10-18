@@ -221,11 +221,11 @@ beforeEach(async () => {
   const telescope = await database.telescope.create({
     data: {
       observatoryId,
-      name: "NexStar 6SE",
+      name: "NexStar 8SE",
       manufacturer: "Celestron",
-      model: "NexStar 6SE",
-      apertureMm: 150,
-      focalLengthMm: 1500,
+      model: "NexStar 8SE",
+      apertureMm: 203,
+      focalLengthMm: 2032,
       status: "ONLINE",
     },
   });
@@ -1221,9 +1221,9 @@ describe("listing bookable telescopes", () => {
           observatoryId: hidden.id,
           name: "Hidden",
           manufacturer: "Celestron",
-          model: "NexStar 6SE",
-          apertureMm: 150,
-          focalLengthMm: 1500,
+          model: "NexStar 8SE",
+          apertureMm: 203,
+          focalLengthMm: 2032,
         },
       });
       await database.observatoryNetworkNode.create({

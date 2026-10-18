@@ -182,7 +182,7 @@ export type AccountDeletionBlocker = typeof AccountDeletionBlocker[keyof typeof 
 
 /**
  * Phase 1 catalogue classes only. Every class in this enum is one the
- * NexStar 6SE + ASI585MC combination can present convincingly from a Bortle 8-9
+ * NexStar 8SE + ASI585MC combination can present convincingly from a Bortle 8-9
  * sky. Wide targets that do not fit any available field of view are excluded from
  * the catalogue and therefore from this enum.
  *
@@ -198,7 +198,7 @@ export const TargetType = {
 
 /**
  * Phase 1 catalogue classes only. Every class in this enum is one the
- * NexStar 6SE + ASI585MC combination can present convincingly from a Bortle 8-9
+ * NexStar 8SE + ASI585MC combination can present convincingly from a Bortle 8-9
  * sky. Wide targets that do not fit any available field of view are excluded from
  * the catalogue and therefore from this enum.
  *
@@ -251,9 +251,9 @@ export const TargetPositionSource = { FIXED: 'FIXED', EPHEMERIS: 'EPHEMERIS' } a
 export type TargetPositionSource = typeof TargetPositionSource[keyof typeof TargetPositionSource];
 
 /**
- * The three optical configurations of the C6. Focal length and image scale follow
- * from the choice. F20_BARLOW = 3000 mm, F10_NATIVE = 1500 mm,
- * F6_3_REDUCER = 945 mm with the #94175 reducer.
+ * The three optical configurations of the 8SE. Focal length and image scale follow
+ * from the choice. F20_BARLOW = 4064 mm, F10_NATIVE = 2032 mm,
+ * F6_3_REDUCER = 1280 mm with the #94175 reducer.
  *
  */
 export const OpticalConfig = {
@@ -263,9 +263,9 @@ export const OpticalConfig = {
 } as const;
 
 /**
- * The three optical configurations of the C6. Focal length and image scale follow
- * from the choice. F20_BARLOW = 3000 mm, F10_NATIVE = 1500 mm,
- * F6_3_REDUCER = 945 mm with the #94175 reducer.
+ * The three optical configurations of the 8SE. Focal length and image scale follow
+ * from the choice. F20_BARLOW = 4064 mm, F10_NATIVE = 2032 mm,
+ * F6_3_REDUCER = 1280 mm with the #94175 reducer.
  *
  */
 export type OpticalConfig = typeof OpticalConfig[keyof typeof OpticalConfig];

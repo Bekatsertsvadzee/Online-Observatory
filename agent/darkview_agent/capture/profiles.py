@@ -10,7 +10,7 @@ different ones badly enough to justify a table with a row per target that an
 operator would have to maintain.
 
 PROVISIONAL. Every figure here was chosen against `SimCamera` and the starfield
-generator, not measured on an ASI585MC through a C6. They are not safety values --
+generator, not measured on an ASI585MC through an 8SE. They are not safety values --
 nothing in this file can move a telescope -- so a provisional value is allowed to
 ship, but DV-035 replaces them at first light and they must not be read as
 measurements before then.

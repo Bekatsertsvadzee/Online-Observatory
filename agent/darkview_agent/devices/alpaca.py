@@ -64,7 +64,7 @@ Transport = Callable[[str, str, dict[str, str], float], tuple[int, bytes]]
 
 REQUEST_TIMEOUT_SECONDS = 5.0
 
-#: Park and unpark may not return until the motion is over. A 6SE crossing the
+#: Park and unpark may not return until the motion is over. An 8SE crossing the
 #: whole sky at full rate takes well under this; DV-034 replaces it with a
 #: measured figure. It bounds a wait, it does not permit any motion.
 PARK_TIMEOUT_SECONDS = 180.0
