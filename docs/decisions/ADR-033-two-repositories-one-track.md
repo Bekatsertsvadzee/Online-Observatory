@@ -4,7 +4,7 @@
 - **Status:** APPROVED
 - **Decided by:** project maintainer
 - **Mirrors:** `darkview-clients` ADR-031, the same decision from the clients' side
-- **Amends:** `CLAUDE.md`, "Repository boundary" (no UI here) and "Definition of done"
+- **Amends:** `docs/ENGINEERING.md`, "Repository boundary" (no UI here) and "Definition of done"
 
 ## Context
 
@@ -35,6 +35,6 @@ first, so that when the hardware arrives only the device connection remains.
 ## Consequences
 
 - ADR-014's merge conditions are unchanged: approval in that session, green CI on the
-  head, a squash, no agent in the authorship.
+  head, a squash, and the maintainer as the only author.
 - Decision records in both repositories share one number sequence from here, so the two
   directories merge without collisions.

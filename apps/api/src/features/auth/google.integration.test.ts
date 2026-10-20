@@ -108,7 +108,7 @@ describe("the callback", () => {
 
     const { location } = await completeGoogleSignIn(
       { code: "code", state, stateCookie },
-      google({ email, name: "Nino" }),
+      google({ email, name: "Gio" }),
     );
 
     expect(location).toBe("/ka/app");
@@ -116,7 +116,7 @@ describe("the callback", () => {
       expect.arrayContaining([sessionCookieName, csrfCookieName]),
     );
     const user = await database.user.findUniqueOrThrow({ where: { email } });
-    expect(user).toMatchObject({ name: "Nino", locale: "ka", googleSubject: `sub-${email}` });
+    expect(user).toMatchObject({ name: "Gio", locale: "ka", googleSubject: `sub-${email}` });
     expect(user.emailVerifiedAt).not.toBeNull();
     expect(await database.account.findUnique({ where: { userId: user.id } })).toBeNull();
     expect(await database.loyaltyAccount.findUnique({ where: { userId: user.id } })).not.toBeNull();

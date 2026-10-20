@@ -210,14 +210,14 @@ describe("casting", () => {
   it("counts each customer once, moves a second vote, and shows the caller theirs", async () => {
     const observatoryId = await observatory({ measuredMaxAltitude: 85 });
     const { capella } = await targets();
-    const [ana, giorgi] = await Promise.all([customer(), customer()]);
+    const [beka, giorgi] = await Promise.all([customer(), customer()]);
 
-    const first = await castVote({ observatoryId, week: WEEK, targetId: capella, userId: ana, now: NOW });
+    const first = await castVote({ observatoryId, week: WEEK, targetId: capella, userId: beka, now: NOW });
     expect(first.ok && first.vote.candidates).toEqual([{ targetId: capella, votes: 1 }]);
     expect(first.ok && first.vote.mine).toBe(capella);
 
     await castVote({ observatoryId, week: WEEK, targetId: capella, userId: giorgi, now: NOW });
-    const again = await castVote({ observatoryId, week: WEEK, targetId: capella, userId: ana, now: NOW });
+    const again = await castVote({ observatoryId, week: WEEK, targetId: capella, userId: beka, now: NOW });
     expect(again.ok && again.vote.candidates).toEqual([{ targetId: capella, votes: 2 }]);
 
     const read = await readWeekVote({ observatoryId, week: WEEK, callerId: giorgi, now: NOW });

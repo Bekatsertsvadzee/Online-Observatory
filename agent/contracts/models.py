@@ -220,7 +220,7 @@ class TargetType(StrEnum):
 class SolarSystemBody(StrEnum):
     """
     A body whose position is computed from ephemeris at request time. Phase 1
-    offers the Moon and the four planets the Build Plan lists; the rest are
+    offers the Moon and the four planets of the Phase 1 catalogue; the rest are
     named so the enum does not need a breaking change to add one.
 
     """
@@ -1051,7 +1051,7 @@ class MissionState(StrEnum):
     state, and every path out of one ends at Park.
 
     Resolved by docs/decisions/ADR-004-mission-state-machine.md (2026-08-31). This
-    enum matches docs/ENGINEERING.md and nothing else. The Build Plan's LOCKED and DELIVERED
+    enum matches docs/ENGINEERING.md and nothing else. The earlier LOCKED and DELIVERED
     are not states -- "Target locked" and "LIVE" are display labels mapped in the
     web layer. Its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as
     MissionFailureReason detail on a state above, never as states.

@@ -7,12 +7,11 @@
 
 ## Context
 
-Planning documents disagreed on where the telescope physically goes. Earlier
-planning placed it on a **dacha terrace running off-grid solar**; the v1 Final
-Master Execution Plan §1 placed it on a **Tbilisi rooftop on mains power**. Master
-Plan v2 §2 Decision 3 recorded the discrepancy as unresolved.
+Earlier planning disagreed on where the telescope physically goes: a **dacha terrace
+running off-grid solar** or a **Tbilisi rooftop on mains power**. The discrepancy was
+recorded as unresolved.
 
-The site is not a detail. Build Plan step P1 requires a compass survey of every
+The site is not a detail. Installation requires a compass survey of every
 obstruction bearing at the actual site, and that survey becomes `HORIZON_MASK`. No
 site means no horizon mask, which means no safe remote operation and no GATE 1.
 
@@ -28,7 +27,7 @@ Tbilisi, Georgia".
 - **Off-grid power is out of Phase 1.** No battery sizing, no solar budget, no
   charge-controller telemetry. Mains power with a UPS for graceful shutdown is the
   assumption. If that assumption is wrong, this ADR is wrong.
-- The compass survey (maintainer action O-4, Build Plan P1) is performed at the rooftop
+- The compass survey (maintainer action O-4) is performed at the rooftop
   and produces `HORIZON_MASK` for that location's obstruction bearings. A survey
   from any other location is not valid for this site.
 - `MAX_ALT_SAFE` remains **unmeasured** and is unaffected by this decision. It is a

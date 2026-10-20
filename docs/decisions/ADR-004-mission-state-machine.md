@@ -2,7 +2,7 @@
 
 - **Date:** 2026-08-30
 - **Status:** APPROVED
-- **Supersedes:** Darkview Build Plan §08 state list; the `MissionState` enum in
+- **Supersedes:** the earlier planning state list; the `MissionState` enum in
   `prisma/schema.prisma` as it stood at commit `5a61c9b`
 - **Decided by:** project maintainer
 - **Resolves:** conflict C-1 in the project backlog
@@ -13,7 +13,7 @@ Three documents in this project defined three different mission state
 enumerations, and no decision record said which one governed.
 
 - `docs/ENGINEERING.md` — ten primary states and five failure/hold states.
-- Darkview Build Plan §08 — additionally defines `LOCKED` and `DELIVERED` as
+- The earlier planning state list — additionally defines `LOCKED` and `DELIVERED` as
   primary states and `SOLVE_FAILED`, `LINK_LOST`, `EXPIRED` as failure states,
   and omits `FAILED`.
 - `prisma/schema.prisma` — the `docs/ENGINEERING.md` list with `PLATE_SOLVING` written
@@ -51,17 +51,17 @@ contract, the database or the API.
   not change.
 - `prisma/schema.prisma` renames `PLATE_SOLVING` to `VERIFYING`. That is a
   migration, and it is the only mission-state schema change permitted.
-- The Build Plan's extra failure conditions survive as **diagnostic detail, not
+- The earlier list's extra failure conditions survive as **diagnostic detail, not
   as states**: `MissionFailureReason` in the contract carries `SOLVE_FAILED`,
   `LINK_LOST`, `EXPIRED` and the rest alongside a state above. They are never
   mapped into `MissionState` and never rendered as a stage in a progress
   indicator.
-- The Build Plan's customer-facing progression copy ("Target locked" -> "LIVE")
+- The customer-facing progression copy ("Target locked" -> "LIVE")
   is **presentation**, not state. The live room may display "Target locked" as
   the label for `VERIFYING`/`CENTERING` and "LIVE" for `OBSERVING`. That mapping
   lives in the web layer, is a display concern only, and must never leak back
   into the enum.
-- No agent may add a state to this enum. A genuinely new state is a contract
+- Nobody may add a state to this enum. A genuinely new state is a contract
   change and needs a new ADR.
 
 ## Why not add `LOCKED` and `DELIVERED`

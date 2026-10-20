@@ -16,7 +16,7 @@ marked SIMULATED on the face of the image. `docs/ENGINEERING.md` forbids present
 simulator output as real telescope output; a field in a database row does not
 survive a screenshot, and this does.
 
-The styling is Brand Identity System v2.0 -- Photon Blue on Darkview Night, one
+The styling is the Darkview brand -- Photon Blue on Darkview Night, one
 line, bottom left, no HUD decoration and no frame. It is a caption, not a
 graphic: the picture is what the customer came for.
 """
@@ -30,7 +30,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from contracts.models import ObservatoryMode
 
-#: Brand Identity System v2.0.
+#: Darkview brand colours (docs/ENGINEERING.md, Design and brand).
 PHOTON_BLUE = (92, 200, 255)
 PRIMARY_TEXT = (242, 245, 247)
 #: Darkview Night, as the caption's backing. Drawn at partial opacity so a star

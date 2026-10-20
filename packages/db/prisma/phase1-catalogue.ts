@@ -1,5 +1,5 @@
 /**
- * The Phase 1 target catalogue — Build Plan section 01.
+ * The Phase 1 target catalogue.
  *
  * Twelve objects, all confirmed to fit an available field of view and all bright
  * enough for a Bortle 8–9 sky. This list is closed: adding a target means
@@ -7,10 +7,9 @@
  *
  * M31, the Pleiades and the Double Cluster are deliberately absent. At 190′, 110′
  * and 60′ they are wider than the largest available field (40.5′ at f/6.3), so
- * they cannot be framed. The Build Plan says so explicitly: "Do not put them in
- * the catalogue."
+ * they cannot be framed, and they are deliberately kept out of the catalogue.
  *
- * Sizes, magnitudes and optical configurations are the Build Plan's own values.
+ * Sizes, magnitudes and optical configurations are the catalogue's fixed values.
  * Where it gives a range — Mars 0.1–0.4′, Venus 0.2–1.0′ — the larger figure is
  * stored, because what matters is whether the object fits the frame at its
  * biggest.
@@ -46,21 +45,21 @@ export type Phase1Target = {
 };
 
 /**
- * Build Plan section 01: "A target may only be offered when ... its altitude
+ * The Phase 1 rule: "A target may only be offered when ... its altitude
  * exceeds 25°". One figure, applied to every target; the scheduler adds the Sun,
  * Moon and field-of-view rules at request time (DV-053).
  */
 const MIN_ALTITUDE_DEGREES = 25;
 
 /**
- * Session length is NOT specified per target anywhere in the Build Plan. These are
+ * Session length is NOT specified per target. These are
  * derived from the observing method and must be confirmed against the /pricing
  * page before launch:
  *
  *   short  — short exposures, no stacking needed to show something worth seeing
- *   stacked — the Build Plan says these "need live stacking", which takes time
+ *   stacked — these need live stacking, which takes time
  *
- * Both sit under the 45-minute ceiling that Build Plan Q3 sets as the maximum
+ * Both sit under the 45-minute ceiling set as the maximum
  * mission length, itself provisional until unattended tracking is measured.
  */
 const SHORT_SESSION_MINUTES = 15;
@@ -142,7 +141,7 @@ export const PHASE1_TARGETS: readonly Phase1Target[] = [
     solarSystemBody: "MARS",
     rightAscensionHours: null,
     declinationDegrees: null,
-    // 0.1–0.4′ in the Build Plan. The larger figure is stored; the scheduler
+    // 0.1–0.4′ across an apparition. The larger figure is stored; the scheduler
     // gates on apparent diameter, because away from opposition Mars is a dot.
     angularSizeArcmin: 0.4,
     magnitude: -1,

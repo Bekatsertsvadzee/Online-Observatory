@@ -52,9 +52,9 @@ info:
     Live-view / EAA using short exposures and live stacking. This contract deliberately
     contains no long-exposure astrophotography concepts.
 
-    KNOWN OPEN ITEMS (see docs/planning/phase1-issue-decomposition.md)
+    KNOWN OPEN ITEMS (see docs/backlog.md)
       - MissionState below is exactly the enumeration in docs/ENGINEERING.md. RESOLVED by
-        ADR-004 (2026-08-31): the Build Plan's LOCKED and DELIVERED are not states,
+        ADR-004 (2026-08-31): the earlier LOCKED and DELIVERED are not states,
         and its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as MissionFailureReason
         diagnostic detail attached to a docs/ENGINEERING.md state, never as competing states.
       - SafetyEnvelopeConfig.maxAltitudeDegrees has no default and is nullable on
@@ -2979,7 +2979,7 @@ components:
       type: string
       description: |
         A body whose position is computed from ephemeris at request time. Phase 1
-        offers the Moon and the four planets the Build Plan lists; the rest are
+        offers the Moon and the four planets of the Phase 1 catalogue; the rest are
         named so the enum does not need a breaking change to add one.
       enum:
         - MOON
@@ -4539,7 +4539,7 @@ components:
         state, and every path out of one ends at Park.
 
         Resolved by docs/decisions/ADR-004-mission-state-machine.md (2026-08-31). This
-        enum matches docs/ENGINEERING.md and nothing else. The Build Plan's LOCKED and DELIVERED
+        enum matches docs/ENGINEERING.md and nothing else. The earlier LOCKED and DELIVERED
         are not states -- "Target locked" and "LIVE" are display labels mapped in the
         web layer. Its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as
         MissionFailureReason detail on a state above, never as states.

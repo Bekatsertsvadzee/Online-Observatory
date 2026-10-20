@@ -34,14 +34,14 @@ from tests.agent_harness import (
 )
 
 
-def _arm(agent, operator: str = "Nika") -> None:
+def _arm(agent, operator: str = "Beka") -> None:
     agent.store.append_posture_request(
         agent.supervisor.run_id, "ARM", operator, datetime.now(UTC)
     )
     agent.pump()
 
 
-def _disarm(agent, operator: str = "Nika") -> None:
+def _disarm(agent, operator: str = "Beka") -> None:
     agent.store.append_posture_request(
         agent.supervisor.run_id, "DISARM", operator, datetime.now(UTC)
     )
@@ -130,7 +130,7 @@ def test_an_arming_written_for_another_run_is_ignored(tmp_path):
         max_altitude_degrees=70.0, attended=True, state_path=tmp_path / "s.sqlite3"
     )
     try:
-        agent.store.append_posture_request(uuid4(), "ARM", "Nika", datetime.now(UTC))
+        agent.store.append_posture_request(uuid4(), "ARM", "Beka", datetime.now(UTC))
         agent.pump()
 
         assert agent.supervisor.posture.posture is AgentPosture.attended
@@ -355,7 +355,7 @@ def test_the_command_line_arms_the_running_agent(tmp_path):
     try:
         said: list[str] = []
         code = arming.run_request(
-            arming.ARM, "Nika", {"DARKVIEW_AGENT_STATE_PATH": str(path)}, said.append
+            arming.ARM, "Beka", {"DARKVIEW_AGENT_STATE_PATH": str(path)}, said.append
         )
         agent.pump()
 
@@ -371,7 +371,7 @@ def test_the_command_line_refuses_to_arm_an_agent_that_is_not_attended(tmp_path)
     try:
         said: list[str] = []
         code = arming.run_request(
-            arming.ARM, "Nika", {"DARKVIEW_AGENT_STATE_PATH": str(path)}, said.append
+            arming.ARM, "Beka", {"DARKVIEW_AGENT_STATE_PATH": str(path)}, said.append
         )
 
         assert code == 1
@@ -388,7 +388,7 @@ def test_the_command_line_does_not_forget_a_command_the_agent_is_carrying_out(tm
         agent.store.remember("in-flight-command", datetime.now(UTC))
 
         arming.run_request(
-            arming.DISARM, "Nika", {"DARKVIEW_AGENT_STATE_PATH": str(path)}, lambda _: None
+            arming.DISARM, "Beka", {"DARKVIEW_AGENT_STATE_PATH": str(path)}, lambda _: None
         )
 
         assert agent.store.has("in-flight-command") is True

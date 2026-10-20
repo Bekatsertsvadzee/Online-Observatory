@@ -13,7 +13,7 @@
   `ADR-010` (agent local state store), `ADR-024` (the agent's unattended posture),
   `ADR-012` (capture storage and upload), `ADR-022`
   (subscriptions), issue #97
-- **Blocks:** any Flow B implementation, and the `CLAUDE.md` amendment it needs
+- **Blocks:** any Flow B implementation, and the `docs/ENGINEERING.md` amendment it needs
 - **Blocked by:** DV-038, the attended evidence run, and a fitted sky sensor (§3). Nothing
   here is built before both.
 
@@ -32,7 +32,7 @@ assumption that a human being is watching a telescope move, and one of them says
 outright:
 
 > No autonomous or background session may command the real mount or camera.
-> — `CLAUDE.md`, Hardware safety
+> — `docs/ENGINEERING.md`, Hardware safety
 
 Flow B is, by construction, an autonomous session commanding a real mount. This record
 cannot be implemented without amending that sentence, and amending it is the maintainer's
@@ -213,7 +213,7 @@ The lifetime is what makes this decidable without predicting weather. A request 
 cannot be filled in its lifetime is a request the sky refused, and the customer is not
 charged for the sky.
 
-### 6. `CLAUDE.md` and `docs/ENGINEERING.md` are amended, in the commit that approves this record
+### 6. `docs/ENGINEERING.md` is amended, in the commit that approves this record
 
 The Hardware safety section gains a third case beside first-party and partner:
 
@@ -251,7 +251,7 @@ approved and armed.
   fills the hours nobody is awake for, and an operator who must be present for each one has
   simply been sold a worse live session.
 - **Partner-only Flow B** — queue only onto ADR-013 nodes, which may already run
-  unattended. Tempting, and it needs no `CLAUDE.md` change at all. Rejected because it
+  unattended. Tempting, and it needs no `docs/ENGINEERING.md` change at all. Rejected because it
   makes the first-party instrument the *least* capable node on the network, and because
   DV-124 already establishes that Darkview does not ask a partner to do what it has not
   done itself.

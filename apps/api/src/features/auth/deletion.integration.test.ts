@@ -59,7 +59,7 @@ async function customer(role: "USER" | "OPERATOR" = "USER") {
   const user = await database.user.create({
     data: {
       email: `${randomUUID()}@example.test`,
-      name: "Nino",
+      name: "Gio",
       role,
       emailVerifiedAt: NOW,
       account: { create: { passwordHash } },
@@ -284,7 +284,7 @@ describe("deleting an account", () => {
     const { userId, email, session } = await customer();
     await deleteAccount(session, { currentPassword: PASSWORD }, NOW);
 
-    const again = await database.user.create({ data: { email, name: "Nino again" } });
+    const again = await database.user.create({ data: { email, name: "Gio again" } });
     expect(again.id).not.toBe(userId);
   });
 

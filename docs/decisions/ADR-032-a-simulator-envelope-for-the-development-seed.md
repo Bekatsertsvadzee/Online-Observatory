@@ -15,7 +15,7 @@
 ## Context
 
 MAX_ALT_SAFE is measured from the physical optical train, never guessed, never defaulted
-(CLAUDE.md, `docs/SAFETY.md` §2). The development seed therefore left the demo
+(`docs/ENGINEERING.md`, `docs/SAFETY.md` §2). The development seed therefore left the demo
 observatory's `maxAltitudeDegrees` null, and while it is null the cloud and the agent both
 refuse every slew with `SAFETY_ENVELOPE_UNMEASURED`.
 

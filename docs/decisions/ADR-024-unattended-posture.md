@@ -235,7 +235,7 @@ record is buildable before then.
 
 - **ADR-013 is amended**, in the commit that approves this record: an unattended partner
   runs in the posture this record defines, and its condition table gains §6's sky sensor.
-  `CLAUDE.md` and `docs/ENGINEERING.md` § Hardware safety are amended to match.
+  `docs/ENGINEERING.md` § Hardware safety is amended to match.
 - **The ADR-023 draft is corrected** to cite this record for §1 and §3, and to take
   `NUDGE`'s removal from the scheduler's role rather than from the posture.
 - **Every restart on an unattended node costs a visit.** For a partner that is the owner

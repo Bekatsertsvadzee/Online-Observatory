@@ -138,13 +138,13 @@ describe("editing the profile", () => {
     const { session } = await signedInAccount();
 
     const result = await updateProfile(session, {
-      displayName: "  Nino  ",
+      displayName: "  Gio  ",
       locale: "ka",
     });
 
     expect(result).toMatchObject({
       ok: true,
-      user: { displayName: "Nino", locale: "ka" },
+      user: { displayName: "Gio", locale: "ka" },
     });
     expect(
       await database.auditLog.count({

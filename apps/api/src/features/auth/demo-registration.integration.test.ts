@@ -66,9 +66,9 @@ beforeEach(() => {
 describe("registration on the demo without email delivery (ADR-049)", () => {
   it("verifies a new address at once, signs it in, and the password works afterwards", async () => {
     const email = newAddress();
-    const result = await register({ displayName: "Nino", email, password: PASSWORD, locale: "ka" });
+    const result = await register({ displayName: "Gio", email, password: PASSWORD, locale: "ka" });
 
-    expect(result).toMatchObject({ ok: true, user: { email, displayName: "Nino", locale: "ka" } });
+    expect(result).toMatchObject({ ok: true, user: { email, displayName: "Gio", locale: "ka" } });
     expect(cookieJar.has(sessionCookieName)).toBe(true);
     const row = await database.user.findUniqueOrThrow({ where: { email } });
     expect(row.emailVerifiedAt).not.toBeNull();

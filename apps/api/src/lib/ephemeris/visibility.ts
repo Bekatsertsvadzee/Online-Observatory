@@ -14,7 +14,7 @@ import {
 } from "@/lib/ephemeris/engine";
 
 /**
- * Build Plan section 01, the rule to encode in the database:
+ * The Phase 1 visibility rule, encoded in the database:
  *
  *   "A target may only be offered when all four are true: its altitude exceeds
  *    25 degrees, its angular size fits the selected configuration, the Sun is

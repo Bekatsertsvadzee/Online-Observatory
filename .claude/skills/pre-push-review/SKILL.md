@@ -78,7 +78,7 @@ explicitly when a heading has nothing.
 
 ### A. Hardware safety — the highest-consequence code in the repo
 
-`CLAUDE.md` is the authority. Treat a breach here as `DO NOT PUSH`.
+`docs/ENGINEERING.md` is the authority. Treat a breach here as `DO NOT PUSH`.
 
 - The simulator is the default implementation. Always. Any path that reaches
   `AlpacaMount` or `ZwoCamera` without an explicit attended operator action is a
@@ -166,7 +166,7 @@ explicitly when a heading has nothing.
 Separate from defects, and never mixed into the ranked findings. Two or three
 concrete notes at most: the thing that will hurt at 10x, the abstraction that has
 earned its keep, the duplication about to become a third copy. No speculative
-architecture — `CLAUDE.md` forbids shims, flags and abstractions built for a
+architecture — `docs/ENGINEERING.md` forbids shims, flags and abstractions built for a
 future that has not arrived.
 
 ---
@@ -196,7 +196,7 @@ is a good review. Say plainly which parts of the diff you did **not** examine.
 
 ## Definition of done, checked as a list
 
-From `CLAUDE.md`. Confirm each, out loud:
+From `docs/ENGINEERING.md`. Confirm each, out loud:
 
 1. Scope matches the issue — nothing more.
 2. Relevant tests pass.

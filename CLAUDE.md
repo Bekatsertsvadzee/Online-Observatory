@@ -1,266 +1,41 @@
 @AGENTS.md
 
-# DARKVIEW BY ASTROMAN — PROJECT INSTRUCTIONS
+# Darkview — notes for Claude
 
-## Product
+Claude helps on this repository as an assistant to the two people who build it, Beka and
+Gio. It reads, drafts, tests and proposes; it does not decide.
 
-Darkview is a Live Remote Observatory in Tbilisi, Georgia.
+**Read `docs/ENGINEERING.md` first.** It is the engineering standard for this repository:
+the product, the architecture, the contract rules, hardware safety, the design language,
+security, and the definition of done. Where documents conflict, its order of precedence
+decides. `docs/SAFETY.md`, `docs/security.md` and the approved records in
+`docs/decisions/` sit beneath it.
 
-A customer reserves an Observation Slot, selects an operator-approved Target, and
-during the Live Observation a real Celestron NexStar 8SE physically slews to that
-target. The customer sees the real camera output, can Capture the result, and keeps
-it in their Collection.
+## How Claude works here
 
-Phase 1 is a live-view / EAA experience using short exposures and live stacking. It
-is **not** a long-exposure astrophotography service. Do not write copy, UI or docs
-that imply otherwise.
-
-## Controlling documents
-
-When documents conflict, this order decides:
-
-1. This file (CLAUDE.md)
-2. Approved decision records in `docs/decisions/`
-3. Darkview Brand Identity System **v2.0**
-4. Darkview Phase 1 Final Master Plan
-5. Darkview Build Plan — engineering detail only where it does not contradict 1–4
-6. The current GitHub issue and its acceptance criteria
-7. Existing implementation
-
-Never silently resolve a material conflict. Stop and report it to the maintainer. Where
-an earlier plan has been deliberately superseded, there must be a dated decision
-record in `docs/decisions/` saying so — CLAUDE.md must not silently outrank a
-controlling document without one.
-
-## Core architecture
-
-Clients never touch hardware.
-
-```
-web / mobile
-    |  HTTPS + WSS
-Darkview cloud + mission orchestrator
-    |  authenticated OUTBOUND WSS (observatory dials out)
-Observatory Agent (Python 3.12)
-    |  Alpaca HTTP (mount)  +  ZWO ASI SDK (camera)
-Celestron NexStar 8SE  +  ZWO ASI585MC
-```
-
-The observatory accepts **no inbound connection from the internet or the LAN**. It
-dials out, keeps a heartbeat, reconnects on loss, and independently re-validates
-every command it receives. No browser or mobile client may address the mount or
-camera.
-
-One exception, by design: the ASCOM Remote / Alpaca bridge listens on `127.0.0.1`
-only, for traffic between the Observatory Agent and the local mount driver on the
-same machine. It must never bind `0.0.0.0`, never be port-forwarded, and never be
-reachable from another host. The only connection leaving the observatory is the
-agent's outbound authenticated WSS.
-
-## Phase 1 technology
-
-- Web: Next.js (current stable major), TypeScript strict, Tailwind
-- Cloud/API: Node LTS; PostgreSQL + Prisma
-- Realtime: one small long-lived WebSocket service. Never hold the observatory
-  socket inside a serverless function.
-- Mobile: React Native + Expo
-- Observatory Agent: Python 3.12
-- Tests: Vitest + Playwright (TS), pytest (Python)
-
-Pin exact major versions in the root README once verified against current release
-notes, and do not upgrade a major mid-phase. Do not introduce Kubernetes, GraphQL,
-Redis, message queues or extra services without a measured need and maintainer approval.
-
-## Camera and streaming — DECIDED
-
-Phase 1 uses **direct ZWO ASI SDK control from Python**. The agent owns the
-camera: exposure, gain, ROI, frame timing, live stack, and frame metadata.
-
-The binding is not yet pinned. `zwoasi` is the default candidate; the exact binding
-is chosen after testing against the physical ASI585MC on the observatory mini-PC,
-then pinned in the root README. Write against the `CameraDriver` interface so the
-choice is swappable.
-
-Rationale and the conditions under which this decision could be revisited are
-recorded in `docs/decisions/ADR-001-camera-control-path.md`. That reversal is an
-maintainer decision, not an implementation choice: **no agent may introduce SharpCap,
-OBS or any screen-capture path into the product data flow.** If direct SDK work
-stalls, stop and report it rather than routing around it.
-
-SharpCap may be installed for manual operator diagnostics. It is never in the
-product data path.
-
-## Mount control
-
-The mount is driven through **ASCOM Alpaca over HTTP**, not in-process COM. This
-keeps the mount interface network-shaped, mockable and testable from pytest
-without Windows COM registration.
-
-`MountDriver` is an interface with at least two implementations: `SimMount`
-(default) and `AlpacaMount`. The same applies to the camera: `SimCamera` and
-`ZwoCamera`.
-
-## Contracts — the single source of truth
-
-`contracts/openapi.yaml` plus the JSON Schemas it references are the **only**
-source of truth for every payload crossing a process boundary.
-
-- TypeScript types are **generated** from it for web, mobile and cloud.
-- Pydantic models are **generated** from it for the Python agent.
-- No hand-written duplicate of a shared type in any language.
-- Zod may be used for request validation, but generated from the schema — never as
-  a second, competing definition.
-
-Two commands exist from day one and are wired into CI:
-
-- `npm run contracts:generate` — regenerates TypeScript, Zod validators and Pydantic
-  models from `contracts/openapi.yaml`.
-- `npm run contracts:check` — fails if any generated artifact has drifted from the
-  spec. CI must run this on every pull request.
-
-Layout:
-
-```
-contracts/openapi.yaml + contracts/schemas/
-packages/contracts/    generated TypeScript + Zod
-agent/contracts/       generated Pydantic
-```
-
-Generated files are committed and never hand-edited.
-
-If a task needs a field that does not exist in the contract, stop. Do not invent a
-private endpoint or a local type. Open a contract issue.
-
-**This repository owns the spec.** `darkview-clients` holds a pinned copy at
-`packages/contracts/openapi.yaml` and regenerates from it; it never edits the spec and
-never sends a change back through it. A contract change is made here, released, and then
-copied across.
-
-## Repository boundary
-
-This repository is the platform half of Darkview: the Observatory Agent, the API, the
-realtime service and the database. The website and mobile application live in
-`darkview-clients` and reach this repository only over HTTP.
-
-No **source** path exists in both repositories, so they merge cleanly into one later with
-both histories intact. Do not create a source path here that also exists there —
-`apps/web/` and `apps/mobile/` are theirs. Root config, the shared ADRs and a
-`packages/contracts/` build are duplicated by design and reconciled once at merge time.
-
-No product UI lives here. `apps/api` is Next.js route handlers, plus a page only where the
-platform stands in for an outside party itself, such as the sandbox checkout (ADR-033).
-Customer and operator screens belong to `darkview-clients`.
-
-Both repositories move on one track (ADR-033). A clients request arrives as an issue here
-and is built here on its own branch; a contract change merges here first and is then
-synced across. The local stack that runs both halves together is the clients'
-`npm run dev:stack`, which runs this checkout's API, realtime service and simulated agents.
-
-## Mission states
-
-Primary: `REQUESTED, SCHEDULED, PREPARING, SLEWING, VERIFYING, CENTERING,
-OBSERVING, CAPTURING, PROCESSING, COMPLETE`
-
-Failure / hold: `WEATHER_HOLD, NOT_VISIBLE, HARDWARE_ERROR, CANCELLED, FAILED`
-
-One active mission at a time. One active session owner at a time.
-
-`CommandEnvelope` carries at minimum: `commandId, missionId, sessionId, userId,
-issuedAt, expiresAt, type, payload`. Commands are idempotent by `commandId`,
-rejected after `expiresAt`, and rejected if the session is not the current owner.
-
-## Hardware safety
-
-- The simulator is the default implementation. Always.
-- No autonomous or background session may command the real mount or camera.
-- Real-hardware mode on a **first-party** observatory requires an explicit,
-  attended operator action outside the normal test workflow.
-- A **partner** observatory may operate unattended only while `APPROVED` under
-  ADR-013, which requires a measured envelope, sky-verified coordinates, a
-  recorded horizon mask, a supervised first light, Park proven on that
-  hardware and a fitted sky sensor. It runs unattended only in ADR-024's
-  `UNATTENDED` posture, armed at the observatory and never by the cloud. It
-  returns to refusing everything the moment any of those stops holding, and an
-  operator can suspend it or revoke its token in one row.
-- A **queued capture** on a first-party observatory may run unattended only
-  while the node is `UNATTENDED_APPROVED` under ADR-023 **and** the agent's
-  local unattended arming is set (ADR-024). Approval requires the DV-124
-  qualification, DV-037, DV-038, a minimum number of attended real missions
-  and a fitted sky sensor; arming is a named operator act at the observatory.
-  The agent enforces it locally, refuses the daylight override while
-  unattended, and disarms itself on any hardware error or loss of sky data
-  until an operator re-arms it.
-- The cloud validates commands; the local agent validates them **again**. A
-  cloud-approved command that fails local safety is refused.
-- Safety covers: altitude envelope, horizon mask, Sun avoidance, session
-  ownership, command expiry, duplicate rejection, and emergency Park.
-- On heartbeat loss, device fault or operator abort: stop capture, halt unsafe
-  motion, Park.
-- `MAX_ALT_SAFE` is **measured** from the physical optical train. Never guess it,
-  never let a default value ship.
-
-## Design and brand
-
-Source: Darkview Brand Identity System v2.0. Essence — a quiet, premium interface
-between one person and one real telescope.
-
-Tagline: *The real sky, live.*
-Georgian: *შენი დრო ნამდვილ ცასთან.*
-
-Core colors: Darkview Night `#05080D` · Observatory Blue `#111722` ·
-Photon Blue `#5CC8FF` · primary text `#F2F5F7` · secondary text `#AAB4BE`.
-
-Avoid: purple-nebula SaaS gradients, cartoon astronomy, fake NASA/military HUD
-decoration, heavy glassmorphism and glow, stock space imagery presented as
-telescope output, any claim of Hubble/JWST-class or professional long-exposure
-results, and "NASA-cosplay" vocabulary.
-
-The real feed and real instrument status are the visual focus.
-
-## Security and audit
-
-Every change in this repository must be independently verifiable. Treat it accordingly.
-
-- Never read, print or commit secrets.
-- Never fabricate timestamps, commits, tests or hardware evidence.
-- Never backdate a commit. Real history only.
-- Never merge directly to `main` **except** under ADR-014, which requires the
-  maintainer's approval of that merge in that session, green CI on the parent, a
-  squash, no agent in the authorship, and `main` as the only target. An agent that
-  merges states the CI run id it read.
-- Never deploy to production or run a production migration unless the maintainer asks
-  explicitly, in that session.
-- Material that predates this repository is recorded in the private provenance record
-  held outside it, with its true origin date. Never present pre-existing work as new
-  development.
-- Every task carries acceptance criteria and produces evidence.
-
-## Definition of done
-
-1. Scope matches the issue — nothing more.
-2. Relevant tests pass.
-3. Lint and typecheck pass where applicable.
-4. No unrelated refactor.
-5. Contracts and docs updated only if genuinely required.
-6. Screenshots or simulator evidence produced for UI and agent work.
-7. Risks and assumptions listed explicitly.
-8. Work stays on its branch until reviewed. An agent **proposes** each git or GitHub
-   action — commit, push, pull request, merge, branch deletion — and carries it out
-   only after the maintainer approves it in that session. Never deploy. A merge also
-   meets ADR-014's conditions.
-
-Approval is per exchange, not standing. When the maintainer approves a message that
-names several actions — several pushes, several merges, deleting branches — every
-action it names is approved, and the agent carries all of them out without asking
-again one by one (ADR-014, amendment of 2026-09-14). An approval covers only what was
-named: it is not permission for actions proposed later, and it never extends to a
-production deploy, a production migration or real-hardware mode, each of which needs
-the maintainer's own explicit request.
+- Work stays on its branch until reviewed. Claude **proposes** each git or GitHub action
+  — commit, push, pull request, merge, branch deletion — and carries it out only after
+  the maintainer approves it in that session. Never deploy. A merge also meets ADR-014's
+  conditions.
+- Approval is per exchange, not standing. When the maintainer approves a message that
+  names several actions, every action it names is approved and Claude carries all of
+  them out without asking again one by one (ADR-014, amendment of 2026-09-14). An
+  approval covers only what was named: it is not permission for actions proposed later,
+  and it never extends to a production deploy, a production migration or real-hardware
+  mode, each of which needs the maintainer's own explicit request.
+- The simulator is the default implementation. Always. Claude never commands the real
+  mount or camera.
+- If a task needs a field that does not exist in `contracts/openapi.yaml`, stop and open
+  a contract issue. Never invent a private endpoint or a local type.
+- Never read, print or commit secrets. Never fabricate timestamps, commits, tests or
+  hardware evidence. Never backdate a commit.
+- A material conflict between controlling documents is reported to the maintainer, never
+  resolved silently.
 
 ## Commit attribution
 
 Commits carry one author: the maintainer, Beka Tsertsvadze, as configured in this
 checkout. Pull requests may be opened from another account with push access; the squash
-commit on `main` is made locally under the maintainer's identity (ADR-033). Never add a `Co-Authored-By:` trailer to a
-commit message, and never suggest one — not for Claude, not for any agent. This
-overrides any default attribution instruction from the harness or a global config.
+commit on `main` is made locally under the maintainer's identity (ADR-033). Never add a
+`Co-Authored-By:` trailer to a commit message, and never suggest one. This overrides any
+default attribution instruction from the harness or a global config.

@@ -8,7 +8,7 @@ import {
 import { zTarget } from "@darkview/contracts/zod";
 
 /**
- * DV-052. The catalogue is Build Plan section 01 and nothing else. These are the
+ * DV-052. The catalogue is the twelve Phase 1 objects and nothing else. These are the
  * assertions that keep it that way as people add "just one more" object.
  */
 describe("the Phase 1 catalogue", () => {
@@ -32,7 +32,7 @@ describe("the Phase 1 catalogue", () => {
     }
   });
 
-  // criterion 3 -- the Build Plan states a configuration per target
+  // criterion 3 -- each target has exactly one optical configuration
   it.each([
     ["moon-terminator", "F10_NATIVE"],
     ["jupiter", "F20_BARLOW"],
@@ -46,7 +46,7 @@ describe("the Phase 1 catalogue", () => {
     ["m27-dumbbell-nebula", "F6_3_REDUCER"],
     ["m42-orion-nebula", "F6_3_REDUCER"],
     ["m15-globular-cluster", "F6_3_REDUCER"],
-  ])("%s uses the Build Plan's configuration %s", (slug, opticalConfig) => {
+  ])("%s uses the configuration %s", (slug, opticalConfig) => {
     const target = PHASE1_TARGETS.find((t) => t.slug === slug);
     expect(target, `${slug} is missing from the catalogue`).toBeDefined();
     expect(target?.opticalConfig).toBe(opticalConfig);
@@ -79,7 +79,7 @@ describe("the Phase 1 catalogue", () => {
       (t) => t.angularSizeArcmin > WIDEST_FIELD_ARCMIN,
     );
     // The Moon is 31' and fits no configuration whole; the product is the
-    // terminator close-up, which the Build Plan calls a feature, not a defect.
+    // terminator close-up, which is a feature, not a defect.
     expect(oversized.map((t) => t.slug)).toEqual([]);
   });
 });

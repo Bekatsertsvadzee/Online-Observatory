@@ -44,19 +44,19 @@ Never create a source path here that also exists there.
 
 Do not upgrade a major mid-phase.
 
-| | Version | Notes |
-| --- | --- | --- |
-| Node | **24 LTS** (`v24.14.1` in use) | `engines: >=20.19` |
-| npm | 11+ | workspaces |
-| Next.js | **16.3.2** | API route handlers only — no UI in this repository. |
-| TypeScript | **6.0.3** | strict |
-| Prisma | **7.9.1** | `prisma-client` generator |
-| PostgreSQL | **16+** | |
-| Zod | **4.4.3** | generated from the contract, never hand-written |
-| Vitest | 4.1.11 | |
-| Python | **3.12.14** | Observatory Agent (`agent/.venv`) |
-| Pillow | **11.3.0** | JPEG encoding for the live view — DV-032 |
-| ZWO ASI binding | **not yet pinned** | chosen after testing against the physical ASI585MC — ADR-001 |
+|                 | Version                        | Notes                                                        |
+| --------------- | ------------------------------ | ------------------------------------------------------------ |
+| Node            | **24 LTS** (`v24.14.1` in use) | `engines: >=20.19`                                           |
+| npm             | 11+                            | workspaces                                                   |
+| Next.js         | **16.3.2**                     | API route handlers only — no UI in this repository.          |
+| TypeScript      | **6.0.3**                      | strict                                                       |
+| Prisma          | **7.9.1**                      | `prisma-client` generator                                    |
+| PostgreSQL      | **16+**                        |                                                              |
+| Zod             | **4.4.3**                      | generated from the contract, never hand-written              |
+| Vitest          | 4.1.11                         |                                                              |
+| Python          | **3.12.14**                    | Observatory Agent (`agent/.venv`)                            |
+| Pillow          | **11.3.0**                     | JPEG encoding for the live view — DV-032                     |
+| ZWO ASI binding | **not yet pinned**             | chosen after testing against the physical ASI585MC — ADR-001 |
 
 ## Layout
 
@@ -145,18 +145,18 @@ it. The file can never select real hardware: one containing `DARKVIEW_AGENT_DRIV
 `DARKVIEW_AGENT_ATTENDED` refuses to start. Setup collects a device token but cannot issue
 one — nothing does yet (#86).
 
-| Variable | Required | Meaning |
-| --- | --- | --- |
-| `DARKVIEW_AGENT_OBSERVATORY_ID` | yes | Which observatory this is. Must match the record the device token belongs to. |
-| `DARKVIEW_AGENT_CLOUD_URL` | yes | `wss://…/ws/agent`. |
-| `DARKVIEW_AGENT_DEVICE_TOKEN` | yes | Presented as `Authorization: Bearer`. Never appears in a URL or a log. |
-| `DARKVIEW_AGENT_SITE_LATITUDE` | no | Both coordinates or neither. Without them the Sun cannot be computed and every slew is refused. |
-| `DARKVIEW_AGENT_SITE_LONGITUDE` | no | As above. |
-| `DARKVIEW_AGENT_DRIVER_MODE` | no | `SIMULATED` (default) or `REAL`. |
-| `DARKVIEW_AGENT_ATTENDED` | no | Set only when an operator is physically at the observatory. `REAL` without it refuses to start. |
-| `DARKVIEW_AGENT_STATE_PATH` | no | The local state store. Defaults to `~/.darkview/agent-state.sqlite3`. |
-| `DARKVIEW_AGENT_ENV_FILE` | no | The setup file. Defaults to `~/.darkview/agent.env`. Process environment only. |
-| `DARKVIEW_AGENT_OPTICAL_CONFIG` | no | Which optical train is fitted, reported on every capture. `F10_NATIVE` (default), `F20_BARLOW` or `F6_3_REDUCER`. Set it when a barlow or reducer is on the telescope. |
+| Variable                        | Required | Meaning                                                                                                                                                                |
+| ------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DARKVIEW_AGENT_OBSERVATORY_ID` | yes      | Which observatory this is. Must match the record the device token belongs to.                                                                                          |
+| `DARKVIEW_AGENT_CLOUD_URL`      | yes      | `wss://…/ws/agent`.                                                                                                                                                    |
+| `DARKVIEW_AGENT_DEVICE_TOKEN`   | yes      | Presented as `Authorization: Bearer`. Never appears in a URL or a log.                                                                                                 |
+| `DARKVIEW_AGENT_SITE_LATITUDE`  | no       | Both coordinates or neither. Without them the Sun cannot be computed and every slew is refused.                                                                        |
+| `DARKVIEW_AGENT_SITE_LONGITUDE` | no       | As above.                                                                                                                                                              |
+| `DARKVIEW_AGENT_DRIVER_MODE`    | no       | `SIMULATED` (default) or `REAL`.                                                                                                                                       |
+| `DARKVIEW_AGENT_ATTENDED`       | no       | Set only when an operator is physically at the observatory. `REAL` without it refuses to start.                                                                        |
+| `DARKVIEW_AGENT_STATE_PATH`     | no       | The local state store. Defaults to `~/.darkview/agent-state.sqlite3`.                                                                                                  |
+| `DARKVIEW_AGENT_ENV_FILE`       | no       | The setup file. Defaults to `~/.darkview/agent.env`. Process environment only.                                                                                         |
+| `DARKVIEW_AGENT_OPTICAL_CONFIG` | no       | Which optical train is fitted, reported on every capture. `F10_NATIVE` (default), `F20_BARLOW` or `F6_3_REDUCER`. Set it when a barlow or reducer is on the telescope. |
 
 The agent refuses to start without the first three: one that cannot reach the cloud
 cannot be told to stop.
@@ -172,21 +172,43 @@ refuses every slew.
 
 ## State of apps/api
 
-`apps/api/src` holds the server-side modules extracted from the original
-single-application prototype, plus the routes added since: `GET /health`, `GET /me`,
-`GET /targets/tonight`, `GET /slots` and `POST /bookings`, plus the mission routes
-`POST /missions/{missionId}/start` and `POST /missions/{missionId}/command`. The admin
-routes do not exist yet — DV-063 adds them.
+Every path in `contracts/openapi.yaml` has a route handler under `apps/api/src/app`, and
+the only handler outside the contract is `GET /health`. `node scripts/stress-stack.mjs`
+checks that inventory is still true against a running stack (below).
+
+## Stress and live checks against a running stack
+
+`npm test` and `npm run test:integration` prove the parts. These prove the whole: the
+built API, the realtime service and a simulated agent, exercised over HTTP and
+WebSocket the way the clients do.
+
+```bash
+node scripts/dev-object-store.mjs &            # :9000, stands in for the bucket (dev only)
+npm run build && npm run start &               # :4000, the built API
+NODE_ENV=production npm run start --workspace @darkview/realtime &   # :4001
+agent/.venv/bin/python -m darkview_agent &     # the night-side simulator (README above)
+
+node scripts/stress-stack.mjs                  # registrations, reads, the slot race, payment,
+                                               # channel floods, admin authorisation
+node scripts/live-mission.mjs                  # waits for the booked slot, then start, watch,
+                                               # capture, download, abort, park
+```
+
+`next start` runs the API as `NODE_ENV=production` whatever `.env` says, and the session
+cookie is named by that value, so the realtime service must run as production too or
+every mission-channel handshake is 401. `npm run dev` on both sides is consistent by
+itself. The stress run registers throw-away accounts and books and cancels slots; point it
+at a development database, never at customer data.
 
 ## Where to start
 
-| | |
-| --- | --- |
-| What we are building and why | `docs/ENGINEERING.md` |
-| Decisions that bind | `docs/decisions/` |
-| The work, with acceptance criteria | `docs/backlog.md` |
-| System design and boundaries | `docs/architecture.md`, `docs/OWNERSHIP.md` |
-| Observatory wire protocol | `docs/observatory-protocol.md` |
-| Security model | `docs/security.md` |
-| What stops the telescope destroying itself | `docs/SAFETY.md` |
-| How to run, qualify and recover the observatory | `docs/RUNBOOK.md` |
+|                                                 |                                             |
+| ----------------------------------------------- | ------------------------------------------- |
+| What we are building and why                    | `docs/ENGINEERING.md`                       |
+| Decisions that bind                             | `docs/decisions/`                           |
+| The work, with acceptance criteria              | `docs/backlog.md`                           |
+| System design and boundaries                    | `docs/architecture.md`, `docs/OWNERSHIP.md` |
+| Observatory wire protocol                       | `docs/observatory-protocol.md`              |
+| Security model                                  | `docs/security.md`                          |
+| What stops the telescope destroying itself      | `docs/SAFETY.md`                            |
+| How to run, qualify and recover the observatory | `docs/RUNBOOK.md`                           |

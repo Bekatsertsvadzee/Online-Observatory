@@ -317,7 +317,7 @@ async function seedDevelopmentDatabase() {
     }
 
     // The Phase 1 catalogue is real product data, not demo data: exactly the twelve
-    // objects of Build Plan section 01. previewImageUrl stays null until the
+    // objects of the Phase 1 catalogue. previewImageUrl stays null until the
     // operator has photographed the target through this telescope.
     for (const target of PHASE1_TARGETS) {
       const { id, ...data } = target;

@@ -20,9 +20,9 @@
 
 The repository as it stands models product surface that appears in no controlling
 document. `docs/ENGINEERING.md` describes one product: one customer, one reservation, one
-operator-approved target, one real telescope. The Build Plan data model is
+operator-approved target, one real telescope. The Phase 1 data model is
 `users, bookings, missions, targets, payments, captures, mission_events,
-observatory_state`. Master Plan v2's Phase 1 scope matches.
+observatory_state`.
 
 Against that, `prisma/schema.prisma` and `src/` additionally implement:
 
@@ -47,7 +47,7 @@ Frozen means, precisely:
    deletion is worse than an honest, documented boundary.
 2. **It is removed from Phase 1 acceptance.** No frozen artefact appears in the
    acceptance matrix (DV-012) or in any Phase 1 deliverable claim.
-3. **It is not extended.** No agent adds a field, a model, a route, a component
+3. **It is not extended.** Nobody adds a field, a model, a route, a component
    or a test to the frozen surface. No Phase 1 issue may depend on it.
 4. **It is not wired into the Phase 1 mission path.** The mission runner, the
    orchestrator, the agent link and the live room behave as though exactly one

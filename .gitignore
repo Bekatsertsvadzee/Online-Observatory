@@ -28,3 +28,4 @@ backups/
 /private/
 *.xlsx
 .coverage
+.mission-ctx.json

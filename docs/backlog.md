@@ -3,9 +3,8 @@
 59 issues. IDs are stable across both repositories and never reused. Gaps in the
 numbering are intentional headroom.
 
-Detailed acceptance criteria and evidence requirements for each issue are held in the
-project planning archive outside this repository. This file is the working index and the
-dependency order.
+Detailed acceptance criteria and evidence requirements live on each GitHub issue. This
+file is the working index and the dependency order.
 
 ## Conventions
 
@@ -1232,7 +1231,7 @@ These are not engineering work, and none of them can be compressed by working ha
 `SafetyEnvelopeConfig.maxAltitudeDegrees` is nullable, has no default, and `null` means
 UNMEASURED — in which state both the API and the agent refuse every slew with
 `SAFETY_ENVELOPE_UNMEASURED`. Provisional values printed in earlier planning documents
-are not values. No agent may ship one, seed one, or use one as a test fixture outside a
+are not values. Nobody may ship one, seed one, or use one as a test fixture outside a
 clearly-named fake.
 
 ## What the slot exclusion constraint closed

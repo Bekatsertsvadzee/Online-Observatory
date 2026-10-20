@@ -153,7 +153,7 @@ beforeEach(async () => {
   const user = await database.user.create({
     data: {
       email: `${randomUUID()}@example.test`,
-      name: "Nino",
+      name: "Gio",
       locale: "ka",
       emailVerifiedAt: NOW,
     },
@@ -205,7 +205,7 @@ describe("delivering the outbox", () => {
     expect(JSON.parse(body)).toMatchObject({
       kind: "SLOT_REMINDER",
       locale: "ka",
-      recipient: { name: "Nino" },
+      recipient: { name: "Gio" },
       data: {
         durationMinutes: 20,
         target: { nameEn: "M13", nameKa: "M13 ბურთისებრი გროვა" },
@@ -516,7 +516,7 @@ describe("gift voucher emails (DV-112)", () => {
       code,
       durationMinutes: 30,
       message: "Clear skies",
-      buyerName: "Nino",
+      buyerName: "Gio",
       expiresAt: "2027-12-15T18:00:00.000Z",
     });
     expect(JSON.stringify(await outbox())).not.toContain(code);
@@ -535,7 +535,7 @@ describe("gift voucher emails (DV-112)", () => {
     });
 
     const buyer = await database.user.findUniqueOrThrow({ where: { id: userId } });
-    expect(JSON.parse(mail.sent[0].body).recipient).toEqual({ email: buyer.email, name: "Nino" });
+    expect(JSON.parse(mail.sent[0].body).recipient).toEqual({ email: buyer.email, name: "Gio" });
   });
 
   it("retries rather than skips when the secret is missing or is not the one the code was ordered under", async () => {
