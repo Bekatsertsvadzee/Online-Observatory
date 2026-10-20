@@ -190,7 +190,7 @@ record(
 );
 
 if (captures.length) {
-  const d = await call("GET", `/captures/${captures[0].id}/download`);
+  const d = await call("GET", `/captures/${captures[0].id}/download?kind=IMAGE`);
   const url = d.json?.url ?? d.json?.downloadUrl ?? d.headers.get("location");
   record(
     "download link is minted",
@@ -208,14 +208,20 @@ if (captures.length) {
 }
 
 // 7. abort cleanly and confirm Park
+// A capture that finishes the slot's work ends the mission COMPLETE on its own; an
+// ABORT after that is rightly refused with 409.
+const before = (await call("GET", `/missions/${ctx.missionId}`)).json;
+const beforeState = before?.mission?.state ?? before?.state;
 const abort = await call("POST", `/missions/${ctx.missionId}/command`, {
   type: "ABORT",
   reason: "stress: end of live check",
 });
 record(
-  "ABORT accepted",
-  abort.status === 200 || abort.status === 202,
-  `status=${abort.status}`,
+  "ABORT accepted while live, or refused once the mission is already over",
+  beforeState === "COMPLETE"
+    ? abort.status === 409
+    : abort.status === 200 || abort.status === 202,
+  `mission was ${beforeState}, abort status=${abort.status}`,
 );
 let final = null;
 for (let i = 0; i < 30; i++) {
