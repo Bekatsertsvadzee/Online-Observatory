@@ -30,6 +30,20 @@ export class CommandListener {
   private client: Client | null = null;
   private stopped = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  /**
+   * Notifications are relayed one at a time, in the order they arrived.
+   *
+   * The API notifies in a deliberate order inside one transaction: the session
+   * owner first, then the command that owner issued. PostgreSQL delivers them in
+   * that order, but relaying each one costs a database read of its own, and two
+   * reads started together finish in whichever order the database answers. The
+   * GOTO that opens a mission used to overtake the session update that names its
+   * owner, and an agent that had not yet been told who owns the mission refused
+   * it with NO_ACTIVE_MISSION, which ended the mission as FAILED before it began.
+   * A queue keeps the wire order the API chose. A failed relay is reported and
+   * does not block the ones behind it.
+   */
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: CommandListenerOptions) {}
 
@@ -54,7 +68,7 @@ export class CommandListener {
     const client = new Client({ connectionString: this.options.connectionString });
     client.on("notification", (message) => {
       if (message.channel !== AGENT_CHANNEL || !message.payload) return;
-      void this.options.relay.handle(message.payload).catch(this.options.onError);
+      this.enqueue(message.payload);
     });
 
     // A listener that dies quietly is worse than no listener: commands would sit
@@ -74,6 +88,19 @@ export class CommandListener {
       await client.end().catch(() => undefined);
       this.scheduleReconnect();
     }
+  }
+
+  /** Relay a notification after every one that arrived before it. */
+  enqueue(payload: string): Promise<void> {
+    this.queue = this.queue
+      .then(() => this.options.relay.handle(payload))
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          this.options.onError?.(error);
+        },
+      );
+    return this.queue;
   }
 
   private scheduleReconnect(): void {
