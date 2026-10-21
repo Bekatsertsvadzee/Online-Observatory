@@ -6,9 +6,9 @@ import type { NightWindow } from "@/lib/slots/darkness";
  * How long one customer has the telescope.
  *
  * DV-052 derived two session lengths from the observing method -- 15 minutes for
- * short-exposure targets, 30 for the ones the Build Plan says need live stacking.
- * Neither number comes from a controlling document: the Build Plan says session
- * lengths live on the /pricing page and never states them.
+ * short-exposure targets, 30 for the ones that need live stacking. Neither number
+ * comes from a controlling document: session lengths belong to the /pricing page
+ * and are stated nowhere else.
  *
  * Phase 1 sells one slot length, and it is the longer of the two, so that any
  * catalogue target fits in any slot. Selling a 15-minute slot and then letting a
@@ -20,7 +20,7 @@ export const SLOT_DURATION_MINUTES = 30;
 
 /**
  * Dead time between customers: park, slew to the next target, refocus, and
- * absorb an overrun without eating into the next booking. Build Plan section 01
+ * absorb an overrun without eating into the next booking. Operating practice
  * calls for a refocus every 45-60 minutes or after a 2 degree temperature change,
  * so some of these gaps carry one.
  */

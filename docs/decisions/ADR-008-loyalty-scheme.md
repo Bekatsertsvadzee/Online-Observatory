@@ -1,4 +1,4 @@
-# ADR-008 — Darkview Loyalty: reimplement, do not reuse
+# ADR-008 — Darkview Loyalty: written new, for Darkview
 
 - **Date:** 2026-09-01
 - **Status:** APPROVED
@@ -8,51 +8,38 @@
 ## Context
 
 Phase 1 includes a loyalty scheme on the website and in the mobile application. No
-engineering plan existed for either.
-
-A complete loyalty platform already exists in a separate, unrelated product: Next.js on
-Supabase, with a WooCommerce plugin, member surfaces and an admin API. It is available
-to this project as a reference.
-
-Adopting it would import a second database stack and a retail domain model into a
-product that sells Observation Slots, and would make this codebase's origin statement
-untrue.
+engineering plan existed for either, and the question was whether to build it on the
+models this repository already has, or on something brought in from outside.
 
 ## Decision
 
-**Darkview's loyalty scheme is written new, for Darkview.** The existing platform is a
-**reference for architecture and business rules — never a source of code.**
+**Darkview's loyalty scheme is written new, for Darkview,** on the stack this repository
+already runs. Nothing is imported from any other product.
 
-### What may be taken
+### What it is
 
-- **The scheme itself** — tier names, thresholds, earn and redemption rates. These are
-  published business terms, visible on the live site.
-- **Architectural patterns** — an append-only ledger, idempotency by source reference,
-  earning caps, deriving tier from purchase-earned points only, a denormalised balance
-  with a recalculation path, admin adjustment with an audit trail. These are general
-  engineering practice, taken as design in prose, never as code.
+- **The scheme** — tier names, thresholds, earn and redemption rates — is published
+  business terms, held as configuration.
+- **The mechanics** are general engineering practice: an append-only ledger, idempotency
+  by source reference, earning caps, tier derived from purchase-earned points only, a
+  denormalised balance with a recalculation path, and admin adjustment with an audit
+  trail.
 
-### What may not be taken
+### What it is not
 
-- **No file, function or fragment is copied** from the reference platform into this
-  repository. Not adapted, not translated, not renamed.
-- **Supabase does not enter Darkview.** `docs/ENGINEERING.md` pins Phase 1 to PostgreSQL + Prisma
-  and forbids new services without measured need and maintainer approval. The Darkview
-  implementation uses the existing Prisma schema and the existing realtime service.
-- **No WooCommerce or retail concepts.** Darkview sells Observation Slots. There is no
-  shop, no product catalogue and no in-store receipt upload in this scope.
+- **No second stack.** `docs/ENGINEERING.md` pins Phase 1 to PostgreSQL + Prisma and
+  forbids new services without measured need and maintainer approval. Loyalty uses the
+  existing Prisma schema and the existing realtime service.
+- **No retail concepts.** Darkview sells Observation Slots. There is no shop, no product
+  catalogue and no in-store receipt upload in this scope.
 
 ## Why this is the right route
 
 - **One stack.** A second database and auth system for a marketing balance is not a
   measured need, and it would have to be operated, backed up and secured alongside the
   primary one.
-- **The origin statement stays true.** The private provenance record asserts this
-  codebase reuses no application code from any older product. Under this decision that
-  statement remains accurate and needs no correction.
-- **The domain model differs anyway.** The reference platform models retail purchases.
-  Darkview models Observation Slots, Missions and Captures. Most of what would be
-  "reused" would have to be rewritten to fit.
+- **The domain model is Darkview's.** Observation Slots, Missions and Captures, not
+  purchases. Anything shaped for retail would have to be rewritten to fit.
 
 ## Consequences
 
@@ -68,5 +55,5 @@ untrue.
 - Scheduling: behind Milestone S1 and behind the payment path (DV-056), because loyalty
   earns on settled payments. Nothing here is on the critical path to the first real
   mission.
-- Reversing this — a single club spanning both products — is a new ADR, not an
+- Reversing this — a single club spanning more than one product — is a new ADR, not an
   implementation choice.

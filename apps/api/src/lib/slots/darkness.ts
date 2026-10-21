@@ -12,7 +12,7 @@ import type { Site } from "@/lib/ephemeris/engine";
  * or throw away half the night in December.
  *
  * Astronomical darkness is the Sun at or below -18 degrees. That is the stricter
- * of the two thresholds in Build Plan section 01 -- solar-system targets are
+ * of the two Phase 1 thresholds -- solar-system targets are
  * permitted from -12 -- and it is used here on purpose: one slot has to serve
  * whatever target the customer picks, so the window must be dark enough for the
  * most demanding of them. Per-target gating still happens at request time in

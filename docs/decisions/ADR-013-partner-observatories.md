@@ -232,4 +232,4 @@ Two things change:
 - **The condition table gains a fitted sky sensor** whose readings reach the agent, with
   stale readings treated as a weather hold. Nobody is at the window on an unattended node.
 
-`CLAUDE.md` and `docs/ENGINEERING.md` § Hardware safety are amended to match.
+`docs/ENGINEERING.md` § Hardware safety is amended to match.

@@ -92,7 +92,7 @@ function refuse(reason: CommandRejectionReason, detail: string): SafetyVerdict {
  * True only when MAX_ALT_SAFE has been physically measured.
  *
  * A missing envelope and an envelope whose `maxAltitudeDegrees` is null are both
- * UNMEASURED. There is no third state and no default value: the Build Plan prints
+ * UNMEASURED. There is no third state and no default value: earlier planning printed
  * a provisional 72 degrees, and that number must never reach a running system.
  */
 export function isMeasured(config: SafetyEnvelopeConfig | null): boolean {

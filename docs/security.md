@@ -24,7 +24,7 @@ own.
 Companion documents: `docs/architecture.md` for how the system is assembled,
 `docs/SAFETY.md` for the safety model in full, `docs/RUNBOOK.md` for the procedures, and
 the approved records in `docs/decisions/`. Where this document and an approved ADR
-disagree, `CLAUDE.md`'s order of precedence decides.
+disagree, `docs/ENGINEERING.md`'s order of precedence decides.
 
 ## Trust boundaries
 

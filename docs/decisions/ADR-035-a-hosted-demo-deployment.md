@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-01
 - **Status:** APPROVED
-- **Decided by:** project maintainer (Nika)
+- **Decided by:** project maintainer
 - **Request:** `darkview-clients` `docs/platform-requests/hosted-demo.md`, against `f2f51db`
 - **Context document:** `darkview-clients` `docs/plan/hosting.md`
 - **Amends:** the six `NODE_ENV === "production"` money guards (DV-050, DV-056, ADR-007,

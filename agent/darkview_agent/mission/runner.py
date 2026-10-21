@@ -42,7 +42,7 @@ from darkview_agent.safety.envelope import SafetyEnvelope
 
 logger = logging.getLogger("darkview.agent.mission")
 
-# The centering loop is bounded. Three attempts is the Build Plan's figure and
+# The centering loop is bounded. Three attempts is the Phase 1 figure and
 # it is a hard ceiling, not a target: a mount that has not converged in three
 # corrections has something wrong with it that more attempts will not fix.
 MAX_CENTERING_ITERATIONS = 3

@@ -700,11 +700,11 @@ model Camera {
   @@index([telescopeId])
 }
 
-/// Contract: Target. The Phase 1 catalogue is Build Plan section 01: twelve objects,
+/// Contract: Target. The Phase 1 catalogue is twelve objects,
 /// all confirmed to fit an available field of view and all bright enough for a
 /// Bortle 8-9 sky.
 ///
-/// Nothing here caches visibility. Both the contract and the Build Plan require
+/// Nothing here caches visibility. The contract requires
 /// altitude, Sun angle and Moon separation to be computed at request time from live
 /// ephemeris, never read from a stored column -- a target's observability changes
 /// minute by minute, and a stored answer is wrong almost immediately.
@@ -729,8 +729,8 @@ model Target {
   minAltitudeDegrees      Float
   expectedMissionMinutes  Int
   /// An image this telescope actually produced, or null. Never a stock image and
-  /// never output from another instrument: the Build Plan requires the operator to
-  /// photograph each target before it appears on the site.
+  /// never output from another instrument: the operator photographs each target
+  /// before it appears on the site.
   previewImageUrl         String?
   descriptionEn           String?
   descriptionKa           String?

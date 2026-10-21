@@ -2,17 +2,15 @@
 
 - **Date:** 2026-08-30
 - **Status:** APPROVED
-- **Supersedes:** the camera/streaming section of the Phase 1 Final Master Plan
+- **Supersedes:** the earlier camera/streaming plan
 - **Decided by:** project maintainer
 
 ## Context
 
-The Phase 1 Final Master Plan specified that SharpCap would own the ASI585MC and
-that Darkview would receive video by capturing SharpCap's viewport through
-OBS/FFmpeg, with direct ZWO ASI SDK control deferred to Phase 2.
-
-The subsequent Darkview Build Plan reversed this and specified direct SDK control
-with SharpCap/OBS retained only as a schedule fallback. The two documents
+Earlier planning had SharpCap owning the ASI585MC, with Darkview receiving video by
+capturing SharpCap's viewport through OBS/FFmpeg and direct ZWO ASI SDK control
+deferred to Phase 2. Later planning reversed this and specified direct SDK control
+with SharpCap/OBS retained only as a schedule fallback. The two positions
 therefore disagreed. This record resolves the conflict and states which one
 governs the implementation.
 

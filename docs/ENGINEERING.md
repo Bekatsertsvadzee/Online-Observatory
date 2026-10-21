@@ -22,11 +22,8 @@ When documents conflict, this order decides:
 
 1. This file
 2. Approved decision records in `docs/decisions/`
-3. Darkview Brand Identity System **v2.0**
-4. Darkview Phase 1 Final Master Plan
-5. Darkview Build Plan — engineering detail only where it does not contradict 1–4
-6. The current GitHub issue and its acceptance criteria
-7. Existing implementation
+3. The current GitHub issue and its acceptance criteria
+4. Existing implementation
 
 A material conflict between these documents is settled in a dated decision record,
 never silently in the code. Where an earlier plan has been deliberately superseded,
@@ -203,8 +200,7 @@ rejected after `expiresAt`, and rejected if the session is not the current owner
 
 ## Design and brand
 
-Source: Darkview Brand Identity System v2.0. Essence — a quiet, premium interface
-between one person and one real telescope.
+Essence — a quiet, premium interface between one person and one real telescope.
 
 Tagline: *The real sky, live.*
 Georgian: *შენი დრო ნამდვილ ცასთან.*
@@ -229,9 +225,7 @@ Every change in this repository must be independently verifiable. Treat it accor
 - Changes reach `main` through a reviewed pull request with green CI, squashed.
 - Never deploy to production or run a production migration without the maintainer
   asking for it explicitly.
-- Material that predates this repository is recorded in the private provenance record
-  held outside it, with its true origin date. Pre-existing work is never presented as
-  new development.
+- Pre-existing work is never presented as new development.
 - Commits carry one author: the maintainer. No `Co-Authored-By:` trailers — the
   `commit-msg` hook in `.githooks/` enforces it, and a fresh clone enables it with
   `git config core.hooksPath .githooks`.
@@ -244,6 +238,6 @@ Every change in this repository must be independently verifiable. Treat it accor
 3. Lint and typecheck pass where applicable.
 4. No unrelated refactor.
 5. Contracts and docs updated only if genuinely required.
-6. Screenshots or simulator evidence produced for UI and agent work.
+6. Screenshots or simulator evidence produced for UI and Observatory Agent work.
 7. Risks and assumptions listed explicitly.
 8. Work stays on its branch until reviewed.

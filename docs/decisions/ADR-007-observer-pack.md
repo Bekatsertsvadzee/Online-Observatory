@@ -69,7 +69,7 @@ that somebody else controls.
 - **The contract must model observers** before any code is written: an observable flag
   on a mission, an observer capacity and count, a join operation, and an observer-scoped
   view of the mission channel that carries telemetry and stream but no command
-  capability. No agent may add a local type for this.
+  capability. Nobody adds a local type for this.
 - **Sequencing:** built after Milestone S1, in week 3. The two-week simulator sprint is
   unchanged. The contract and this record land first so that DV-057, DV-058 and DV-060
   are designed with observers in mind and nothing is rebuilt.

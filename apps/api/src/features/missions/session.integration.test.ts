@@ -53,7 +53,7 @@ const NOW = new Date("2026-07-15T20:00:00.000Z");
  * A stand-in for MAX_ALT_SAFE, which is measured from the assembled optical train
  * during mount qualification (DV-034) and does not exist yet.
  *
- * NAMED A FAKE BECAUSE IT IS ONE. The Build Plan prints a provisional 72 degrees
+ * NAMED A FAKE BECAUSE IT IS ONE. Earlier planning printed a provisional 72 degrees
  * in a table cell; that number is not a measurement and must never be seeded,
  * shipped, or defaulted anywhere. This exists only so tests of *other* rules are
  * not all swallowed by the unmeasured refusal, and the unmeasured behaviour has

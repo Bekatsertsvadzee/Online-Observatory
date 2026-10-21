@@ -50,8 +50,8 @@ While it is null, both the cloud and the agent refuse every slew with
 `SAFETY_ENVELOPE_UNMEASURED`. Not a warning, not a degraded mode — a refusal, from both
 sides, independently.
 
-There is no third state. There is no fallback value. Planning documents from before this
-repository printed a provisional figure; **that number is not a value** and must never be
+There is no third state. There is no fallback value. Earlier planning printed a
+provisional figure; **that number is not a value** and must never be
 shipped, seeded, defaulted, or used as a test fixture outside a clearly-named fake.
 
 Recording a measurement requires its provenance. `setSafetyEnvelope` refuses a
