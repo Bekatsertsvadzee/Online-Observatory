@@ -20,11 +20,27 @@ export async function getMyBooking(input: {
   userId: string;
   bookingId: string;
 }): Promise<Booking | null> {
-  const row = await getDatabase().booking.findFirst({
+  const database = getDatabase();
+  const row = await database.booking.findFirst({
     where: { id: input.bookingId, userId: input.userId },
     include: { entitlement: BOOKING_ENTITLEMENT_SELECT, payment: BOOKING_PAYMENT_SELECT },
   });
-  return row ? toContractBooking(row) : null;
+  if (!row) return null;
+  // #194: the confirmation's outbox row, which the payment, a voucher or a free
+  // replacement wrote in its own transaction. Scoped to the caller as the booking is.
+  const email = await database.emailNotification.findFirst({
+    where: { dedupeKey: `booking-confirmed:${row.id}`, userId: input.userId },
+    select: { status: true, sentAt: true },
+  });
+  return {
+    ...toContractBooking(row),
+    confirmationEmail: email
+      ? {
+          status: email.status === "PENDING" ? "QUEUED" : email.status,
+          sentAt: email.sentAt?.toISOString() ?? null,
+        }
+      : null,
+  };
 }
 
 /**
