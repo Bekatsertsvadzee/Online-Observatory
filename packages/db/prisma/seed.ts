@@ -282,26 +282,38 @@ async function seedDevelopmentDatabase() {
       },
     });
 
-    for (let weekday = 0; weekday < 7; weekday += 1) {
-      const id = `00000000-0000-4000-8000-00000000053${weekday}`;
-      await database.networkAvailabilityWindow.upsert({
-        where: { id },
-        create: {
-          id,
-          nodeId: DEMO_IDS.networkNode,
-          weekday,
-          startMinute: 1080,
-          endMinute: 1439,
-          enabled: true,
-          isDemo: true,
-        },
-        update: {
-          startMinute: 1080,
-          endMinute: 1439,
-          enabled: true,
-          isDemo: true,
-        },
-      });
+    // Every dark hour of every night. The window used to close at local midnight,
+    // which cut the slot list off at 23:05 while the sky stayed dark until dawn.
+    // A window may not wrap midnight (lib/slots/availability.ts), so each day has
+    // an evening window to local midnight (endMinute 1440 is exclusive) and a
+    // morning one from it; the slot generator merges the two across midnight and
+    // intersects them with astronomical darkness, which decides what is sold.
+    const tbilisiWindows = [
+      { suffix: "053", startMinute: 1020, endMinute: 1440 },
+      { suffix: "056", startMinute: 0, endMinute: 420 },
+    ];
+    for (const { suffix, startMinute, endMinute } of tbilisiWindows) {
+      for (let weekday = 0; weekday < 7; weekday += 1) {
+        const id = `00000000-0000-4000-8000-00000000${suffix}${weekday}`;
+        await database.networkAvailabilityWindow.upsert({
+          where: { id },
+          create: {
+            id,
+            nodeId: DEMO_IDS.networkNode,
+            weekday,
+            startMinute,
+            endMinute,
+            enabled: true,
+            isDemo: true,
+          },
+          update: {
+            startMinute,
+            endMinute,
+            enabled: true,
+            isDemo: true,
+          },
+        });
+      }
     }
 
     // The Phase 1 catalogue is real product data, not demo data: exactly the twelve
