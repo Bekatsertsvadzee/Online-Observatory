@@ -280,3 +280,54 @@ describe("reading a held booking", () => {
     expect(read?.paymentIntent).toBeNull();
   });
 });
+
+describe("reading what became of the confirmation email (#194)", () => {
+  async function confirmation(owner: string, bookingId: string, status: "PENDING" | "SENT", sentAt?: Date) {
+    await database.emailNotification.create({
+      data: {
+        userId: owner,
+        kind: "BOOKING_CONFIRMED",
+        dedupeKey: `booking-confirmed:${bookingId}`,
+        payload: { bookingId },
+        status,
+        sentAt: sentAt ?? null,
+      },
+    });
+  }
+
+  it("answers null when no confirmation was queued", async () => {
+    const bookingId = await booking({ owner: userId, hour: 0 });
+    const read = await getMyBooking({ userId, bookingId });
+    expect(read?.confirmationEmail).toBeNull();
+    expect(zGetBookingResponse.safeParse(read).success).toBe(true);
+  });
+
+  it("answers QUEUED for a row not yet sent, which promises nothing", async () => {
+    const bookingId = await booking({ owner: userId, hour: 0 });
+    await confirmation(userId, bookingId, "PENDING");
+    const read = await getMyBooking({ userId, bookingId });
+    expect(read?.confirmationEmail).toEqual({ status: "QUEUED", sentAt: null });
+    expect(zGetBookingResponse.safeParse(read).success).toBe(true);
+  });
+
+  it("answers SENT with the moment it was handed to the sender", async () => {
+    const bookingId = await booking({ owner: userId, hour: 0 });
+    const sentAt = new Date("2026-12-01T10:00:00.000Z");
+    await confirmation(userId, bookingId, "SENT", sentAt);
+    const read = await getMyBooking({ userId, bookingId });
+    expect(read?.confirmationEmail).toEqual({ status: "SENT", sentAt: sentAt.toISOString() });
+  });
+
+  it("never reads a row that belongs to somebody else", async () => {
+    const bookingId = await booking({ owner: userId, hour: 0 });
+    await confirmation(otherUserId, bookingId, "SENT", new Date());
+    expect((await getMyBooking({ userId, bookingId }))?.confirmationEmail).toBeNull();
+  });
+
+  it("is not part of the list", async () => {
+    const bookingId = await booking({ owner: userId, hour: 0 });
+    await confirmation(userId, bookingId, "SENT", new Date());
+    const page = await listMyBookings({ userId, limit: 10 });
+    expect(page.items[0]?.confirmationEmail).toBeUndefined();
+  });
+});

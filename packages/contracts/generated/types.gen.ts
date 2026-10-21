@@ -959,7 +959,26 @@ export type Booking = {
      *
      */
     entitlement?: BookingEntitlement | null;
+    /**
+     * #194. What became of the BOOKING_CONFIRMED email, read from the outbox.
+     * Filled by `getBooking` only; null when no confirmation was queued, as for a
+     * booking that is not CONFIRMED. QUEUED is not a promise of delivery: a
+     * deployment with no email sender leaves it QUEUED, so a client says only what
+     * SENT says.
+     *
+     */
+    confirmationEmail?: BookingConfirmationEmail | null;
     createdAt: string;
+};
+
+export type BookingConfirmationEmail = {
+    /**
+     * QUEUED: written, not sent. SENT: handed to the sender at `sentAt`.
+     * FAILED: every retry used. SKIPPED: no longer applied when its turn came.
+     *
+     */
+    status: 'QUEUED' | 'SENT' | 'FAILED' | 'SKIPPED';
+    sentAt: string | null;
 };
 
 /**

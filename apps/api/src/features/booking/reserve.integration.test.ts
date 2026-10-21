@@ -1494,6 +1494,6 @@ describe("cancelling a booking", () => {
     expect(await heldBookingsAt(slotStartAt)).toBe(1);
 
     expect(await getMyBooking({ userId: stranger, bookingId: booking.id })).toBeNull();
-    expect(await getMyBooking({ userId, bookingId: booking.id })).toEqual(booking);
+    expect(await getMyBooking({ userId, bookingId: booking.id })).toEqual({ ...booking, confirmationEmail: null });
   });
 });

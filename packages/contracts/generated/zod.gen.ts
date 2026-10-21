@@ -611,6 +611,16 @@ export const zBookingStatus = z.enum([
     'REFUNDED'
 ]);
 
+export const zBookingConfirmationEmail = z.strictObject({
+    status: z.enum([
+        'QUEUED',
+        'SENT',
+        'FAILED',
+        'SKIPPED'
+    ]),
+    sentAt: z.iso.datetime().nullable()
+});
+
 /**
  * What lost the slot. A customer who did not show up is not a cause.
  */
@@ -705,6 +715,7 @@ export const zBooking = z.strictObject({
     loyaltyPointsRedeemed: z.int().gte(0).optional(),
     subscriptionMinutesSpent: z.int().gte(0).optional(),
     entitlement: zBookingEntitlement.nullish(),
+    confirmationEmail: zBookingConfirmationEmail.nullish(),
     createdAt: z.iso.datetime()
 });
 
