@@ -34,3 +34,16 @@ export async function refuseRealHardwareInDemo(
     );
   }
 }
+
+/**
+ * How often a background sweep runs. A demo runs the minute-scale sweeps more slowly:
+ * it serves almost nobody, and on a free database plan each sweep is a metered query
+ * whether or not it finds work. Production keeps the interval it was written with.
+ */
+export function sweepSeconds(
+  deployment: "production" | "demo" | undefined,
+  seconds: number,
+  demoSeconds: number,
+) {
+  return deployment === "demo" ? Math.max(seconds, demoSeconds) : seconds;
+}
