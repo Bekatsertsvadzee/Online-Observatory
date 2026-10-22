@@ -1476,6 +1476,8 @@ enum EmailNotificationKind {
   SUBSCRIPTION_MINUTES_RETURNED
   /// ADR-036: the owner closed a session, and an observer's seat was refunded.
   OBSERVER_PACK_REFUNDED
+  /// ADR-062: a weekly card held a prize.
+  CARD_PRIZE_WON
 }
 
 /// Contract: BookingLossCause (DV-111).
