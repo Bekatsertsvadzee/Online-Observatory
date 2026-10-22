@@ -1,8 +1,9 @@
 # ADR-061 — A native client signs in with a bearer session
 
 - **Date:** 2026-10-22
-- **Status:** PROPOSED — built on the maintainer's choice of 2026-10-22 ("Mobile sign-in
-  on platform"), from the clients' `docs/platform-requests/mobile-sign-in.md`, option 1.
+- **Status:** APPROVED — 2026-10-22, by the maintainer in session ("Merge, mark ADR-061
+  approved"), after it was built on his choice the same day ("Mobile sign-in on
+  platform"), from the clients' `docs/platform-requests/mobile-sign-in.md`, option 1.
 - **Decided by:** project maintainer
 - **Number:** 061: the two repositories share one sequence, and the clients' ADR-059
   started the mobile application.
