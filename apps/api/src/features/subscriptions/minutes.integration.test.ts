@@ -417,6 +417,7 @@ describe("a refunded booking subscription minutes paid for (DV-111)", () => {
       ok: true,
       paymentId: null,
       voucherId: null,
+      prizeId: null,
       minutesReturned: SLOT_DURATION_MINUTES,
     });
     expect(await balance()).toBe(120);

@@ -81,6 +81,10 @@ const UNMETERED_BY_DESIGN = [
   // guessing one less likely than it already is, and refusing the one real
   // attempt would strand a customer who clicked their own link twice.
   "auth/verify-email/route.ts",
+  // Picking a card (ADR-060) turns one card of the caller's own deal, once, under the
+  // deal's row lock; every later pick is a 409 that writes nothing. A flood can win
+  // nothing a first pick did not, and widens no access to the telescope.
+  "card-draws/[drawId]/pick/route.ts",
   // Asking for a new address is metered the same way, for the same reason (ADR-042):
   // it takes the current password.
   "me/email/route.ts",

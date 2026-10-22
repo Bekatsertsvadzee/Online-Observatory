@@ -1,4 +1,5 @@
 import { recordAuditEvent } from "./audit";
+import { releaseCardPrize } from "./card-prizes";
 import { releaseSpentMinutes } from "./credits";
 import type { Prisma } from "./generated/prisma/client.ts";
 import { reverseLoyaltyForRefund } from "./loyalty";
@@ -25,6 +26,10 @@ import { RESTORED_VOUCHER_MIN_DAYS } from "./vouchers";
  * **A voucher is restored, never paid out** (DV-112). When the chain ends at a
  * booking a gift voucher paid for, the voucher becomes usable again instead.
  *
+ * **A card-draw prize is restored, never paid out** (ADR-060). A free-slot prize is
+ * restored as a voucher is; a discount prize comes back beside the money its booking
+ * paid.
+ *
  * **Minutes are returned, never paid out** (ADR-022 section 7). When the chain ends
  * at a booking subscription minutes paid for, the minutes go back on the balance.
  *
@@ -37,7 +42,13 @@ export type RefundRefusal =
   | "PROVIDER_REFUND_UNAVAILABLE";
 
 export type RefundResult =
-  | { ok: true; paymentId: string | null; voucherId: string | null; minutesReturned: number }
+  | {
+      ok: true;
+      paymentId: string | null;
+      voucherId: string | null;
+      prizeId: string | null;
+      minutesReturned: number;
+    }
   | { ok: false; reason: RefundRefusal };
 
 /** A reschedule of a reschedule of ... is legal; a loop is not, and this bounds the walk. */
@@ -70,9 +81,12 @@ export async function refundEntitledBooking(
 
   type MinutesBooking = { id: string; userId: string; subscriptionMinutesSpent: number };
 
+  type PrizeSummary = { id: string; kind: string };
+
   let payment = null as PaymentSummary | null;
   let voucher = null as VoucherSummary | null;
   let minutesBooking = null as MinutesBooking | null;
+  let freeSlotBooking = null as { id: string; prize: PrizeSummary } | null;
   let current: string | null = bookingId;
   for (let step = 0; current && step < MAX_RESCHEDULE_CHAIN; step += 1) {
     const booking: {
@@ -81,6 +95,7 @@ export async function refundEntitledBooking(
       subscriptionMinutesSpent: number;
       payment: PaymentSummary | null;
       redeemedVoucher: VoucherSummary | null;
+      redeemedCardPrize: PrizeSummary | null;
       rescheduledFrom: { bookingId: string } | null;
     } = await tx.booking.findUniqueOrThrow({
       where: { id: current },
@@ -99,6 +114,7 @@ export async function refundEntitledBooking(
           },
         },
         redeemedVoucher: { select: { id: true, expiresAt: true } },
+        redeemedCardPrize: { select: { id: true, kind: true } },
         rescheduledFrom: { select: { bookingId: true } },
       },
     });
@@ -110,6 +126,10 @@ export async function refundEntitledBooking(
       voucher = booking.redeemedVoucher;
       break;
     }
+    if (booking.redeemedCardPrize?.kind === "FREE_SLOT") {
+      freeSlotBooking = { id: booking.id, prize: booking.redeemedCardPrize };
+      break;
+    }
     if (booking.subscriptionMinutesSpent > 0) {
       minutesBooking = booking;
       break;
@@ -118,6 +138,7 @@ export async function refundEntitledBooking(
   }
 
   if (voucher) return restoreVoucher(tx, { entitlementId: entitlement.id, userId: entitlement.userId, bookingId, voucher, actorUserId, automatic, now });
+  if (freeSlotBooking) return restoreFreeSlotPrize(tx, { entitlementId: entitlement.id, bookingId, paidBookingId: freeSlotBooking.id, actorUserId, now });
   if (minutesBooking) return returnMinutes(tx, { entitlementId: entitlement.id, bookingId, paidBooking: minutesBooking, actorUserId, automatic, now });
 
   if (!payment || payment.status !== "CAPTURED") {
@@ -149,6 +170,15 @@ export async function refundEntitledBooking(
     select: { id: true, userId: true, loyaltyPointsRedeemed: true },
   });
   await reverseLoyaltyForRefund(tx, payment, paidBooking);
+  // ADR-060: a discount prize the paid booking spent comes back with the money.
+  const prize = paidBooking
+    ? await releaseCardPrize(tx, {
+        bookingId: paidBooking.id,
+        cause: "BOOKING_REFUNDED",
+        actorUserId,
+        now,
+      })
+    : null;
 
   await recordAuditEvent(
     {
@@ -176,7 +206,13 @@ export async function refundEntitledBooking(
     payload: { bookingId },
   });
 
-  return { ok: true, paymentId: payment.id, voucherId: null, minutesReturned: 0 };
+  return {
+    ok: true,
+    paymentId: payment.id,
+    voucherId: null,
+    prizeId: prize?.prizeId ?? null,
+    minutesReturned: 0,
+  };
 }
 
 async function restoreVoucher(
@@ -233,7 +269,41 @@ async function restoreVoucher(
     payload: { voucherId: voucher.id, bookingId },
   });
 
-  return { ok: true, paymentId: null, voucherId: voucher.id, minutesReturned: 0 };
+  return { ok: true, paymentId: null, voucherId: voucher.id, prizeId: null, minutesReturned: 0 };
+}
+
+/**
+ * A booking a free-slot prize paid for (ADR-060): the prize comes back, as a gift
+ * voucher does, and no money moves. The prize was spent on the root of the
+ * reschedule chain, so it is released from there.
+ */
+async function restoreFreeSlotPrize(
+  tx: Prisma.TransactionClient,
+  input: {
+    entitlementId: string;
+    bookingId: string;
+    paidBookingId: string;
+    actorUserId: string | null;
+    now: Date;
+  },
+): Promise<RefundResult> {
+  const { entitlementId, bookingId, paidBookingId, actorUserId, now } = input;
+
+  const { count } = await tx.bookingEntitlement.updateMany({
+    where: { id: entitlementId, outcome: "OPEN" },
+    data: { outcome: "REFUNDED", resolvedAt: now },
+  });
+  if (count === 0) return { ok: false, reason: "NO_OPEN_ENTITLEMENT" };
+
+  const prize = await releaseCardPrize(tx, {
+    bookingId: paidBookingId,
+    cause: "BOOKING_REFUNDED",
+    actorUserId,
+    now,
+  });
+  await tx.booking.update({ where: { id: bookingId }, data: { status: "REFUNDED" } });
+
+  return { ok: true, paymentId: null, voucherId: null, prizeId: prize?.prizeId ?? null, minutesReturned: 0 };
 }
 
 /**
@@ -292,6 +362,7 @@ async function returnMinutes(
     ok: true,
     paymentId: null,
     voucherId: null,
+    prizeId: null,
     minutesReturned: paidBooking.subscriptionMinutesSpent,
   };
 }

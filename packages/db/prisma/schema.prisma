@@ -218,6 +218,7 @@ enum AuditCategory {
   AGENT_LINK
   LOYALTY
   SUBSCRIPTION
+  CARD_DRAW
 }
 
 enum NetworkNodeKind {
@@ -412,6 +413,8 @@ model User {
   loyaltyAccount      LoyaltyAccount?
   loyaltyEntries      LoyaltyLedgerEntry[]
   votes               Vote[]
+  cardDraws           CardDraw[]
+  cardPrizes          CardPrize[]
 }
 
 model Account {
@@ -539,6 +542,9 @@ model Observatory {
   networkNode         ObservatoryNetworkNode?
   viewingForecast     ViewingForecastHour[]
   votes               Vote[]
+  cardDraws           CardDraw[]
+  cardDrawWeeks       CardDrawWeek[]
+  cardPrizes          CardPrize[]
 }
 
 /// Contract: SafetyEnvelopeConfig. The numbers that stop the telescope destroying
@@ -743,6 +749,7 @@ model Target {
   missions                Mission[]
   captures                Capture[]
   votes                   Vote[]
+  cardDrawCards           CardDrawCard[]
 
   @@index([type, enabled])
 }
@@ -951,6 +958,8 @@ model ObserverPack {
   mission       Mission            @relation(fields: [missionId], references: [id], onDelete: Cascade)
   user          User               @relation(fields: [userId], references: [id], onDelete: Restrict)
   payment       Payment?           @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  /// ADR-060: the observer-seat prize that paid for this pack, when one did.
+  cardPrize     CardPrize?
 
   /// One pack per person per mission. Buying twice is not two seats, and a second
   /// attempt while a hold is outstanding returns the first pack rather than opening
@@ -1038,6 +1047,7 @@ model Booking {
   rescheduledFrom BookingEntitlement? @relation("RescheduledTo")
   /// DV-112. The gift voucher that paid for this booking, when one did.
   redeemedVoucher GiftVoucher?
+  redeemedCardPrize CardPrize?
   /// DV-095. What the customer's tier took off the slot price, in minor units.
   tierDiscountMinor     Int @default(0)
   /// DV-095. Points spent on this booking, taken when the slot was held.
@@ -1651,4 +1661,120 @@ model EmailNotification {
   user          User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([status, nextAttemptAt])
+}
+
+/// ADR-060. The weekly card draw's odds and caps, as data: changing one is an UPDATE,
+/// not a deploy (the clients' ADR-058 §4 gives the maintainer the numbers). Exactly
+/// one row, id 1, inserted by the migration. Chances are basis points per card.
+model CardDrawScheme {
+  id                   Int      @id @default(1)
+  freeSlotChanceBp     Int
+  observerSeatChanceBp Int
+  discountChanceBp     Int
+  /// At most this many free slots held by dealt cards per observatory per week.
+  freeSlotsPerWeek     Int
+  discountPercentOff   Int
+  prizeValidDays       Int
+  updatedAt            DateTime @updatedAt
+}
+
+/// Contract: CardRarity (ADR-060).
+enum CardRarity {
+  LEGENDARY
+  EPIC
+  RARE
+  COMMON
+}
+
+/// Contract: CardPrizeKind (ADR-060).
+enum CardPrizeKind {
+  FREE_SLOT
+  OBSERVER_SEAT
+  DISCOUNT
+}
+
+/// ADR-060. EXPIRED is derived from expiresAt and never stored, as for gift vouchers.
+enum CardPrizeStatus {
+  ACTIVE
+  REDEEMED
+}
+
+/// ADR-060. One account's three cards for one week at one observatory, decided when
+/// dealt. `pickedPosition` is set once, by the pick.
+model CardDraw {
+  id                 String         @id @default(uuid()) @db.Uuid
+  userId             String         @db.Uuid
+  observatoryId      String         @db.Uuid
+  /// The week's Monday, in the observatory's local calendar (ADR-050's week).
+  week               DateTime       @db.Date
+  /// The next Monday 00:00 local: the deal can be picked until then.
+  closesAt           DateTime
+  pickedPosition     Int?
+  pickedAt           DateTime?
+  pickIdempotencyKey String?
+  isDemo             Boolean        @default(false)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  observatory        Observatory    @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
+  cards              CardDrawCard[]
+  prize              CardPrize?
+
+  @@unique([userId, observatoryId, week])
+}
+
+/// ADR-060. One face-down card of a deal.
+model CardDrawCard {
+  drawId   String     @db.Uuid
+  position Int
+  rarity   CardRarity
+  targetId String?    @db.Uuid
+  draw     CardDraw   @relation(fields: [drawId], references: [id], onDelete: Cascade)
+  target   Target?    @relation(fields: [targetId], references: [id], onDelete: SetNull)
+
+  @@id([drawId, position])
+}
+
+/// ADR-060. How many free-slot cards the week's deals hold at one observatory. Taken
+/// by a conditional increment when a deal is dealt, given back for every free-slot
+/// card a pick leaves unturned-by-choice, so the week's cap is never exceeded.
+model CardDrawWeek {
+  observatoryId String      @db.Uuid
+  week          DateTime    @db.Date
+  freeSlotsHeld Int         @default(0)
+  observatory   Observatory @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
+
+  @@id([observatoryId, week])
+}
+
+/// ADR-060. A prize won by a pick: a voucher only its winner can spend, at the
+/// observatory of the deal, until `expiresAt`. Never cash. The code is never stored:
+/// it is an HMAC of the id under VOUCHER_CODE_SECRET, as a gift voucher's is.
+model CardPrize {
+  id                     String          @id @db.Uuid
+  drawId                 String          @unique @db.Uuid
+  userId                 String          @db.Uuid
+  observatoryId          String          @db.Uuid
+  kind                   CardPrizeKind
+  status                 CardPrizeStatus @default(ACTIVE)
+  codeHash               String          @unique
+  codeLast4              String
+  /// FREE_SLOT only: the length of the slot it pays for.
+  durationMinutes        Int?
+  /// DISCOUNT only.
+  percentOff             Int?
+  expiresAt              DateTime
+  redeemedAt             DateTime?
+  redeemedBookingId      String?         @unique @db.Uuid
+  redeemedObserverPackId String?         @unique @db.Uuid
+  isDemo                 Boolean         @default(false)
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  draw                   CardDraw        @relation(fields: [drawId], references: [id], onDelete: Cascade)
+  user                   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  observatory            Observatory     @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
+  redeemedBooking        Booking?        @relation(fields: [redeemedBookingId], references: [id], onDelete: SetNull)
+  redeemedObserverPack   ObserverPack?   @relation(fields: [redeemedObserverPackId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
 }

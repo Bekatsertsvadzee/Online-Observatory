@@ -39,6 +39,8 @@ export const ErrorCode = {
     TARGET_NOT_OBSERVABLE: 'TARGET_NOT_OBSERVABLE',
     TARGET_NOT_A_CANDIDATE: 'TARGET_NOT_A_CANDIDATE',
     VOTE_LOCKED: 'VOTE_LOCKED',
+    CARD_ALREADY_PICKED: 'CARD_ALREADY_PICKED',
+    CARD_DRAW_CLOSED: 'CARD_DRAW_CLOSED',
     OBSERVER_CAPACITY_REACHED: 'OBSERVER_CAPACITY_REACHED',
     OBSERVER_CANNOT_COMMAND: 'OBSERVER_CANNOT_COMMAND',
     OBSERVATORY_OFFLINE: 'OBSERVATORY_OFFLINE',
@@ -451,6 +453,206 @@ export type CastVoteRequest = {
      */
     week: string;
     targetId: string;
+};
+
+/**
+ * ADR-060. A card's rarity names its prize: LEGENDARY a free Observation Slot,
+ * EPIC a free observer seat, RARE a discount on one booking, COMMON nothing.
+ *
+ */
+export const CardRarity = {
+    LEGENDARY: 'LEGENDARY',
+    EPIC: 'EPIC',
+    RARE: 'RARE',
+    COMMON: 'COMMON'
+} as const;
+
+/**
+ * ADR-060. A card's rarity names its prize: LEGENDARY a free Observation Slot,
+ * EPIC a free observer seat, RARE a discount on one booking, COMMON nothing.
+ *
+ */
+export type CardRarity = typeof CardRarity[keyof typeof CardRarity];
+
+export const CardPrizeKind = {
+    FREE_SLOT: 'FREE_SLOT',
+    OBSERVER_SEAT: 'OBSERVER_SEAT',
+    DISCOUNT: 'DISCOUNT'
+} as const;
+
+export type CardPrizeKind = typeof CardPrizeKind[keyof typeof CardPrizeKind];
+
+/**
+ * ACTIVE until spent or past `expiresAt`. REDEEMED once a booking or an observer
+ * pack has taken it; a hold that lapses, a payment that fails and a refunded
+ * booking each make it ACTIVE again. EXPIRED is an ACTIVE prize past `expiresAt`.
+ *
+ */
+export const CardPrizeStatus = {
+    ACTIVE: 'ACTIVE',
+    REDEEMED: 'REDEEMED',
+    EXPIRED: 'EXPIRED'
+} as const;
+
+/**
+ * ACTIVE until spent or past `expiresAt`. REDEEMED once a booking or an observer
+ * pack has taken it; a hold that lapses, a payment that fails and a refunded
+ * booking each make it ACTIVE again. EXPIRED is an ACTIVE prize past `expiresAt`.
+ *
+ */
+export type CardPrizeStatus = typeof CardPrizeStatus[keyof typeof CardPrizeStatus];
+
+/**
+ * ADR-060. A voucher won in the card draw, bound to the account that won it and
+ * to the observatory of the deal. Never exchangeable for cash.
+ *
+ * FREE_SLOT is spent with `voucherCode` on `POST /bookings`, for a slot of
+ * `durationMinutes`, as a gift voucher is. DISCOUNT is spent the same way and
+ * takes `percentOff` off the booking's price; the booking still pays the rest.
+ * OBSERVER_SEAT is spent with `voucherCode` on
+ * `POST /missions/{missionId}/observer-pack`.
+ *
+ */
+export type CardPrize = {
+    id: string;
+    kind: CardPrizeKind;
+    status: CardPrizeStatus;
+    /**
+     * The only observatory the prize can be spent at.
+     */
+    observatoryId: string;
+    /**
+     * The code to spend it with, while it is ACTIVE. Null otherwise.
+     */
+    voucherCode: string | null;
+    codeLast4: string;
+    /**
+     * FREE_SLOT only. The length of the slot it pays for.
+     */
+    durationMinutes: number | null;
+    /**
+     * DISCOUNT only.
+     */
+    percentOff: number | null;
+    expiresAt: string;
+    redeemedBookingId: string | null;
+    redeemedObserverPackId: string | null;
+    createdAt: string;
+};
+
+export type CardPrizeList = {
+    items: Array<CardPrize>;
+};
+
+/**
+ * One of a deal's three cards. Unturned, it says nothing but its position.
+ *
+ */
+export type CardDrawCard = {
+    position: number;
+    turned: boolean;
+    /**
+     * Null until the card is turned.
+     */
+    rarity: CardRarity | null;
+    /**
+     * The catalogue target the card's face shows, a `slug` for `GET /targets/{slug}`.
+     * Null until the card is turned, or when that target has left the catalogue.
+     *
+     */
+    targetSlug: string | null;
+    /**
+     * What the picked card won. Null on the other two cards, on a COMMON card, and
+     * on every card before the pick.
+     *
+     */
+    prize: CardPrize | null;
+};
+
+export type CardDrawOddsEntry = {
+    rarity: CardRarity;
+    /**
+     * Null for COMMON.
+     */
+    prizeKind: CardPrizeKind | null;
+    /**
+     * The chance that one card holds this rarity, before the weekly cap.
+     */
+    chance: number;
+};
+
+/**
+ * ADR-060. The rules every deal is drawn under, as configured on the platform.
+ */
+export type CardDrawOdds = {
+    /**
+     * One entry per rarity; the chances add up to 1.
+     */
+    cards: Array<CardDrawOddsEntry>;
+    /**
+     * At most this many free-slot cards are held by the week's deals at one
+     * observatory. Once they are, a card that would have held a free slot holds a
+     * discount instead. A free-slot card the pick leaves unchosen is given back.
+     *
+     */
+    freeSlotsPerWeek: number;
+    /**
+     * The slot length a free slot pays for, the shortest length sold.
+     */
+    freeSlotDurationMinutes: number;
+    discountPercentOff: number;
+    /**
+     * A prize expires this many days after it is won.
+     */
+    prizeValidDays: number;
+};
+
+/**
+ * ADR-060. One account's deal for one week at one observatory: three cards,
+ * decided when dealt, of which the account turns one.
+ *
+ */
+export type CardDraw = {
+    id: string;
+    observatoryId: string;
+    /**
+     * The week's Monday, in the observatory's local calendar, as `GET /votes` names it.
+     */
+    week: string;
+    dealtAt: string;
+    /**
+     * The next Monday 00:00 in the observatory's zone: when the next deal opens,
+     * and when this one closes to a pick.
+     *
+     */
+    opensNextAt: string;
+    /**
+     * The position the account turned. Null before the pick.
+     */
+    picked: number | null;
+    pickedAt: string | null;
+    /**
+     * In position order.
+     */
+    cards: [
+        CardDrawCard,
+        CardDrawCard,
+        CardDrawCard
+    ];
+    odds: CardDrawOdds;
+};
+
+export type PickCardRequest = {
+    position: number;
+};
+
+export type PurchaseObserverPackRequest = {
+    /**
+     * An OBSERVER_SEAT prize code (ADR-060). Case and separators are ignored. The
+     * pack is PAID at once at no charge and `paymentIntent` is null.
+     *
+     */
+    voucherCode?: string;
 };
 
 /**
@@ -1031,7 +1233,9 @@ export type CreateBookingRequest = {
     durationMinutes: number;
     locale?: Locale;
     /**
-     * A gift voucher code (DV-112). Case and separators are ignored.
+     * A gift voucher code (DV-112), or a FREE_SLOT or DISCOUNT prize code won in
+     * the card draw (ADR-060). Case and separators are ignored.
+     *
      */
     voucherCode?: string;
     /**
@@ -1624,7 +1828,10 @@ export type ObserverPack = {
 
 export type ObserverPackWithPaymentIntent = {
     observerPack: ObserverPack;
-    paymentIntent: PaymentIntent;
+    /**
+     * Null when an observer-seat prize paid for the pack (ADR-060).
+     */
+    paymentIntent: PaymentIntent | null;
 };
 
 /**
@@ -2368,7 +2575,8 @@ export const AuditCategory = {
     OPERATOR_OVERRIDE: 'OPERATOR_OVERRIDE',
     AGENT_LINK: 'AGENT_LINK',
     LOYALTY: 'LOYALTY',
-    SUBSCRIPTION: 'SUBSCRIPTION'
+    SUBSCRIPTION: 'SUBSCRIPTION',
+    CARD_DRAW: 'CARD_DRAW'
 } as const;
 
 export type AuditCategory = typeof AuditCategory[keyof typeof AuditCategory];
@@ -3790,6 +3998,150 @@ export type CastVoteResponses = {
 
 export type CastVoteResponse = CastVoteResponses[keyof CastVoteResponses];
 
+export type GetCardDrawOddsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/card-draws/odds';
+};
+
+export type GetCardDrawOddsResponses = {
+    /**
+     * The odds per card, the weekly free-slot cap and the prize rules.
+     */
+    200: CardDrawOdds;
+};
+
+export type GetCardDrawOddsResponse = GetCardDrawOddsResponses[keyof GetCardDrawOddsResponses];
+
+export type GetCurrentCardDrawData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * An `id` from `GET /observatories`.
+         */
+        observatoryId: string;
+    };
+    url: '/card-draws/current';
+};
+
+export type GetCurrentCardDrawErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+    /**
+     * A dependency this request needs is not configured or not reachable.
+     */
+    503: ApiError;
+};
+
+export type GetCurrentCardDrawError = GetCurrentCardDrawErrors[keyof GetCurrentCardDrawErrors];
+
+export type GetCurrentCardDrawResponses = {
+    /**
+     * The week's deal.
+     */
+    200: CardDraw;
+};
+
+export type GetCurrentCardDrawResponse = GetCurrentCardDrawResponses[keyof GetCurrentCardDrawResponses];
+
+export type PickCardData = {
+    body: PickCardRequest;
+    headers?: {
+        /**
+         * Client-generated key that makes retrying a booking safe. A second request
+         * carrying a key the signed-in user has already used returns the booking the
+         * first request created, with its original payment intent, instead of
+         * reserving a second slot. Keys are scoped to the user, so two people cannot
+         * collide on one.
+         *
+         */
+        'Idempotency-Key'?: string;
+    };
+    path: {
+        /**
+         * The `id` of a deal from `GET /card-draws/current`.
+         */
+        drawId: string;
+    };
+    query?: never;
+    url: '/card-draws/{drawId}/pick';
+};
+
+export type PickCardErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+    /**
+     * A dependency this request needs is not configured or not reachable.
+     */
+    503: ApiError;
+};
+
+export type PickCardError = PickCardErrors[keyof PickCardErrors];
+
+export type PickCardResponses = {
+    /**
+     * The deal with every card turned, and the prize when one was won.
+     */
+    200: CardDraw;
+};
+
+export type PickCardResponse = PickCardResponses[keyof PickCardResponses];
+
+export type ListMyCardPrizesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/prizes';
+};
+
+export type ListMyCardPrizesErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * A dependency this request needs is not configured or not reachable.
+     */
+    503: ApiError;
+};
+
+export type ListMyCardPrizesError = ListMyCardPrizesErrors[keyof ListMyCardPrizesErrors];
+
+export type ListMyCardPrizesResponses = {
+    /**
+     * The caller's prizes.
+     */
+    200: CardPrizeList;
+};
+
+export type ListMyCardPrizesResponse = ListMyCardPrizesResponses[keyof ListMyCardPrizesResponses];
+
 export type ListSlotsData = {
     body?: never;
     path?: never;
@@ -4712,7 +5064,7 @@ export type JoinMissionAsObserverResponses = {
 export type JoinMissionAsObserverResponse = JoinMissionAsObserverResponses[keyof JoinMissionAsObserverResponses];
 
 export type PurchaseObserverPackData = {
-    body?: never;
+    body?: PurchaseObserverPackRequest;
     path: {
         missionId: string;
     };
@@ -4737,13 +5089,17 @@ export type PurchaseObserverPackErrors = {
      * Conflicts with current state, for example a slot already taken or a session already held.
      */
     409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
 };
 
 export type PurchaseObserverPackError = PurchaseObserverPackErrors[keyof PurchaseObserverPackErrors];
 
 export type PurchaseObserverPackResponses = {
     /**
-     * Seat held and a payment intent opened.
+     * Seat held and a payment intent opened, or paid for by a prize.
      */
     201: ObserverPackWithPaymentIntent;
 };

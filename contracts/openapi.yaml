@@ -85,6 +85,8 @@ tags:
     description: Slots, bookings and payment.
   - name: votes
     description: The week's vote on what the observatory observes (ADR-050).
+  - name: cards
+    description: The weekly card draw and the prizes it gives (ADR-060).
   - name: missions
     description: Mission lifecycle and the client command boundary.
   - name: captures
@@ -858,6 +860,138 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /card-draws/odds:
+    get:
+      operationId: getCardDrawOdds
+      tags: [cards]
+      summary: The weekly card draw's published odds and rules.
+      description: |
+        ADR-060. Public, so the Terms and the page can publish them without an
+        account. The same values every deal is drawn from, read from the platform's
+        configuration at the moment of the request.
+      security: []
+      responses:
+        "200":
+          description: The odds per card, the weekly free-slot cap and the prize rules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CardDrawOdds"
+
+  /card-draws/current:
+    get:
+      operationId: getCurrentCardDraw
+      tags: [cards]
+      summary: The caller's three cards for this week at one observatory, dealt on first read.
+      description: |
+        ADR-060 (the clients' ADR-058). One deal per account per observatory per week,
+        the week being the Monday-to-Sunday of `GET /votes`, in the observatory's local
+        calendar. The first read of the week deals three face-down cards and decides
+        what each holds, there and then; every later read answers the same deal.
+
+        A card the caller has not turned carries `turned: false` and nothing else:
+        `rarity`, `targetSlug` and `prize` are null, so the response never gives the
+        answer away. After the pick every card is turned; only the picked card carries
+        a `prize`, and only when its rarity has one.
+
+        A session is a verified account: an unverified address cannot hold one, so
+        this answers 401 to it and never deals. 404 for an observatory that is not
+        bookable or is not a first-party observatory -- a partner's telescope time is
+        not Stellar's to give away. 503 when prize codes are not configured on this
+        deployment.
+      parameters:
+        - name: observatoryId
+          in: query
+          required: true
+          description: An `id` from `GET /observatories`.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The week's deal.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CardDraw"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /card-draws/{drawId}/pick:
+    post:
+      operationId: pickCard
+      tags: [cards]
+      summary: Turn one of the week's three cards, and win what it holds.
+      description: |
+        ADR-060. Turns the card at `position` and the other two with it, and issues the
+        picked card's prize in the same transaction. Nothing is decided here: the cards
+        were decided when they were dealt.
+
+        Once per deal. A second pick is 409 `CARD_ALREADY_PICKED`, unless it carries the
+        `Idempotency-Key` the first pick carried, which answers the first pick's result
+        again with 200. A deal not picked by `opensNextAt` is closed: 409
+        `CARD_DRAW_CLOSED`. 404 for a deal that is not the caller's.
+      parameters:
+        - name: drawId
+          in: path
+          required: true
+          description: The `id` of a deal from `GET /card-draws/current`.
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PickCardRequest"
+      responses:
+        "200":
+          description: The deal with every card turned, and the prize when one was won.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CardDraw"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /prizes:
+    get:
+      operationId: listMyCardPrizes
+      tags: [cards]
+      summary: The prizes the signed-in account has won, newest first.
+      description: |
+        ADR-060. Every prize the caller has won in the card draw, spent or not. A
+        prize's code is shown only while it is ACTIVE; it reaches nobody but its
+        winner, and only its winner can spend it. 503 when prize codes are not
+        configured on this deployment.
+      responses:
+        "200":
+          description: The caller's prizes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CardPrizeList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
   /slots:
     get:
       operationId: listSlots
@@ -962,6 +1096,15 @@ paths:
         reservation that fails spends nothing and a voucher is never spent twice. A code
         that is unknown, spent, expired or unpaid, or for a different length, is 422.
         Redemption attempts are rate-limited per account.
+
+        **With a card-draw prize code** in `voucherCode` (ADR-060): a FREE_SLOT prize
+        pays for the booking exactly as a gift voucher does. A DISCOUNT prize takes its
+        `percentOff` off the price after the tier discount, and the booking is held and
+        paid as any cash booking is; the prize is given back if the hold lapses, the
+        payment fails or the booking is refunded. A prize is spendable only by the
+        account that won it and only at the observatory of its deal; any other code,
+        another account's included, is the same 422 as an unknown code. An
+        OBSERVER_SEAT prize is 422 here.
 
         **With `useSubscriptionMinutes`** (ADR-022) the booking is paid from the
         signed-in customer's subscription balance: `durationMinutes` minutes are taken,
@@ -1685,11 +1828,26 @@ paths:
         Fails with MISSION_NOT_OBSERVABLE if the controller has not opted in, with
         OBSERVER_CAPACITY_REACHED when every seat is sold or held, and with CONFLICT if
         the caller is the session's own controller.
+
+        **With `voucherCode`** (ADR-060), an OBSERVER_SEAT prize won in the card draw
+        pays for the seat: the pack is PAID at once at no charge and `paymentIntent` is
+        null. The prize is spent in the same transaction, under the same capacity
+        lock, so the ten-seat cap (ADR-036) holds and a prize is never spent twice. A
+        code that is unknown, spent, expired, another account's, of another kind or for
+        another observatory is 422 VALIDATION_FAILED. A seat already held awaiting
+        payment is 409 CONFLICT; one already paid is answered as it stands, and spends
+        nothing. A seat a prize paid for has no price, so a close refunds nothing for it.
       parameters:
         - $ref: "#/components/parameters/MissionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchaseObserverPackRequest"
       responses:
         "201":
-          description: Seat held and a payment intent opened.
+          description: Seat held and a payment intent opened, or paid for by a prize.
           content:
             application/json:
               schema:
@@ -1702,6 +1860,8 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
 
   /missions/{missionId}/watch:
     get:
@@ -2716,6 +2876,8 @@ components:
         - TARGET_NOT_OBSERVABLE
         - TARGET_NOT_A_CANDIDATE
         - VOTE_LOCKED
+        - CARD_ALREADY_PICKED
+        - CARD_DRAW_CLOSED
         - OBSERVER_CAPACITY_REACHED
         - OBSERVER_CANNOT_COMMAND
         - OBSERVATORY_OFFLINE
@@ -3297,6 +3459,252 @@ components:
         targetId:
           type: string
           format: uuid
+
+    CardRarity:
+      type: string
+      description: |
+        ADR-060. A card's rarity names its prize: LEGENDARY a free Observation Slot,
+        EPIC a free observer seat, RARE a discount on one booking, COMMON nothing.
+      enum: [LEGENDARY, EPIC, RARE, COMMON]
+
+    CardPrizeKind:
+      type: string
+      enum: [FREE_SLOT, OBSERVER_SEAT, DISCOUNT]
+
+    CardPrizeStatus:
+      type: string
+      description: |
+        ACTIVE until spent or past `expiresAt`. REDEEMED once a booking or an observer
+        pack has taken it; a hold that lapses, a payment that fails and a refunded
+        booking each make it ACTIVE again. EXPIRED is an ACTIVE prize past `expiresAt`.
+      enum: [ACTIVE, REDEEMED, EXPIRED]
+
+    CardPrize:
+      type: object
+      description: |
+        ADR-060. A voucher won in the card draw, bound to the account that won it and
+        to the observatory of the deal. Never exchangeable for cash.
+
+        FREE_SLOT is spent with `voucherCode` on `POST /bookings`, for a slot of
+        `durationMinutes`, as a gift voucher is. DISCOUNT is spent the same way and
+        takes `percentOff` off the booking's price; the booking still pays the rest.
+        OBSERVER_SEAT is spent with `voucherCode` on
+        `POST /missions/{missionId}/observer-pack`.
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - status
+        - observatoryId
+        - voucherCode
+        - codeLast4
+        - durationMinutes
+        - percentOff
+        - expiresAt
+        - redeemedBookingId
+        - redeemedObserverPackId
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          $ref: "#/components/schemas/CardPrizeKind"
+        status:
+          $ref: "#/components/schemas/CardPrizeStatus"
+        observatoryId:
+          type: string
+          format: uuid
+          description: The only observatory the prize can be spent at.
+        voucherCode:
+          type: [string, "null"]
+          description: The code to spend it with, while it is ACTIVE. Null otherwise.
+        codeLast4:
+          type: string
+        durationMinutes:
+          type: [integer, "null"]
+          exclusiveMinimum: 0
+          description: FREE_SLOT only. The length of the slot it pays for.
+        percentOff:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 100
+          description: DISCOUNT only.
+        expiresAt:
+          type: string
+          format: date-time
+        redeemedBookingId:
+          type: [string, "null"]
+          format: uuid
+        redeemedObserverPackId:
+          type: [string, "null"]
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+
+    CardPrizeList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CardPrize"
+
+    CardDrawCard:
+      type: object
+      description: |
+        One of a deal's three cards. Unturned, it says nothing but its position.
+      additionalProperties: false
+      required: [position, turned, rarity, targetSlug, prize]
+      properties:
+        position:
+          type: integer
+          minimum: 0
+          maximum: 2
+        turned:
+          type: boolean
+        rarity:
+          description: Null until the card is turned.
+          oneOf:
+            - $ref: "#/components/schemas/CardRarity"
+            - type: "null"
+        targetSlug:
+          type: [string, "null"]
+          pattern: "^[a-z0-9-]+$"
+          description: |
+            The catalogue target the card's face shows, a `slug` for `GET /targets/{slug}`.
+            Null until the card is turned, or when that target has left the catalogue.
+        prize:
+          description: |
+            What the picked card won. Null on the other two cards, on a COMMON card, and
+            on every card before the pick.
+          oneOf:
+            - $ref: "#/components/schemas/CardPrize"
+            - type: "null"
+
+    CardDrawOddsEntry:
+      type: object
+      additionalProperties: false
+      required: [rarity, prizeKind, chance]
+      properties:
+        rarity:
+          $ref: "#/components/schemas/CardRarity"
+        prizeKind:
+          description: Null for COMMON.
+          oneOf:
+            - $ref: "#/components/schemas/CardPrizeKind"
+            - type: "null"
+        chance:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: The chance that one card holds this rarity, before the weekly cap.
+
+    CardDrawOdds:
+      type: object
+      description: ADR-060. The rules every deal is drawn under, as configured on the platform.
+      additionalProperties: false
+      required:
+        - cards
+        - freeSlotsPerWeek
+        - freeSlotDurationMinutes
+        - discountPercentOff
+        - prizeValidDays
+      properties:
+        cards:
+          type: array
+          description: One entry per rarity; the chances add up to 1.
+          items:
+            $ref: "#/components/schemas/CardDrawOddsEntry"
+        freeSlotsPerWeek:
+          type: integer
+          minimum: 0
+          description: |
+            At most this many free-slot cards are held by the week's deals at one
+            observatory. Once they are, a card that would have held a free slot holds a
+            discount instead. A free-slot card the pick leaves unchosen is given back.
+        freeSlotDurationMinutes:
+          type: integer
+          exclusiveMinimum: 0
+          description: The slot length a free slot pays for, the shortest length sold.
+        discountPercentOff:
+          type: integer
+          minimum: 1
+          maximum: 100
+        prizeValidDays:
+          type: integer
+          exclusiveMinimum: 0
+          description: A prize expires this many days after it is won.
+
+    CardDraw:
+      type: object
+      description: |
+        ADR-060. One account's deal for one week at one observatory: three cards,
+        decided when dealt, of which the account turns one.
+      additionalProperties: false
+      required: [id, observatoryId, week, dealtAt, opensNextAt, picked, pickedAt, cards, odds]
+      properties:
+        id:
+          type: string
+          format: uuid
+        observatoryId:
+          type: string
+          format: uuid
+        week:
+          type: string
+          format: date
+          description: The week's Monday, in the observatory's local calendar, as `GET /votes` names it.
+        dealtAt:
+          type: string
+          format: date-time
+        opensNextAt:
+          type: string
+          format: date-time
+          description: |
+            The next Monday 00:00 in the observatory's zone: when the next deal opens,
+            and when this one closes to a pick.
+        picked:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 2
+          description: The position the account turned. Null before the pick.
+        pickedAt:
+          type: [string, "null"]
+          format: date-time
+        cards:
+          type: array
+          minItems: 3
+          maxItems: 3
+          description: In position order.
+          items:
+            $ref: "#/components/schemas/CardDrawCard"
+        odds:
+          $ref: "#/components/schemas/CardDrawOdds"
+
+    PickCardRequest:
+      type: object
+      additionalProperties: false
+      required: [position]
+      properties:
+        position:
+          type: integer
+          minimum: 0
+          maximum: 2
+
+    PurchaseObserverPackRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        voucherCode:
+          type: string
+          minLength: 8
+          maxLength: 64
+          description: |
+            An OBSERVER_SEAT prize code (ADR-060). Case and separators are ignored. The
+            pack is PAID at once at no charge and `paymentIntent` is null.
 
     # ---------------------------------------------------------------------------
     # Observatory state
@@ -4089,7 +4497,9 @@ components:
           type: string
           minLength: 8
           maxLength: 64
-          description: A gift voucher code (DV-112). Case and separators are ignored.
+          description: |
+            A gift voucher code (DV-112), or a FREE_SLOT or DISCOUNT prize code won in
+            the card draw (ADR-060). Case and separators are ignored.
         loyaltyPoints:
           type: integer
           minimum: 100
@@ -4822,7 +5232,10 @@ components:
         observerPack:
           $ref: "#/components/schemas/ObserverPack"
         paymentIntent:
-          $ref: "#/components/schemas/PaymentIntent"
+          description: Null when an observer-seat prize paid for the pack (ADR-060).
+          oneOf:
+            - $ref: "#/components/schemas/PaymentIntent"
+            - type: "null"
 
     MissionObservationSettings:
       type: object
@@ -5840,6 +6253,7 @@ components:
         - AGENT_LINK
         - LOYALTY
         - SUBSCRIPTION
+        - CARD_DRAW
 
     AuditEvent:
       type: object
