@@ -100,6 +100,7 @@ tags:
 
 security:
   - userSession: []
+  - deviceSession: []
 
 x-darkview-websockets:
   description: |
@@ -273,6 +274,42 @@ paths:
         "429":
           $ref: "#/components/responses/TooManyRequests"
 
+  /auth/native-sign-in:
+    post:
+      operationId: signInNative
+      tags: [identity]
+      summary: Exchange an email and password for a native client's bearer session.
+      description: |
+        ADR-061. The mobile application's sign-in. The same body, refusals, rate limits
+        and audit as signIn, but the session is returned as a bearer token in the body and
+        no cookie is set. Not Origin-checked: it sets no cookie, and the API sends no CORS
+        headers, so another site's page can neither sign a visitor in through it nor read
+        its answer. Present the token as `Authorization: Bearer <token>` (deviceSession).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignInRequest"
+      responses:
+        "200":
+          description: Signed in. The token is shown once and stored only as a hash.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NativeSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
   /auth/google/start:
     get:
       operationId: googleSignInStart
@@ -327,6 +364,9 @@ paths:
       operationId: signOut
       tags: [identity]
       summary: End the current session and clear its cookies.
+      description: |
+        Ends the session the request authenticated with: the cookie session, or with
+        `Authorization: Bearer` the native one (ADR-061), whose token stops working at once.
       responses:
         "204":
           description: Signed out.
@@ -2667,6 +2707,19 @@ components:
         Every mutating request must carry an Origin header equal to the web client's
         origin; a missing Origin is refused. The API, the realtime service and the
         web client are served from one host.
+
+        A request carrying an `Authorization` header is judged by deviceSession alone
+        and never by these cookies (ADR-061).
+    deviceSession:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        A native client's session (ADR-061), from signInNative. Accepted by every
+        operation that accepts userSession, and by the realtime mission channel and
+        live view, without the Origin check: a browser never attaches this header on
+        its own. A cookie session's token is not accepted here, nor this token as a
+        cookie. Signed out by signOut.
     agentDeviceToken:
       type: http
       scheme: bearer
@@ -3005,6 +3058,23 @@ components:
           type: string
           minLength: 1
           maxLength: 128
+
+    NativeSession:
+      type: object
+      additionalProperties: false
+      required: [user, token, expiresAt]
+      description: |
+        A native client's session (ADR-061). `token` is shown once; the platform keeps
+        only its hash. Present it as `Authorization: Bearer <token>` until `expiresAt`.
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        token:
+          type: string
+          minLength: 32
+        expiresAt:
+          type: string
+          format: date-time
 
     VerifyEmailRequest:
       type: object

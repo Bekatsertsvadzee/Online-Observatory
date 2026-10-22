@@ -87,6 +87,17 @@ export const zSignInRequest = z.strictObject({
     password: z.string().min(1).max(128)
 });
 
+/**
+ * A native client's session (ADR-061). `token` is shown once; the platform keeps
+ * only its hash. Present it as `Authorization: Bearer <token>` until `expiresAt`.
+ *
+ */
+export const zNativeSession = z.strictObject({
+    user: zUser,
+    token: z.string().min(32),
+    expiresAt: z.iso.datetime()
+});
+
 export const zVerifyEmailRequest = z.strictObject({
     token: z.string().min(16).max(128).regex(/^[A-Za-z0-9_-]+$/)
 });
@@ -2328,6 +2339,13 @@ export const zSignInBody = zSignInRequest;
  * Signed in. Sets the session cookies.
  */
 export const zSignInResponse = zUser;
+
+export const zSignInNativeBody = zSignInRequest;
+
+/**
+ * Signed in. The token is shown once and stored only as a hash.
+ */
+export const zSignInNativeResponse = zNativeSession;
 
 export const zGoogleSignInStartQuery = z.object({
     locale: zLocale.optional()

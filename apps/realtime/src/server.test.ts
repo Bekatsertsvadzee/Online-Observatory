@@ -300,6 +300,58 @@ describe("the mission client channel", () => {
     expect(server.missions.subscribers(MISSION)).toHaveLength(1);
   });
 
+  describe("a native client's bearer handshake (ADR-061)", () => {
+    const NATIVE_TOKEN = "a-native-session-token-of-forty-three-chars";
+
+    beforeEach(() => {
+      store.registerUserSession(
+        hashSessionToken(NATIVE_TOKEN),
+        customer,
+        new Date(Date.now() + 60 * 60_000),
+        "NATIVE",
+      );
+    });
+
+    it("is let in with no Origin, which a browser handshake never lacks", async () => {
+      const client = await openMissionSocket({ authorization: `Bearer ${NATIVE_TOKEN}` });
+      const received = new Promise<Record<string, unknown>>((resolve) =>
+        client.once("message", (data) => resolve(JSON.parse(data.toString()))),
+      );
+      client.send(
+        JSON.stringify({
+          type: "CLIENT_SUBSCRIBE",
+          messageId: randomUUID(),
+          sentAt: new Date().toISOString(),
+          missionId: MISSION,
+          sessionId: missionSessionId,
+        }),
+      );
+
+      expect(await received).toMatchObject({ type: "MISSION_STATE", missionId: MISSION });
+    });
+
+    it("refuses a browser session's token presented as a bearer", async () => {
+      const webToken = "a-browser-session-token-of-forty-three-chars";
+      store.registerUserSession(
+        hashSessionToken(webToken),
+        customer,
+        new Date(Date.now() + 60 * 60_000),
+      );
+      await expect(
+        openMissionSocket({ origin: APP_URL, cookie: `darkview_session=${webToken}` }),
+      ).resolves.toBeDefined();
+      await expect(
+        openMissionSocket({ authorization: `Bearer ${webToken}` }),
+      ).rejects.toThrow("refused with 401");
+    });
+
+    it("refuses a malformed header even beside a valid cookie and Origin", async () => {
+      await expect(
+        openMissionSocket({ ...signedIn(), authorization: "Basic dXNlcjpwYXNz" }),
+      ).rejects.toThrow("refused with 401");
+    });
+  });
+
   it("does not register a customer's socket as an agent link", async () => {
     // The two channels are separate credentials and separate powers. A browser
     // socket appearing in the agent registry would be a socket that could be

@@ -3,6 +3,7 @@ import "server-only";
 import { headers } from "next/headers";
 
 import { isSameOrigin } from "@/lib/auth/origin";
+import { requestBearerToken } from "@/lib/auth/bearer";
 import { getCurrentSession } from "@/lib/auth/session";
 import type { VerifiedSession } from "@/lib/auth/types";
 import { forbidden, unauthenticated } from "@/lib/http/api-error";
@@ -38,6 +39,11 @@ export async function requireApiSession(): Promise<GuardResult> {
  * calls this rather than `requireApiSession`.
  */
 export async function requireApiMutation(): Promise<GuardResult> {
+  // ADR-061 §3: a request carrying Authorization is judged by its bearer token alone,
+  // with no Origin check. A browser never attaches that header on its own, so a page
+  // that sends one already holds the token, and forging a request is not the threat.
+  if ((await requestBearerToken()) !== undefined) return requireApiSession();
+
   const refusal = await crossOriginRefusal();
   if (refusal) return { ok: false, response: refusal };
 

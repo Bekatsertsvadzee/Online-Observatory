@@ -81,6 +81,9 @@ const DATABASE_ONLY = new Set([
   "PaymentPurpose",
   "PrivateSessionStatus",
   "ProcessingPreset",
+  // ADR-061: which credential a session row honours. Only the API and realtime read
+  // it; a client is never told.
+  "SessionClient",
 ]);
 
 const members = (enumObject: Record<string, string>) =>

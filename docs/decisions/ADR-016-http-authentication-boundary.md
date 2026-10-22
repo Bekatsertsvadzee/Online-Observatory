@@ -89,7 +89,8 @@ DV-060 already imposed this on realtime; it now applies to the API too.
   carries no `Origin` header, so §3 refuses its mutations. Accepting a missing
   `Origin` would reopen the CSRF check for old or unusual browsers. The options — a
   mobile-specific bearer token, a native `Origin`, or a platform attestation — are a
-  separate decision, taken when the mobile client is integrated.
+  separate decision, taken when the mobile client is integrated (since decided by
+  ADR-061: a bearer session, issued by `/auth/native-sign-in`).
 - Password reset (since decided by ADR-040), email change (since decided by ADR-042),
   account deletion.
 - Multi-factor authentication.

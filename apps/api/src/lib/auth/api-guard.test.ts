@@ -12,6 +12,7 @@ const session = (role: "USER" | "OPERATOR"): VerifiedSession => ({
   id: "session-1",
   expiresAt: new Date("2026-09-10T00:00:00.000Z"),
   csrfToken: "csrf-token-value",
+  credential: "cookie",
   user: {
     id: "6f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
     email: "observer@example.com",

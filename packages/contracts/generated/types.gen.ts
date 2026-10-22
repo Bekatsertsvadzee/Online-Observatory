@@ -113,6 +113,17 @@ export type SignInRequest = {
     password: string;
 };
 
+/**
+ * A native client's session (ADR-061). `token` is shown once; the platform keeps
+ * only its hash. Present it as `Authorization: Bearer <token>` until `expiresAt`.
+ *
+ */
+export type NativeSession = {
+    user: User;
+    token: string;
+    expiresAt: string;
+};
+
 export type VerifyEmailRequest = {
     token: string;
 };
@@ -3392,6 +3403,47 @@ export type SignInResponses = {
 };
 
 export type SignInResponse = SignInResponses[keyof SignInResponses];
+
+export type SignInNativeData = {
+    body: SignInRequest;
+    path?: never;
+    query?: never;
+    url: '/auth/native-sign-in';
+};
+
+export type SignInNativeErrors = {
+    /**
+     * Malformed request.
+     */
+    400: ApiError;
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+    /**
+     * Rate limited. The body does not say how much budget remains or when it returns.
+     */
+    429: ApiError;
+};
+
+export type SignInNativeError = SignInNativeErrors[keyof SignInNativeErrors];
+
+export type SignInNativeResponses = {
+    /**
+     * Signed in. The token is shown once and stored only as a hash.
+     */
+    200: NativeSession;
+};
+
+export type SignInNativeResponse = SignInNativeResponses[keyof SignInNativeResponses];
 
 export type GoogleSignInStartData = {
     body?: never;

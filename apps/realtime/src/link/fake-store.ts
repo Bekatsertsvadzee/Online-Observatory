@@ -128,7 +128,7 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   private readonly observatoryOf = new Map<string, string>();
   private readonly userSessions = new Map<
     string,
-    { user: ChannelUser; expiresAt: Date }
+    { user: ChannelUser; expiresAt: Date; client: "WEB" | "NATIVE" }
   >();
 
   registerToken(tokenHash: string, observatory: ObservatoryRecord) {
@@ -293,14 +293,22 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     return this.verdicts.get(commandId);
   }
 
-  /** Put a signed-in browser session in the store, as the API's cookie would present it. */
-  registerUserSession(tokenHash: string, user: ChannelUser, expiresAt: Date) {
-    this.userSessions.set(tokenHash, { user, expiresAt });
+  /**
+   * Put a signed-in session in the store: a browser's (WEB, the cookie) unless `client`
+   * says it is a native client's bearer session (ADR-061).
+   */
+  registerUserSession(
+    tokenHash: string,
+    user: ChannelUser,
+    expiresAt: Date,
+    client: "WEB" | "NATIVE" = "WEB",
+  ) {
+    this.userSessions.set(tokenHash, { user, expiresAt, client });
   }
 
-  async findUserBySessionTokenHash(tokenHash: string, now: Date) {
+  async findUserBySessionTokenHash(tokenHash: string, now: Date, client: "WEB" | "NATIVE") {
     const found = this.userSessions.get(tokenHash);
-    if (!found || found.expiresAt <= now) return null;
+    if (!found || found.client !== client || found.expiresAt <= now) return null;
     return found.user;
   }
 

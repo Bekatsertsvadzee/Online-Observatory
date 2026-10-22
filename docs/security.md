@@ -121,9 +121,11 @@ Production cookies use the `__Host-` prefix and are configured with:
 
 The CSRF cookie is intentionally readable so forms can submit it, but its hash is bound to the server-side session. Possession of a forged CSRF cookie without the matching database value is insufficient. Logout is POST-only, checks same-origin and the CSRF token, deletes the database session, and expires both cookies.
 
+A native client (the mobile application) holds a bearer session instead (ADR-061): issued by `POST /auth/native-sign-in` in the response body, never as a cookie, stored only as a hash on a row marked `NATIVE`, and presented as `Authorization: Bearer`. A request with that header is judged by it alone; a cookie is honoured only for a `WEB` row and a bearer token only for a `NATIVE` one. Sign-out and every password change or reset delete native sessions as they delete cookie sessions.
+
 ## CSRF and request integrity
 
-Every authentication mutation compares the `Origin` header with the configured `APP_URL`. Missing, malformed, or cross-origin values fail closed. Authenticated mutations additionally require the session-bound CSRF token. Next.js Proxy is an optimistic navigation gate only; it is never treated as the final authorization check.
+Every authentication mutation compares the `Origin` header with the configured `APP_URL`. Missing, malformed, or cross-origin values fail closed. The exceptions are a bearer request and the native sign-in (ADR-061): a browser never attaches `Authorization` on its own, and the native sign-in sets no cookie and answers no CORS request, so neither is reachable by cross-site request forgery. Authenticated mutations additionally require the session-bound CSRF token. Next.js Proxy is an optimistic navigation gate only; it is never treated as the final authorization check.
 
 Production must set `APP_URL` to the exact public HTTPS origin. If a reverse proxy is used, it must replace rather than append untrusted forwarding headers.
 

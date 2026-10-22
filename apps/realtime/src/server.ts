@@ -194,13 +194,16 @@ export function createRealtimeServer(
       // subject to the same-origin policy, so any page anywhere can open one to
       // this service and the browser will attach the customer's cookies. Refusing
       // here is what stops another site driving a subscription as the customer.
-      if (!isAllowedOrigin(request.headers.origin, appUrl)) {
+      // A native client's bearer handshake (ADR-061 §4) skips it: a browser cannot
+      // set a header on a WebSocket handshake, so no page can send one.
+      const bearer = request.headers.authorization !== undefined;
+      if (!bearer && !isAllowedOrigin(request.headers.origin, appUrl)) {
         socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
         socket.destroy();
         return;
       }
 
-      const user = await authenticateClient(store, request.headers.cookie, new Date());
+      const user = await authenticateClient(store, request.headers, new Date());
       if (!user) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();

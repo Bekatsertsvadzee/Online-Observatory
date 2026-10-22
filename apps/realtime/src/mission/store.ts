@@ -27,6 +27,7 @@ export interface MissionChannelStore {
   findUserBySessionTokenHash(
     tokenHash: string,
     now: Date,
+    client: "WEB" | "NATIVE",
   ): Promise<ChannelUser | null>;
 
   /**

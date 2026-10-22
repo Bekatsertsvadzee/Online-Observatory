@@ -14,6 +14,7 @@ function session(role: VerifiedSession["user"]["role"]): VerifiedSession {
     id: "session-1",
     expiresAt: new Date("2026-08-27T00:00:00.000Z"),
     csrfToken: "csrf-token",
+    credential: "cookie",
     user: {
       id: "user-1",
       email: "observer@example.com",

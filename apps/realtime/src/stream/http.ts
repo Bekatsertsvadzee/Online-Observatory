@@ -66,7 +66,8 @@ type Admission = { frame: LiveFrame; expiresAt: Date };
 /**
  * Three independent checks, all of which must pass.
  *
- * The **cookie** proves somebody is signed in right now. The **token** proves this
+ * The **cookie** (or a native client's bearer token, ADR-061) proves somebody is signed
+ * in right now. The **token** proves this
  * URL was minted for that same person, and bounds how long a copied `src` keeps
  * working. The **store** proves they are still entitled -- the controller of a live
  * session, or an observer whose seat has not been withdrawn.
@@ -86,7 +87,7 @@ async function authorise(
   const token = url.searchParams.get("t");
   if (!token) return null;
 
-  const user = await authenticateClient(store, request.headers.cookie, now);
+  const user = await authenticateClient(store, request.headers, now);
   if (!user) return null;
 
   const grant = stream.verify(token, missionId, user.id, now);

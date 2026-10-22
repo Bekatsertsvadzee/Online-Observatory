@@ -76,6 +76,7 @@ async function customer(role: "USER" | "OPERATOR" = "USER") {
     id: randomUUID(),
     expiresAt: new Date(NOW.getTime() + HOUR),
     csrfToken: "csrf",
+    credential: "cookie" as const,
     user: {
       id: user.id,
       email: user.email,
