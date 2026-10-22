@@ -204,6 +204,16 @@ export class AgentLink {
       return;
     }
 
+    // Not recorded either. The agent writes a heartbeat straight to the socket and
+    // never queues or replays one (`_send_heartbeat_if_due`), so a row per heartbeat
+    // deduplicated nothing and was the database's largest load: one insert every
+    // five seconds per observatory, around the clock. Liveness is `lastActivityAt`
+    // above; the posture it carries is written only when it changes (ADR-024 §5).
+    if (message.type === "AGENT_HEARTBEAT") {
+      await this.applyPosture(message.posture, message.disarmReason ?? null);
+      return;
+    }
+
     // Record first, act only on the first sighting. The primary key on
     // AgentMessage is what makes every effect in `apply` idempotent, so a replayed
     // queue after an outage is acknowledged once and applied once, and nothing
@@ -237,15 +247,9 @@ export class AgentLink {
         await this.applyUploadGrantRequest(message);
         return;
 
-      // AGENT_HEARTBEAT is liveness, and `lastActivityAt` above is what consumes
-      // that. It also carries the posture, so a disarm reaches the cloud within one
-      // interval (ADR-024 §5).
-      case "AGENT_HEARTBEAT":
-        await this.applyPosture(message.posture, message.disarmReason ?? null);
-        return;
-
-      // AGENT_LIVE_FRAME and AGENT_STATE_DELTA never reach here -- both are taken
-      // in `receive` before the record step, being samples that are never replayed.
+      // AGENT_LIVE_FRAME, AGENT_STATE_DELTA and AGENT_HEARTBEAT never reach here --
+      // all three are taken in `receive` before the record step, being messages the
+      // agent never queues and so never replays.
       // AGENT_ERROR is diagnostic and is recorded; DV-063 gives it a reader.
       default:
         return;

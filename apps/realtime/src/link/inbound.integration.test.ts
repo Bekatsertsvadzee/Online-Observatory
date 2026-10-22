@@ -1129,7 +1129,7 @@ describe("what reaches AgentMessage", () => {
     });
   }
 
-  it("is every message but the state deltas, which are relayed", async () => {
+  it("is every message but the state deltas and heartbeats, which the agent never replays", async () => {
     const link = makeLink();
     await link.receive(hello());
     await link.receive(stateDelta());
@@ -1163,11 +1163,7 @@ describe("what reaches AgentMessage", () => {
       where: { observatoryId: observatory.id },
       orderBy: { receivedAt: "asc" },
     });
-    expect(rows.map((row) => row.type).sort()).toEqual([
-      "AGENT_HEARTBEAT",
-      "AGENT_HELLO",
-      "AGENT_MISSION_EVENT",
-    ]);
+    expect(rows.map((row) => row.type).sort()).toEqual(["AGENT_HELLO", "AGENT_MISSION_EVENT"]);
     expect(broadcast.telemetry).toHaveLength(3);
   });
 });

@@ -27,7 +27,7 @@ import { handleInternalRequest } from "@/internal/http";
 import { handleStreamRequest } from "@/stream/http";
 import { LiveStream } from "@/stream/live-stream";
 import { getEnvironment } from "@/env";
-import { refuseRealHardwareInDemo, sandboxMoneyAllowed } from "@/deployment";
+import { refuseRealHardwareInDemo, sandboxMoneyAllowed, sweepSeconds } from "@/deployment";
 import { dispatchPendingEmails, queueSlotReminders } from "@/notifications/email";
 import { evaluateEndedSlots, refundExpiredEntitlements } from "@/refunds/entitlements";
 import { createSandboxCharger, sweepSubscriptions } from "@/subscriptions/renewals";
@@ -59,6 +59,9 @@ const SUBSCRIPTION_SWEEP_INTERVAL_SECONDS = 60;
  * at best, and every fetch is a call against a provider's quota.
  */
 const CONDITIONS_REFRESH_INTERVAL_SECONDS = 60 * 60;
+
+/** The minute-scale sweeps on a demo deployment (`sweepSeconds`). */
+const DEMO_SWEEP_SECONDS = 5 * 60;
 
 /**
  * `ws` hands a binary message as a Buffer, an ArrayBuffer or an array of Buffers
@@ -103,6 +106,10 @@ export function createRealtimeServer(
   streamSecret: string,
   storage: StorageConfiguration,
   internalSecret: string,
+  sweeps: { pendingSeconds: number; unstartedSeconds: number } = {
+    pendingSeconds: PENDING_SWEEP_INTERVAL_SECONDS,
+    unstartedSeconds: UNSTARTED_SWEEP_INTERVAL_SECONDS,
+  },
 ) {
   const registry = new AgentLinkRegistry();
   const relay = new AgentRelay(store, registry);
@@ -360,7 +367,7 @@ export function createRealtimeServer(
           console.error("darkview realtime: pending sweep", error);
         });
     }
-  }, PENDING_SWEEP_INTERVAL_SECONDS * 1000);
+  }, sweeps.pendingSeconds * 1000);
 
   /**
    * ADR-018 §4: a booked slot nobody started closes at its end. Here because this
@@ -371,7 +378,7 @@ export function createRealtimeServer(
     void store.closeUnstartedMissions(new Date()).catch((error) => {
       console.error("darkview realtime: no-show sweep", error);
     });
-  }, UNSTARTED_SWEEP_INTERVAL_SECONDS * 1000);
+  }, sweeps.unstartedSeconds * 1000);
 
   return {
     registry,
@@ -393,6 +400,7 @@ export function createRealtimeServer(
 // apps/api holds no agent link, asserted in realtime-is-separate.test.ts.
 if (process.env.NODE_ENV !== "test") {
   const environment = getEnvironment();
+  const deployment = environment.DARKVIEW_DEPLOYMENT;
 
   // DV-064. Its own client, so the link's store interface stays as narrow as the
   // link needs. Reminders are queued whether or not delivery is configured; an
@@ -415,6 +423,11 @@ if (process.env.NODE_ENV !== "test") {
     // before a socket is accepted, rather than at the first capture of the night.
     getStorageConfiguration(),
     environment.REALTIME_INTERNAL_SECRET,
+    {
+      // No slower than a command's 30-second life, or the fallback finds only expired work.
+      pendingSeconds: sweepSeconds(deployment, PENDING_SWEEP_INTERVAL_SECONDS, 30),
+      unstartedSeconds: sweepSeconds(deployment, UNSTARTED_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS),
+    },
   );
   server.listen(environment.REALTIME_PORT);
 
@@ -432,7 +445,7 @@ if (process.env.NODE_ENV !== "test") {
     void queueSlotReminders(notifications, new Date()).catch((error) => {
       console.error("darkview realtime: slot reminders", error);
     });
-  }, REMINDER_SWEEP_INTERVAL_SECONDS * 1000);
+  }, sweepSeconds(deployment, REMINDER_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS) * 1000);
 
   // DV-111, sharing the notifications client: both write to the email outbox.
   setInterval(() => {
@@ -449,7 +462,7 @@ if (process.env.NODE_ENV !== "test") {
       .catch((error) => {
         console.error("darkview realtime: entitlements", error);
       });
-  }, ENTITLEMENT_SWEEP_INTERVAL_SECONDS * 1000);
+  }, sweepSeconds(deployment, ENTITLEMENT_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS) * 1000);
 
   // ADR-022 sections 8 and 9. The sandbox is never charged in production (ADR-022
   // section 11), so there the sweep still expires minutes and ends subscriptions
@@ -466,7 +479,7 @@ if (process.env.NODE_ENV !== "test") {
       .catch((error) => {
         console.error("darkview realtime: subscriptions", error);
       });
-  }, SUBSCRIPTION_SWEEP_INTERVAL_SECONDS * 1000);
+  }, sweepSeconds(deployment, SUBSCRIPTION_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS) * 1000);
 
   // DV-110. Advisory only: this writes forecasts and never touches a weather hold.
   // meteoblue goes first in this list once a key and a verified adapter exist.
@@ -512,7 +525,7 @@ if (process.env.NODE_ENV !== "test") {
         .catch((error) => {
           console.error("darkview realtime: email delivery", error);
         });
-    }, EMAIL_DISPATCH_INTERVAL_SECONDS * 1000);
+    }, sweepSeconds(deployment, EMAIL_DISPATCH_INTERVAL_SECONDS, 120) * 1000);
   } else {
     console.warn(
       "darkview realtime: NOTIFICATION_WEBHOOK_URL is not set; emails are queued and not sent",

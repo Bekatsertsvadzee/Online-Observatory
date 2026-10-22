@@ -64,6 +64,20 @@ function heartbeat(messageId = randomUUID(), sequence = 1) {
   });
 }
 
+/** A message the agent queues, and so may replay: what AgentMessage deduplicates. */
+function agentError(messageId = randomUUID(), sentAt = new Date(now).toISOString()) {
+  return JSON.stringify({
+    type: "AGENT_ERROR",
+    messageId,
+    sentAt,
+    severity: "WARNING",
+    code: "TEST",
+    message: "a queued diagnostic",
+    missionId: null,
+    commandId: null,
+  });
+}
+
 beforeEach(() => {
   store = new FakeLinkStore();
   broadcast = new RecordingBroadcast();
@@ -158,12 +172,23 @@ describe("replay after an outage", () => {
     await link.receive(hello());
 
     const replayed = randomUUID();
-    await link.receive(heartbeat(replayed, 7));
-    await link.receive(heartbeat(replayed, 7));
-    await link.receive(heartbeat(replayed, 7));
+    await link.receive(agentError(replayed));
+    await link.receive(agentError(replayed));
+    await link.receive(agentError(replayed));
 
-    const heartbeats = store.recorded.filter((m) => m.type === "AGENT_HEARTBEAT");
-    expect(heartbeats).toHaveLength(1);
+    const errors = store.recorded.filter((m) => m.type === "AGENT_ERROR");
+    expect(errors).toHaveLength(1);
+    expect(link.currentState).toBe("ONLINE");
+  });
+
+  it("records no heartbeat: the agent never queues one, so there is nothing to replay", async () => {
+    const link = makeLink();
+    await link.receive(hello());
+
+    await link.receive(heartbeat(randomUUID(), 1));
+    await link.receive(heartbeat(randomUUID(), 2));
+
+    expect(store.recorded.filter((m) => m.type === "AGENT_HEARTBEAT")).toHaveLength(0);
     expect(link.currentState).toBe("ONLINE");
   });
 
@@ -172,16 +197,7 @@ describe("replay after an outage", () => {
     await link.receive(hello());
 
     const occurredDuringOutage = "2026-09-03T19:30:00.000Z";
-    await link.receive(
-      JSON.stringify({
-        type: "AGENT_HEARTBEAT",
-        messageId: randomUUID(),
-        sentAt: occurredDuringOutage,
-        sequence: 3,
-        uptimeSeconds: 10,
-        posture: "SIMULATED",
-      }),
-    );
+    await link.receive(agentError(randomUUID(), occurredDuringOutage));
 
     const stored = store.recorded.at(-1);
     expect(stored?.sentAt.toISOString()).toBe(occurredDuringOutage);

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { refuseRealHardwareInDemo, sandboxMoneyAllowed } from "./deployment";
+import { refuseRealHardwareInDemo, sandboxMoneyAllowed, sweepSeconds } from "./deployment";
 
 describe("sandboxMoneyAllowed (ADR-035)", () => {
   it("allows the sandbox outside production, whatever the deployment", () => {
@@ -38,5 +38,17 @@ describe("refuseRealHardwareInDemo (ADR-035)", () => {
     await expect(refuseRealHardwareInDemo("demo", async () => 2)).rejects.toThrow(
       /demo.*2 observatory\(ies\) are in REAL mode/,
     );
+  });
+});
+
+describe("sweepSeconds", () => {
+  it("keeps production's interval", () => {
+    expect(sweepSeconds("production", 60, 300)).toBe(60);
+    expect(sweepSeconds(undefined, 60, 300)).toBe(60);
+  });
+
+  it("slows a demo's sweep, and never speeds one up", () => {
+    expect(sweepSeconds("demo", 60, 300)).toBe(300);
+    expect(sweepSeconds("demo", 600, 300)).toBe(600);
   });
 });
