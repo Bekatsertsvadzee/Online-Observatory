@@ -23,8 +23,22 @@ export const SLOT_DURATION_MINUTES = 30;
  * absorb an overrun without eating into the next booking. Operating practice
  * calls for a refocus every 45-60 minutes or after a 2 degree temperature change,
  * so some of these gaps carry one.
+ *
+ * Enforced in the database, not only here: `Booking_held_slot_exclusion` holds each
+ * booking's interval plus this many minutes (migration
+ * 20261022120000_slot_turnaround_exclusion). Change the two together.
  */
 export const SLOT_TURNAROUND_MINUTES = 10;
+
+/**
+ * How far apart offered start times are.
+ *
+ * Starts are a grid, not a tiling: the customer chooses any free quarter hour, and
+ * a start whose session would come within the turnaround of a held booking is
+ * shown ALREADY_BOOKED rather than left off the list. A 30-minute session plus its
+ * turnaround therefore takes three quarter-hour starts out of sale around it.
+ */
+export const SLOT_STRIDE_MINUTES = 15;
 
 /**
  * PROVISIONAL. In tetri, the minor unit of the Georgian lari: 4500 = 45.00 GEL.
@@ -40,18 +54,22 @@ export const SLOT_TURNAROUND_MINUTES = 10;
 export const PROVISIONAL_SLOT_PRICE_MINOR = 4500;
 
 /**
- * Slots start on a five-minute boundary.
+ * Slots start on a quarter hour of the observatory's clock: :00, :15, :30, :45.
  *
  * Darkness begins at whatever instant the Sun crosses -18 degrees -- 22:50:07.099
  * on one June evening -- and a booking page offering "22:50:07" looks broken. The
- * first slot is therefore pushed forward to the next five-minute mark.
+ * first start is therefore pushed forward to the next quarter hour.
  *
  * Forward, never back: rounding down would start the session while the sky is
  * still too bright, which is the one direction that costs an observation rather
- * than a few minutes of inventory. At this site the delay has never cost a slot,
- * because the stride is forty minutes and the rounding is at most five.
+ * than a few minutes of inventory.
+ *
+ * Aligned on UTC, which is the same as aligning on the observatory's local clock
+ * because every UTC offset in the time-zone database today is a whole multiple of
+ * fifteen minutes (Tbilisi's is +04:00; the oddest, Nepal and Chatham, are +05:45
+ * and +12:45). A site on an offset that is not would need the zone passed in here.
  */
-export const SLOT_ALIGNMENT_MINUTES = 5;
+export const SLOT_ALIGNMENT_MINUTES = 15;
 
 function alignForward(at: Date, minutes: number): Date {
   const step = minutes * 60_000;
@@ -64,9 +82,33 @@ export type SlotAvailabilityInput = {
   window: NightWindow;
   now: Date;
   observatory: { online: boolean; weatherHold: boolean };
-  /** Start instants already held by a confirmed booking. */
-  bookedStartAt: ReadonlySet<number>;
+  /**
+   * Bookings that hold the telescope: confirmed, or reserved and not yet lapsed.
+   * A start whose session would overlap one, or its turnaround, is ALREADY_BOOKED.
+   */
+  held: readonly HeldBooking[];
 };
+
+export type HeldBooking = { slotStartAt: Date; durationMinutes: number };
+
+/**
+ * Whether a session starting at `startMs` would come within the turnaround of a
+ * held booking -- on either side of it. The rule `Booking_held_slot_exclusion`
+ * enforces, where each booking holds [start, start + duration + turnaround).
+ */
+export function clashesWithHeld(
+  startMs: number,
+  durationMinutes: number,
+  held: readonly HeldBooking[],
+): boolean {
+  const turnaroundMs = SLOT_TURNAROUND_MINUTES * 60_000;
+  const endMs = startMs + durationMinutes * 60_000 + turnaroundMs;
+  return held.some((booking) => {
+    const heldStartMs = booking.slotStartAt.getTime();
+    const heldEndMs = heldStartMs + booking.durationMinutes * 60_000 + turnaroundMs;
+    return startMs < heldEndMs && heldStartMs < endMs;
+  });
+}
 
 /**
  * Which single reason to report, when more than one applies.
@@ -89,14 +131,16 @@ function unavailableReason(
   input: SlotAvailabilityInput,
 ): SlotUnavailableReason | null {
   if (slotStartAt.getTime() <= input.now.getTime()) return "IN_THE_PAST";
-  if (input.bookedStartAt.has(slotStartAt.getTime())) return "ALREADY_BOOKED";
+  if (clashesWithHeld(slotStartAt.getTime(), SLOT_DURATION_MINUTES, input.held)) {
+    return "ALREADY_BOOKED";
+  }
   if (input.observatory.weatherHold) return "WEATHER_HOLD";
   if (!input.observatory.online) return "OBSERVATORY_OFFLINE";
   return null;
 }
 
 /**
- * Tile the dark window with slots.
+ * Offer a start every SLOT_STRIDE_MINUTES across the dark window.
  *
  * A slot is only emitted if it fits entirely inside darkness. A session that
  * would run past dawn is not offered at all rather than offered short: the
@@ -105,7 +149,7 @@ function unavailableReason(
  */
 export function generateSlots(input: SlotAvailabilityInput): Slot[] {
   const durationMs = SLOT_DURATION_MINUTES * 60_000;
-  const strideMs = (SLOT_DURATION_MINUTES + SLOT_TURNAROUND_MINUTES) * 60_000;
+  const strideMs = SLOT_STRIDE_MINUTES * 60_000;
 
   const slots: Slot[] = [];
   const firstStart = alignForward(input.window.duskAt, SLOT_ALIGNMENT_MINUTES);

@@ -1115,6 +1115,15 @@ paths:
         the Moon -- is 422 `TARGET_NOT_OBSERVABLE`, with the reasons in
         `details.blockReasons`.
 
+        `targetId` may be omitted, and the platform then assigns the best target up
+        for the slot (see `CreateBookingRequest.targetId`). If no enabled target is
+        observable across the slot and fits its length, the request is 422
+        `VALIDATION_FAILED`.
+
+        Held time includes the turnaround between customers: a start whose session
+        would begin or end within that turnaround of another held booking on the
+        same telescope is 409, enforced by the same exclusion constraint.
+
         A reserved slot is held while payment is outstanding. The hold expires, and the
         slot returns to the available list, if payment does not complete in time; the
         `expiresAt` on the returned payment intent is that deadline. A failed or
@@ -4546,7 +4555,7 @@ components:
     CreateBookingRequest:
       type: object
       additionalProperties: false
-      required: [observatoryId, targetId, slotStartAt, durationMinutes]
+      required: [observatoryId, slotStartAt, durationMinutes]
       properties:
         observatoryId:
           type: string
@@ -4555,9 +4564,20 @@ components:
         targetId:
           type: string
           format: uuid
+          description: |
+            Optional. When omitted the platform assigns a target for the slot: of the
+            enabled targets whose `expectedMissionMinutes` fits `durationMinutes` and
+            that `GET /targets/visibility` judges observable across the whole slot,
+            the one highest above the horizon at the middle of the slot, ties going to
+            the earlier slug. The booking returned names it. When none qualifies the
+            request is 422 `VALIDATION_FAILED`.
         slotStartAt:
           type: string
           format: date-time
+          description: |
+            A start `GET /slots` offers: a quarter hour of the observatory's clock
+            inside darkness and the hours the observatory is available. A start whose
+            session would come within the turnaround of another held booking is 409.
         durationMinutes:
           type: integer
           exclusiveMinimum: 0

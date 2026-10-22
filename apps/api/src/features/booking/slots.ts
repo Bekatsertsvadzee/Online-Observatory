@@ -6,7 +6,18 @@ import { findBookableObservatory } from "@/features/booking/observatories";
 import { getDatabase } from "@/lib/db/client";
 import { openIntervals } from "@/lib/slots/availability";
 import { nightWindow } from "@/lib/slots/darkness";
-import { generateSlots, SLOT_DURATION_MINUTES } from "@/lib/slots/generate";
+import {
+  generateSlots,
+  SLOT_DURATION_MINUTES,
+  SLOT_TURNAROUND_MINUTES,
+} from "@/lib/slots/generate";
+
+/**
+ * How far before dusk a held booking's start is still read. A booking that began
+ * before the window can still reach into it with its duration and turnaround; a
+ * day is longer than any session, and the rows are one observatory's few bookings.
+ */
+const HELD_LOOKBACK_MS = 24 * 60 * 60_000;
 
 /**
  * Bookable slots on one observatory, for one of its local dates.
@@ -50,20 +61,22 @@ export async function listSlotsForDate(
   const held = await getDatabase().booking.findMany({
     where: {
       observatoryId: observatory.id,
-      slotStartAt: { gte: window.duskAt, lte: window.dawnAt },
+      slotStartAt: {
+        gt: new Date(window.duskAt.getTime() - HELD_LOOKBACK_MS),
+        lt: new Date(window.dawnAt.getTime() + SLOT_TURNAROUND_MINUTES * 60_000),
+      },
       OR: [
         { status: "CONFIRMED" },
         { status: "PENDING_PAYMENT", holdExpiresAt: { gt: now } },
       ],
     },
-    select: { slotStartAt: true },
+    select: { slotStartAt: true, durationMinutes: true },
   });
 
-  // Tiled per open interval, not once across the night. Each contiguous opening
-  // starts its own run of slots: a gap in the middle of the evening is a gap the
-  // owner asked for, and carrying the stride across it would place a slot inside
-  // hours they did not offer.
-  const bookedStartAt = new Set(held.map((row) => row.slotStartAt.getTime()));
+  // Generated per open interval, not once across the night. Each contiguous opening
+  // starts its own run of quarter-hour starts: a gap in the middle of the evening is
+  // a gap the owner asked for, and carrying the grid across it would place a slot
+  // inside hours they did not offer.
   const state = {
     online: observatory.status === "ONLINE",
     weatherHold: observatory.weatherHold,
@@ -77,7 +90,7 @@ export async function listSlotsForDate(
         window: interval,
         now,
         observatory: state,
-        bookedStartAt,
+        held,
       }),
     ),
   };

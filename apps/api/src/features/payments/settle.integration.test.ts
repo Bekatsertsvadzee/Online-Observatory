@@ -50,7 +50,11 @@ let telescopeId: string;
 let targetId: string;
 let userId: string;
 
-/** The nth bookable slot of the fixture night, taken from the generator itself. */
+/**
+ * The nth bookable slot of the fixture night, taken from the generator itself: the
+ * index-th of the night's non-clashing slots. A booking and its turnaround
+ * take three quarter-hour starts, so that is every third start.
+ */
 function slotStartAt(index: number): Date {
   const window = nightWindow(NIGHT, SITE.timezone, {
     latitudeDegrees: SITE.latitude,
@@ -63,8 +67,8 @@ function slotStartAt(index: number): Date {
     window,
     now: NOW,
     observatory: { online: true, weatherHold: false },
-    bookedStartAt: new Set(),
-  }).filter((candidate) => candidate.available)[index];
+    held: [],
+  }).filter((candidate) => candidate.available)[index * 3];
   if (!slot) throw new Error(`no available slot ${index} on the fixture night`);
   return new Date(slot.startAt);
 }

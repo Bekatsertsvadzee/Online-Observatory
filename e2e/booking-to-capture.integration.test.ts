@@ -341,7 +341,7 @@ describe("a customer's booking, from sign-in to their Collection", () => {
       window,
       now: RESERVED_AT,
       observatory: { online: true, weatherHold: false },
-      bookedStartAt: new Set(),
+      held: [],
     }).find((candidate) => {
       const start = new Date(candidate.startAt).getTime();
       return (

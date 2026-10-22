@@ -784,7 +784,7 @@ export const zRescheduleBookingRequest = z.strictObject({
 
 export const zCreateBookingRequest = z.strictObject({
     observatoryId: z.uuid(),
-    targetId: z.uuid(),
+    targetId: z.uuid().optional(),
     slotStartAt: z.iso.datetime(),
     durationMinutes: z.int().gt(0),
     locale: zLocale.optional(),

@@ -65,7 +65,7 @@ function tbilisiSlot(which: "first" | "late"): Date {
     window,
     now: NOW,
     observatory: { online: true, weatherHold: false },
-    bookedStartAt: new Set(),
+    held: [],
   });
   const slot =
     which === "first"

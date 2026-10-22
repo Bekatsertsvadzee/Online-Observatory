@@ -50,6 +50,10 @@ let observatoryId: string;
 let targetId: string;
 let customerId: string;
 
+/**
+ * The index-th of the night's non-clashing slots. A booking and its turnaround
+ * take three quarter-hour starts, so that is every third start.
+ */
 function slotStartAt(index: number): Date {
   const window = nightWindow(NIGHT, SITE.timezone, {
     latitudeDegrees: SITE.latitude,
@@ -60,9 +64,9 @@ function slotStartAt(index: number): Date {
     window,
     now: NOW,
     observatory: { online: true, weatherHold: false },
-    bookedStartAt: new Set(),
+    held: [],
   }).filter((slot) => slot.available);
-  return new Date(slots[index].startAt);
+  return new Date(slots[index * 3].startAt);
 }
 
 async function createUser(name: string) {

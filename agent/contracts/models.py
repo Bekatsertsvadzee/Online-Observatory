@@ -935,8 +935,8 @@ class CreateBookingRequest(BaseModel):
         extra='forbid',
     )
     observatory_id: UUID = Field(..., alias='observatoryId', description='An `id` from `GET /observatories`.')
-    target_id: UUID = Field(..., alias='targetId')
-    slot_start_at: AwareDatetime = Field(..., alias='slotStartAt')
+    target_id: UUID | None = Field(None, alias='targetId', description='Optional. When omitted the platform assigns a target for the slot: of the\nenabled targets whose `expectedMissionMinutes` fits `durationMinutes` and\nthat `GET /targets/visibility` judges observable across the whole slot,\nthe one highest above the horizon at the middle of the slot, ties going to\nthe earlier slug. The booking returned names it. When none qualifies the\nrequest is 422 `VALIDATION_FAILED`.\n')
+    slot_start_at: AwareDatetime = Field(..., alias='slotStartAt', description="A start `GET /slots` offers: a quarter hour of the observatory's clock\ninside darkness and the hours the observatory is available. A start whose\nsession would come within the turnaround of another held booking is 409.\n")
     duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
     locale: Locale | None = None
     voucher_code: str | None = Field(None, alias='voucherCode', description='A gift voucher code (DV-112), or a FREE_SLOT or DISCOUNT prize code won in\nthe card draw (ADR-060). Case and separators are ignored.\n', max_length=64, min_length=8)

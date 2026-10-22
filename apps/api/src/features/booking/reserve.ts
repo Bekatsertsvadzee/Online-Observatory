@@ -29,7 +29,7 @@ import {
 } from "@/features/booking/observatories";
 import { claimPrize, findSpendablePrize } from "@/features/cards/draw";
 import { sandboxCheckoutUrl } from "@/features/payments/sandbox-checkout";
-import { slotVisibilityForBooking } from "@/features/targets/slot";
+import { bestTargetForSlot, slotVisibilityForBooking } from "@/features/targets/slot";
 import { getDatabase } from "@/lib/db/client";
 import { sandboxMoneyAllowed } from "@/lib/deployment";
 import { openIntervals } from "@/lib/slots/availability";
@@ -327,8 +327,11 @@ export async function expireLapsedHolds(
  * one; that rejection is the 409.
  *
  * DV-066 widened what "taken" means from an equal start instant to an overlapping
- * interval. Nothing here had to change for that -- which is the point of putting
- * the rule in the database rather than in this function.
+ * interval, and quarter-hour starts widened it again to an interval plus the
+ * turnaround between customers. Nothing here had to change for either -- which is
+ * the point of putting the rule in the database rather than in this function.
+ *
+ * With no `targetId` the platform assigns one (`bestTargetForSlot`).
  */
 export async function reserveSlot(input: {
   userId: string;
@@ -373,8 +376,12 @@ export async function reserveSlot(input: {
     };
   }
 
-  const target = await database.target.findUnique({ where: { id: request.targetId } });
-  if (!target || !target.enabled) {
+  // A named target is resolved first, so an unknown one is 404 whatever the slot.
+  // An omitted one is assigned below, once the slot is known to be sellable.
+  const chosen = request.targetId
+    ? await database.target.findUnique({ where: { id: request.targetId } })
+    : null;
+  if (request.targetId && (!chosen || !chosen.enabled)) {
     return {
       ok: false,
       status: 404,
@@ -416,8 +423,10 @@ export async function reserveSlot(input: {
     };
   }
 
-  const tooLong = targetTooLongForSlot(target, slot.durationMinutes);
-  if (tooLong) return { ok: false, status: 422, code: "VALIDATION_FAILED", message: tooLong };
+  if (chosen) {
+    const tooLong = targetTooLongForSlot(chosen, slot.durationMinutes);
+    if (tooLong) return { ok: false, status: 422, code: "VALIDATION_FAILED", message: tooLong };
+  }
 
   // The generator reports why a slot cannot be sold. ALREADY_BOOKED can never
   // appear here -- findGeneratedSlot passes no booked set, because whether the
@@ -448,13 +457,30 @@ export async function reserveSlot(input: {
       break;
   }
 
-  const notObservable = await targetNotObservableInSlot(
-    observatory,
-    target,
-    slotStartAt,
-    slot.durationMinutes,
-  );
-  if (notObservable) return notObservable;
+  let target;
+  if (chosen) {
+    const notObservable = await targetNotObservableInSlot(
+      observatory,
+      chosen,
+      slotStartAt,
+      slot.durationMinutes,
+    );
+    if (notObservable) return notObservable;
+    target = chosen;
+  } else {
+    // Judged by the same rule as a named target, so an assigned one always passes it.
+    target = await bestTargetForSlot(observatory, slotStartAt, slot.durationMinutes);
+    if (!target) {
+      return {
+        ok: false,
+        status: 422,
+        code: "VALIDATION_FAILED",
+        message:
+          "No target is observable from this telescope for the whole of that slot. " +
+          "Choose another slot.",
+      };
+    }
+  }
 
   // One price reduction per booking (maintainer decision of 2026-09-16, extended to
   // subscription minutes by ADR-022 section 7).
@@ -1199,9 +1225,9 @@ export function findGeneratedSlot(
     const window = nightWindow(date, observatory.timezone, site);
     if (!window) continue;
 
-    // Generated per open interval, exactly as GET /slots does. Tiling the whole
+    // Generated per open interval, exactly as GET /slots does. Gridding the whole
     // night and then filtering would accept a slot whose start only exists
-    // because the stride ran across a gap the owner left.
+    // because the grid ran across a gap the owner left.
     for (const interval of openIntervals(
       window,
       observatory.windows,
@@ -1212,7 +1238,7 @@ export function findGeneratedSlot(
         window: interval,
         now,
         observatory: observatoryState,
-        bookedStartAt: new Set(),
+        held: [],
       }).find((slot) => Date.parse(slot.startAt) === slotStartAt.getTime());
 
       if (match) return match;

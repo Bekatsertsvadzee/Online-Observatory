@@ -56,7 +56,7 @@ function firstSlotStartAt(): Date {
     window,
     now: NOW,
     observatory: { online: true, weatherHold: false },
-    bookedStartAt: new Set(),
+    held: [],
   }).find((candidate) => candidate.available);
   if (!slot) throw new Error("no available slot on the fixture night");
   return new Date(slot.startAt);
