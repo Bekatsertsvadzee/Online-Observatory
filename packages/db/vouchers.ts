@@ -21,9 +21,19 @@ const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const CODE_LENGTH = 16;
 
 export function deriveVoucherCode(secret: string, voucherId: string): string {
-  const digest = createHmac("sha256", secret)
-    .update(`gift-voucher:${voucherId}`)
-    .digest();
+  return deriveCode(secret, `gift-voucher:${voucherId}`);
+}
+
+/**
+ * A card-draw prize's code (ADR-060): the same alphabet, length and secret, under
+ * its own prefix, so a prize and a gift voucher can never derive one code.
+ */
+export function deriveCardPrizeCode(secret: string, prizeId: string): string {
+  return deriveCode(secret, `card-prize:${prizeId}`);
+}
+
+function deriveCode(secret: string, message: string): string {
+  const digest = createHmac("sha256", secret).update(message).digest();
   let code = "";
   let buffer = 0;
   let bits = 0;

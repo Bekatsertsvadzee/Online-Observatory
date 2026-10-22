@@ -10,7 +10,9 @@ import type {
 } from "@darkview/contracts";
 import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { hashVoucherCode, normaliseVoucherCode } from "@darkview/db/vouchers";
 
+import { claimPrize, findSpendablePrize } from "@/features/cards/draw";
 import { LIVE_MISSION_STATES } from "@/features/missions/session";
 import { sandboxCheckoutUrl } from "@/features/payments/sandbox-checkout";
 import { getDatabase } from "@/lib/db/client";
@@ -79,7 +81,7 @@ const SEAT_HOLDING_STATUSES = ["PENDING_PAYMENT", "PAID"] as const;
 
 export type ObserverPackFailure = {
   ok: false;
-  status: 403 | 404 | 409 | 500;
+  status: 403 | 404 | 409 | 422 | 500;
   code: ErrorCode;
   message: string;
 };
@@ -123,6 +125,13 @@ export function toContractPack(row: PackRow): ObserverPack {
     createdAt: row.createdAt.toISOString(),
   };
 }
+
+const PRIZE_UNUSABLE: ObserverPackFailure = {
+  ok: false,
+  status: 422,
+  code: "VALIDATION_FAILED",
+  message: "That voucher code cannot be used.",
+};
 
 function toPaymentIntent(
   payment: { id: string; provider: string; status: string; redirectUrl: string | null },
@@ -184,10 +193,19 @@ async function expireLapsedPacks(
 export async function purchaseObserverPack(input: {
   missionId: string;
   userId: string;
+  /** ADR-060: an OBSERVER_SEAT prize code, which pays for the seat instead of money. */
+  voucherCode?: string;
   now: Date;
 }): Promise<ObserverPackResult<ObserverPackWithPaymentIntent>> {
   const database = getDatabase();
   const { missionId, userId, now } = input;
+
+  let codeHash: string | null = null;
+  if (input.voucherCode !== undefined) {
+    const code = normaliseVoucherCode(input.voucherCode);
+    if (!code) return PRIZE_UNUSABLE;
+    codeHash = hashVoucherCode(code);
+  }
 
   if (!sandboxMoneyAllowed(getServerEnvironment())) {
     return {
@@ -198,6 +216,19 @@ export async function purchaseObserverPack(input: {
     };
   }
 
+  try {
+    return await purchaseInTransaction(database, { missionId, userId, codeHash, now });
+  } catch (error) {
+    if (error instanceof PrizeAlreadySpent) return PRIZE_UNUSABLE;
+    throw error;
+  }
+}
+
+async function purchaseInTransaction(
+  database: ReturnType<typeof getDatabase>,
+  input: { missionId: string; userId: string; codeHash: string | null; now: Date },
+): Promise<ObserverPackResult<ObserverPackWithPaymentIntent>> {
+  const { missionId, userId, codeHash, now } = input;
   return database.$transaction(async (tx) => {
     // FOR UPDATE, so concurrent purchases on one mission queue behind each other.
     const rows = await tx.$queryRaw<
@@ -207,10 +238,11 @@ export async function purchaseObserverPack(input: {
         joinPolicy: string;
         observerCapacity: number;
         isDemo: boolean;
+        observatoryId: string;
       }[]
     >`
       SELECT "userId", "state"::text AS state, "joinPolicy"::text AS "joinPolicy",
-             "observerCapacity", "isDemo"
+             "observerCapacity", "isDemo", "observatoryId"
       FROM "Mission" WHERE "id" = ${missionId}::uuid FOR UPDATE
     `;
 
@@ -257,8 +289,25 @@ export async function purchaseObserverPack(input: {
       include: { payment: true },
     });
 
+    // Already paid for by a prize: the seat stands, and a code sent again spends nothing.
+    if (existing && existing.status === "PAID" && !existing.payment) {
+      return {
+        ok: true,
+        value: { observerPack: toContractPack(existing), paymentIntent: null },
+      };
+    }
+
     // Already bought, or already holding. Either way this is the same seat and the
-    // same payment, not a second one.
+    // same payment, not a second one. A prize offered for a seat already held awaiting
+    // payment is refused rather than racing the payment it would replace.
+    if (codeHash !== null && existing?.status === "PENDING_PAYMENT" && existing.payment) {
+      return {
+        ok: false,
+        status: 409,
+        code: "CONFLICT",
+        message: "This seat is already held awaiting payment.",
+      } satisfies ObserverPackFailure;
+    }
     if (
       existing &&
       SEAT_HOLDING_STATUSES.includes(
@@ -286,6 +335,27 @@ export async function purchaseObserverPack(input: {
         code: "OBSERVER_CAPACITY_REACHED",
         message: `All ${mission.observerCapacity} observer seats are taken.`,
       } satisfies ObserverPackFailure;
+    }
+
+    if (codeHash !== null) {
+      const prize = await findSpendablePrize(tx, { codeHash, userId, now });
+      if (
+        !prize ||
+        prize.kind !== "OBSERVER_SEAT" ||
+        prize.observatoryId !== mission.observatoryId
+      ) {
+        return PRIZE_UNUSABLE;
+      }
+      return seatPaidByPrize(tx, {
+        missionId,
+        userId,
+        existingPackId: existing?.id ?? null,
+        prizeId: prize.id,
+        isDemo: mission.isDemo,
+        seatsHeld: held + 1,
+        capacity: mission.observerCapacity,
+        now,
+      });
     }
 
     // #170. The sandbox is its own provider, so the cloud supplies the redirect, as
@@ -365,6 +435,72 @@ export async function purchaseObserverPack(input: {
     };
   });
 }
+
+/**
+ * A seat an OBSERVER_SEAT prize pays for (ADR-060): PAID at once, at no price, with no
+ * payment. Inside the purchase's transaction and under its mission lock, so the seat
+ * counts against the cap exactly as a sold one does, and the prize is spent by a
+ * conditional update a racing spend cannot also win.
+ */
+async function seatPaidByPrize(
+  tx: Prisma.TransactionClient,
+  input: {
+    missionId: string;
+    userId: string;
+    existingPackId: string | null;
+    prizeId: string;
+    isDemo: boolean;
+    seatsHeld: number;
+    capacity: number;
+    now: Date;
+  },
+): Promise<ObserverPackResult<ObserverPackWithPaymentIntent>> {
+  const { missionId, userId, prizeId, now } = input;
+  const data = {
+    paymentId: null,
+    status: "PAID" as const,
+    holdExpiresAt: null,
+    priceMinor: 0,
+    currency: "GEL" as const,
+    paidAt: now,
+  };
+  const pack = input.existingPackId
+    ? await tx.observerPack.update({ where: { id: input.existingPackId }, data })
+    : await tx.observerPack.create({
+        data: { ...data, missionId, userId, isDemo: input.isDemo },
+      });
+
+  if (!(await claimPrize(tx, { prizeId, userId, now, observerPackId: pack.id }))) {
+    throw new PrizeAlreadySpent();
+  }
+
+  await recordAuditEvent(
+    {
+      category: "CARD_DRAW",
+      action: "CARD_PRIZE_REDEEMED",
+      actorUserId: userId,
+      missionId,
+      entityType: "CardPrize",
+      entityId: prizeId,
+      detail: {
+        observerPackId: pack.id,
+        kind: "OBSERVER_SEAT",
+        seatsHeld: input.seatsHeld,
+        capacity: input.capacity,
+      },
+      isDemo: input.isDemo,
+    },
+    tx,
+  );
+
+  return {
+    ok: true,
+    value: { observerPack: toContractPack(pack as PackRow), paymentIntent: null },
+  };
+}
+
+/** Thrown inside the transaction when a racing spend took the prize, so the seat rolls back. */
+class PrizeAlreadySpent extends Error {}
 
 /**
  * Whether this person holds a paid seat on this mission.

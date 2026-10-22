@@ -46,6 +46,8 @@ class ErrorCode(StrEnum):
     target_not_observable = 'TARGET_NOT_OBSERVABLE'
     target_not_a_candidate = 'TARGET_NOT_A_CANDIDATE'
     vote_locked = 'VOTE_LOCKED'
+    card_already_picked = 'CARD_ALREADY_PICKED'
+    card_draw_closed = 'CARD_DRAW_CLOSED'
     observer_capacity_reached = 'OBSERVER_CAPACITY_REACHED'
     observer_cannot_command = 'OBSERVER_CANNOT_COMMAND'
     observatory_offline = 'OBSERVATORY_OFFLINE'
@@ -424,6 +426,144 @@ class CastVoteRequest(BaseModel):
     target_id: UUID = Field(..., alias='targetId')
 
 
+class CardRarity(StrEnum):
+    """
+    ADR-060. A card's rarity names its prize: LEGENDARY a free Observation Slot,
+    EPIC a free observer seat, RARE a discount on one booking, COMMON nothing.
+
+    """
+    legendary = 'LEGENDARY'
+    epic = 'EPIC'
+    rare = 'RARE'
+    common = 'COMMON'
+
+
+class CardPrizeKind(StrEnum):
+    free_slot = 'FREE_SLOT'
+    observer_seat = 'OBSERVER_SEAT'
+    discount = 'DISCOUNT'
+
+
+class CardPrizeStatus(StrEnum):
+    """
+    ACTIVE until spent or past `expiresAt`. REDEEMED once a booking or an observer
+    pack has taken it; a hold that lapses, a payment that fails and a refunded
+    booking each make it ACTIVE again. EXPIRED is an ACTIVE prize past `expiresAt`.
+
+    """
+    active = 'ACTIVE'
+    redeemed = 'REDEEMED'
+    expired = 'EXPIRED'
+
+
+class CardPrize(BaseModel):
+    """
+    ADR-060. A voucher won in the card draw, bound to the account that won it and
+    to the observatory of the deal. Never exchangeable for cash.
+
+    FREE_SLOT is spent with `voucherCode` on `POST /bookings`, for a slot of
+    `durationMinutes`, as a gift voucher is. DISCOUNT is spent the same way and
+    takes `percentOff` off the booking's price; the booking still pays the rest.
+    OBSERVER_SEAT is spent with `voucherCode` on
+    `POST /missions/{missionId}/observer-pack`.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: UUID
+    kind: CardPrizeKind
+    status: CardPrizeStatus
+    observatory_id: UUID = Field(..., alias='observatoryId', description='The only observatory the prize can be spent at.')
+    voucher_code: str | None = Field(..., alias='voucherCode', description='The code to spend it with, while it is ACTIVE. Null otherwise.')
+    code_last4: str = Field(..., alias='codeLast4')
+    duration_minutes: int | None = Field(..., alias='durationMinutes', description='FREE_SLOT only. The length of the slot it pays for.', gt=0)
+    percent_off: int | None = Field(..., alias='percentOff', description='DISCOUNT only.', ge=1, le=100)
+    expires_at: AwareDatetime = Field(..., alias='expiresAt')
+    redeemed_booking_id: UUID | None = Field(..., alias='redeemedBookingId')
+    redeemed_observer_pack_id: UUID | None = Field(..., alias='redeemedObserverPackId')
+    created_at: AwareDatetime = Field(..., alias='createdAt')
+
+
+class CardPrizeList(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    items: list[CardPrize]
+
+
+class CardDrawCard(BaseModel):
+    """
+    One of a deal's three cards. Unturned, it says nothing but its position.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    position: int = Field(..., ge=0, le=2)
+    turned: bool
+    rarity: CardRarity | None = Field(..., description='Null until the card is turned.')
+    target_slug: str | None = Field(..., alias='targetSlug', description="The catalogue target the card's face shows, a `slug` for `GET /targets/{slug}`.\nNull until the card is turned, or when that target has left the catalogue.\n", pattern='^[a-z0-9-]+$')
+    prize: CardPrize | None = Field(..., description='What the picked card won. Null on the other two cards, on a COMMON card, and\non every card before the pick.\n')
+
+
+class CardDrawOddsEntry(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    rarity: CardRarity
+    prize_kind: CardPrizeKind | None = Field(..., alias='prizeKind', description='Null for COMMON.')
+    chance: float = Field(..., description='The chance that one card holds this rarity, before the weekly cap.', ge=0.0, le=1.0)
+
+
+class CardDrawOdds(BaseModel):
+    """
+    ADR-060. The rules every deal is drawn under, as configured on the platform.
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    cards: list[CardDrawOddsEntry] = Field(..., description='One entry per rarity; the chances add up to 1.')
+    free_slots_per_week: int = Field(..., alias='freeSlotsPerWeek', description="At most this many free-slot cards are held by the week's deals at one\nobservatory. Once they are, a card that would have held a free slot holds a\ndiscount instead. A free-slot card the pick leaves unchosen is given back.\n", ge=0)
+    free_slot_duration_minutes: int = Field(..., alias='freeSlotDurationMinutes', description='The slot length a free slot pays for, the shortest length sold.', gt=0)
+    discount_percent_off: int = Field(..., alias='discountPercentOff', ge=1, le=100)
+    prize_valid_days: int = Field(..., alias='prizeValidDays', description='A prize expires this many days after it is won.', gt=0)
+
+
+class CardDraw(BaseModel):
+    """
+    ADR-060. One account's deal for one week at one observatory: three cards,
+    decided when dealt, of which the account turns one.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: UUID
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    week: date_aliased = Field(..., description="The week's Monday, in the observatory's local calendar, as `GET /votes` names it.")
+    dealt_at: AwareDatetime = Field(..., alias='dealtAt')
+    opens_next_at: AwareDatetime = Field(..., alias='opensNextAt', description="The next Monday 00:00 in the observatory's zone: when the next deal opens,\nand when this one closes to a pick.\n")
+    picked: int | None = Field(..., description='The position the account turned. Null before the pick.', ge=0, le=2)
+    picked_at: AwareDatetime | None = Field(..., alias='pickedAt')
+    cards: list[CardDrawCard] = Field(..., description='In position order.', max_length=3, min_length=3)
+    odds: CardDrawOdds
+
+
+class PickCardRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    position: int = Field(..., ge=0, le=2)
+
+
+class PurchaseObserverPackRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    voucher_code: str | None = Field(None, alias='voucherCode', description='An OBSERVER_SEAT prize code (ADR-060). Case and separators are ignored. The\npack is PAID at once at no charge and `paymentIntent` is null.\n', max_length=64, min_length=8)
+
+
 class ObservatoryMode(StrEnum):
     """
     SIMULATED is the default implementation, always. Any interface fed by the
@@ -785,7 +925,7 @@ class CreateBookingRequest(BaseModel):
     slot_start_at: AwareDatetime = Field(..., alias='slotStartAt')
     duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
     locale: Locale | None = None
-    voucher_code: str | None = Field(None, alias='voucherCode', description='A gift voucher code (DV-112). Case and separators are ignored.', max_length=64, min_length=8)
+    voucher_code: str | None = Field(None, alias='voucherCode', description='A gift voucher code (DV-112), or a FREE_SLOT or DISCOUNT prize code won in\nthe card draw (ADR-060). Case and separators are ignored.\n', max_length=64, min_length=8)
     loyalty_points: int | None = Field(None, alias='loyaltyPoints', description='Points to spend on this booking (DV-095). Never with `voucherCode`.', ge=100, multiple_of=100)
     use_subscription_minutes: bool | None = Field(None, alias='useSubscriptionMinutes', description='Pay for this booking with subscription minutes (ADR-022). Never with\n`voucherCode` or `loyaltyPoints`.\n')
 
@@ -1228,7 +1368,7 @@ class ObserverPackWithPaymentIntent(BaseModel):
         extra='forbid',
     )
     observer_pack: ObserverPack = Field(..., alias='observerPack')
-    payment_intent: PaymentIntent = Field(..., alias='paymentIntent')
+    payment_intent: PaymentIntent | None = Field(..., alias='paymentIntent', description='Null when an observer-seat prize paid for the pack (ADR-060).')
 
 
 class MissionObservationSettings(BaseModel):
@@ -1800,6 +1940,7 @@ class AuditCategory(StrEnum):
     agent_link = 'AGENT_LINK'
     loyalty = 'LOYALTY'
     subscription = 'SUBSCRIPTION'
+    card_draw = 'CARD_DRAW'
 
 
 class AuditEvent(BaseModel):

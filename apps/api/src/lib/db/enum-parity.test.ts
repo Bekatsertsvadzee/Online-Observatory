@@ -17,6 +17,8 @@ const SHARED_ENUMS = [
   "BookingLossCause",
   "BookingStatus",
   "CaptureAssetKind",
+  "CardPrizeKind",
+  "CardRarity",
   "CaptureVisibility",
   "CommandType",
   "Currency",
@@ -64,6 +66,8 @@ const DATABASE_ONLY = new Set([
   // DV-112: EXPIRED is derived from expiresAt and never stored, so the contract's
   // GiftVoucherStatus has one value the database does not.
   "GiftVoucherStatus",
+  // ADR-060: the same for a card-draw prize's EXPIRED.
+  "CardPrizeStatus",
   "EquipmentStatus",
   "MissionJoinPolicy",
   "MissionParticipantStatus",

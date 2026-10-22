@@ -97,6 +97,13 @@ export type AuditAction =
   | "GIFT_VOUCHER_PAYMENT_FAILED"
   | "GIFT_VOUCHER_REDEEMED"
   | "GIFT_VOUCHER_RESTORED"
+  // CARD_DRAW (ADR-060): a week's three cards dealt, with what each holds; the pick and
+  // the prize it won; a prize spent on a booking or a seat, and given back when that
+  // booking's hold ended unpaid or the booking was refunded. Never the code.
+  | "CARD_DRAW_DEALT"
+  | "CARD_DRAW_PICKED"
+  | "CARD_PRIZE_REDEEMED"
+  | "CARD_PRIZE_RESTORED"
   // PAYMENT -- written by the webhook path (DV-056). A refusal is recorded
   // because a callback that failed its signature and left nothing behind is
   // indistinguishable from one that never arrived.

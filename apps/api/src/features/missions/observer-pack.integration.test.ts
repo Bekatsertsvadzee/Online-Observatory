@@ -83,7 +83,9 @@ async function openToObservers(capacity = CAPACITY) {
 async function buy(userId: string, now = NOW) {
   const result = await purchaseObserverPack({ missionId, userId, now });
   if (!result.ok) throw new Error(`fixture purchase failed: ${result.message}`);
-  return result.value;
+  const { observerPack, paymentIntent } = result.value;
+  if (!paymentIntent) throw new Error("fixture purchase opened no payment");
+  return { observerPack, paymentIntent };
 }
 
 function captured(paymentId: string, overrides: Record<string, unknown> = {}) {
@@ -223,7 +225,7 @@ describe("buying a seat", () => {
     });
 
     const payment = await database.payment.findUniqueOrThrow({
-      where: { id: result.value.paymentIntent.paymentId },
+      where: { id: result.value.paymentIntent!.paymentId },
     });
     // The settlement path branches on this rather than on which relation is null.
     expect(payment.purpose).toBe("OBSERVER_PACK");

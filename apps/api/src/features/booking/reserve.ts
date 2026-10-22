@@ -11,6 +11,7 @@ import type {
 } from "@darkview/contracts";
 import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { releaseCardPrize } from "@darkview/db/card-prizes";
 import { releaseSpentMinutes, spendBookingMinutes } from "@darkview/db/credits";
 import {
   ensureLoyaltyAccount,
@@ -26,6 +27,7 @@ import {
   findBookableObservatory,
   type BookableObservatory,
 } from "@/features/booking/observatories";
+import { claimPrize, findSpendablePrize } from "@/features/cards/draw";
 import { sandboxCheckoutUrl } from "@/features/payments/sandbox-checkout";
 import { slotVisibilityForBooking } from "@/features/targets/slot";
 import { getDatabase } from "@/lib/db/client";
@@ -300,10 +302,17 @@ export async function expireLapsedHolds(
     WHERE "id" = ANY(${lapsed.map((row) => row.id)}::uuid[])
   `;
 
-  // DV-095 and ADR-022: a hold that lapsed spent its points and minutes on nothing.
+  // DV-095, ADR-022 and ADR-060: a hold that lapsed spent its points, minutes and
+  // discount prize on nothing.
   for (const booking of lapsed) {
     await releaseRedeemedPoints(tx, booking);
     await releaseSpentMinutes(tx, booking, now);
+    await releaseCardPrize(tx, {
+      bookingId: booking.id,
+      cause: "HOLD_RELEASED",
+      actorUserId: null,
+      now,
+    });
   }
 }
 
@@ -476,18 +485,54 @@ export async function reserveSlot(input: {
     });
   }
 
+  // ADR-060: a card-draw prize code, spendable only by its winner. Anybody else's
+  // prize falls through to the gift-voucher lookup, which finds nothing and answers
+  // exactly as it answers an unknown code.
+  let discountPrize: { id: string; percentOff: number } | null = null;
   if (request.voucherCode !== undefined) {
-    return reserveWithVoucher({
+    const code = normaliseVoucherCode(request.voucherCode);
+    if (!code) return VOUCHER_UNUSABLE;
+    const prize = await findSpendablePrize(database, {
+      codeHash: hashVoucherCode(code),
       userId,
-      voucherCode: request.voucherCode,
-      observatory,
-      targetId: target.id,
-      slotStartAt,
-      durationMinutes: slot.durationMinutes,
-      currency: slot.currency,
-      idempotencyKey,
       now,
     });
+
+    if (prize && prize.observatoryId !== observatory.id) {
+      return {
+        ok: false,
+        status: 422,
+        code: "VALIDATION_FAILED",
+        message: "This prize is for another observatory.",
+      };
+    }
+    if (prize?.kind === "OBSERVER_SEAT") {
+      return {
+        ok: false,
+        status: 422,
+        code: "VALIDATION_FAILED",
+        message: "This prize is an observer seat: spend it on a live session.",
+      };
+    }
+    if (prize?.kind === "DISCOUNT") {
+      discountPrize = { id: prize.id, percentOff: prize.percentOff! };
+    } else {
+      const spend = prize
+        ? await freeSlotPrizeSpend(prize, slot.durationMinutes)
+        : await giftVoucherSpend(code, slot.durationMinutes, now);
+      if (!spend.ok) return spend;
+      return reserveWithVoucher({
+        userId,
+        spend,
+        observatory,
+        targetId: target.id,
+        slotStartAt,
+        durationMinutes: slot.durationMinutes,
+        currency: slot.currency,
+        idempotencyKey,
+        now,
+      });
+    }
   }
 
   const holdExpiresAt = new Date(now.getTime() + PAYMENT_HOLD_MINUTES * 60_000);
@@ -502,7 +547,11 @@ export async function reserveSlot(input: {
   });
   const tier = tierFor(tiers, account?.tierPoints ?? 0);
   const tierDiscountMinor = Math.floor((slot.priceMinor * tier.discountPercent) / 100);
-  const discountedMinor = slot.priceMinor - tierDiscountMinor;
+  // ADR-060: a discount prize comes off after the tier discount, as points do.
+  const prizeDiscountMinor = discountPrize
+    ? Math.floor(((slot.priceMinor - tierDiscountMinor) * discountPrize.percentOff) / 100)
+    : 0;
+  const discountedMinor = slot.priceMinor - tierDiscountMinor - prizeDiscountMinor;
   const loyaltyPointsRedeemed = request.loyaltyPoints ?? 0;
   const pointsValueMinor = Math.floor((loyaltyPointsRedeemed * 100) / scheme.pointsPerGelRedeemed);
   if (loyaltyPointsRedeemed > 0) {
@@ -573,6 +622,28 @@ export async function reserveSlot(input: {
           },
         });
 
+        if (discountPrize) {
+          const claimed = await claimPrize(tx, {
+            prizeId: discountPrize.id,
+            userId,
+            now,
+            bookingId: booking.id,
+          });
+          if (!claimed) throw new VoucherUnusable();
+          await recordAuditEvent(
+            {
+              category: "CARD_DRAW",
+              action: "CARD_PRIZE_REDEEMED",
+              actorUserId: userId,
+              entityType: "CardPrize",
+              entityId: discountPrize.id,
+              detail: { bookingId: booking.id, kind: "DISCOUNT", prizeDiscountMinor },
+              isDemo: observatory.isDemo,
+            },
+            tx,
+          );
+        }
+
         if (loyaltyPointsRedeemed > 0) {
           const spent = await postLoyaltyEntry(tx, {
             userId,
@@ -603,6 +674,7 @@ export async function reserveSlot(input: {
               priceMinor: amountMinor,
               listPriceMinor: slot.priceMinor,
               tierDiscountMinor,
+              prizeDiscountMinor,
               loyaltyPointsRedeemed,
               currency: slot.currency,
               holdExpiresAt: holdExpiresAt.toISOString(),
@@ -634,6 +706,7 @@ export async function reserveSlot(input: {
         message: "Not enough loyalty points.",
       };
     }
+    if (error instanceof VoucherUnusable) return VOUCHER_UNUSABLE;
     if (!isSlotConflict(error)) throw error;
 
     // Either constraint can be the one that fired. Rather than parse a constraint
@@ -669,20 +742,112 @@ const VOUCHER_UNUSABLE: ReserveSlotFailure = {
 };
 
 /**
- * A booking a gift voucher pays for (DV-112): confirmed at once, at no charge, with
- * its mission scheduled, and no payment.
+ * What pays for a booking that costs nothing: a gift voucher (DV-112) or a free-slot
+ * prize (ADR-060). `claim` spends it inside the reservation's transaction, after the
+ * booking row exists, and answers whether this request was the one that spent it.
+ */
+type VoucherSpend = {
+  ok: true;
+  claim: (tx: Prisma.TransactionClient, bookingId: string, userId: string, now: Date) => Promise<boolean>;
+  audit: {
+    category: "BOOKING" | "CARD_DRAW";
+    action: "GIFT_VOUCHER_REDEEMED" | "CARD_PRIZE_REDEEMED";
+    entityType: "GiftVoucher" | "CardPrize";
+    entityId: string;
+  };
+  message: string;
+};
+
+function wrongLength(durationMinutes: number): ReserveSlotFailure {
+  return {
+    ok: false,
+    status: 422,
+    code: "VALIDATION_FAILED",
+    message: `This voucher is for a ${durationMinutes}-minute observation.`,
+  };
+}
+
+/**
+ * Unknown, spent, unpaid and expired codes are one answer. A code for another
+ * length says which length, because only somebody holding a valid code gets that far.
+ */
+async function giftVoucherSpend(
+  code: string,
+  durationMinutes: number,
+  now: Date,
+): Promise<VoucherSpend | ReserveSlotFailure> {
+  const codeHash = hashVoucherCode(code);
+  const voucher = await getDatabase().giftVoucher.findUnique({
+    where: { codeHash },
+    select: { id: true, status: true, expiresAt: true, durationMinutes: true },
+  });
+  if (!voucher || voucher.status !== "ACTIVE" || !voucher.expiresAt || voucher.expiresAt <= now) {
+    return VOUCHER_UNUSABLE;
+  }
+  if (voucher.durationMinutes !== durationMinutes) return wrongLength(voucher.durationMinutes);
+
+  return {
+    ok: true,
+    claim: async (tx, bookingId, userId, at) => {
+      const { count } = await tx.giftVoucher.updateMany({
+        where: {
+          id: voucher.id,
+          codeHash,
+          status: "ACTIVE",
+          durationMinutes,
+          expiresAt: { gt: at },
+        },
+        data: {
+          status: "REDEEMED",
+          redeemedAt: at,
+          redeemedByUserId: userId,
+          redeemedBookingId: bookingId,
+        },
+      });
+      return count === 1;
+    },
+    audit: {
+      category: "BOOKING",
+      action: "GIFT_VOUCHER_REDEEMED",
+      entityType: "GiftVoucher",
+      entityId: voucher.id,
+    },
+    message: "Paid by gift voucher; mission scheduled for the booked slot.",
+  };
+}
+
+/** ADR-060: a free-slot prize pays for a booking exactly as a gift voucher does. */
+async function freeSlotPrizeSpend(
+  prize: { id: string; durationMinutes: number | null },
+  durationMinutes: number,
+): Promise<VoucherSpend | ReserveSlotFailure> {
+  if (prize.durationMinutes !== durationMinutes) return wrongLength(prize.durationMinutes!);
+  return {
+    ok: true,
+    claim: (tx, bookingId, userId, at) =>
+      claimPrize(tx, { prizeId: prize.id, userId, now: at, bookingId }),
+    audit: {
+      category: "CARD_DRAW",
+      action: "CARD_PRIZE_REDEEMED",
+      entityType: "CardPrize",
+      entityId: prize.id,
+    },
+    message: "Paid by a card-draw prize; mission scheduled for the booked slot.",
+  };
+}
+
+/**
+ * A booking a voucher pays for (DV-112, ADR-060): confirmed at once, at no charge,
+ * with its mission scheduled, and no payment.
  *
  * The voucher is claimed by a conditional update inside the reservation's
  * transaction, after the booking row exists. A slot conflict rolls the claim back
  * with the booking, so a failed reservation spends nothing; two redemptions racing
  * on one code both reach the update, and only one of them finds it ACTIVE.
- *
- * Unknown, spent, unpaid and expired codes are one answer. A code for another
- * length says which length, because only somebody holding a valid code gets that far.
  */
 async function reserveWithVoucher(input: {
   userId: string;
-  voucherCode: string;
+  spend: VoucherSpend;
   observatory: BookableObservatory;
   targetId: string;
   slotStartAt: Date;
@@ -691,29 +856,9 @@ async function reserveWithVoucher(input: {
   idempotencyKey: string | null;
   now: Date;
 }): Promise<ReserveSlotResult> {
-  const { userId, observatory, targetId, slotStartAt, durationMinutes, idempotencyKey, now } =
+  const { userId, spend, observatory, targetId, slotStartAt, durationMinutes, idempotencyKey, now } =
     input;
   const database = getDatabase();
-
-  const code = normaliseVoucherCode(input.voucherCode);
-  if (!code) return VOUCHER_UNUSABLE;
-  const codeHash = hashVoucherCode(code);
-
-  const voucher = await database.giftVoucher.findUnique({
-    where: { codeHash },
-    select: { id: true, status: true, expiresAt: true, durationMinutes: true },
-  });
-  if (!voucher || voucher.status !== "ACTIVE" || !voucher.expiresAt || voucher.expiresAt <= now) {
-    return VOUCHER_UNUSABLE;
-  }
-  if (voucher.durationMinutes !== durationMinutes) {
-    return {
-      ok: false,
-      status: 422,
-      code: "VALIDATION_FAILED",
-      message: `This voucher is for a ${voucher.durationMinutes}-minute observation.`,
-    };
-  }
 
   try {
     const booking = await retryOnDeadlock(() =>
@@ -736,38 +881,23 @@ async function reserveWithVoucher(input: {
           },
         });
 
-        const { count } = await tx.giftVoucher.updateMany({
-          where: {
-            id: voucher.id,
-            codeHash,
-            status: "ACTIVE",
-            durationMinutes,
-            expiresAt: { gt: now },
-          },
-          data: {
-            status: "REDEEMED",
-            redeemedAt: now,
-            redeemedByUserId: userId,
-            redeemedBookingId: created.id,
-          },
-        });
-        if (count === 0) throw new VoucherUnusable();
+        if (!(await spend.claim(tx, created.id, userId, now))) throw new VoucherUnusable();
 
         const confirmed = await scheduleUnpaidBooking(tx, {
           booking: created,
           observatory,
           now,
-          message: "Paid by gift voucher; mission scheduled for the booked slot.",
+          message: spend.message,
         });
 
         await recordAuditEvent(
           {
-            category: "BOOKING",
-            action: "GIFT_VOUCHER_REDEEMED",
+            category: spend.audit.category,
+            action: spend.audit.action,
             actorUserId: userId,
             missionId: confirmed.missionId,
-            entityType: "GiftVoucher",
-            entityId: voucher.id,
+            entityType: spend.audit.entityType,
+            entityId: spend.audit.entityId,
             detail: {
               bookingId: created.id,
               observatoryId: observatory.id,
@@ -1006,14 +1136,18 @@ async function replayByIdempotencyKey(
 
   const booking = await database.booking.findUnique({
     where: { userId_idempotencyKey: { userId, idempotencyKey } },
-    include: { payment: true, redeemedVoucher: { select: { id: true } } },
+    include: {
+      payment: true,
+      redeemedVoucher: { select: { id: true } },
+      redeemedCardPrize: { select: { id: true } },
+    },
   });
 
   // Paid by a voucher or by minutes: confirmed, with no payment to report.
   if (
     booking &&
     !booking.payment &&
-    (booking.redeemedVoucher || booking.subscriptionMinutesSpent > 0)
+    (booking.redeemedVoucher || booking.redeemedCardPrize || booking.subscriptionMinutesSpent > 0)
   ) {
     return {
       ok: true,
@@ -1202,10 +1336,11 @@ export async function releaseHeldSlot(
     data: { status: "CANCELLED" },
   });
 
-  // DV-095 and ADR-022: points and minutes spent on a booking that will not happen
-  // come back.
+  // DV-095, ADR-022 and ADR-060: points, minutes and a discount prize spent on a
+  // booking that will not happen come back.
   await releaseRedeemedPoints(tx, booking);
   await releaseSpentMinutes(tx, booking, now);
+  await releaseCardPrize(tx, { bookingId: booking.id, cause: "HOLD_RELEASED", actorUserId: null, now });
 
   // A slot leaving the held set is what makes it purchasable again. When two
   // customers dispute who was entitled to a half hour, this row is the answer.

@@ -556,7 +556,7 @@ describe("a refunded booking a voucher paid for (DV-111)", () => {
       }),
     );
 
-    expect(refunded).toEqual({ ok: true, paymentId: null, voucherId, minutesReturned: 0 });
+    expect(refunded).toEqual({ ok: true, paymentId: null, voucherId, prizeId: null, minutesReturned: 0 });
     expect(await voucherRow(voucherId)).toMatchObject({
       status: "ACTIVE",
       redeemedBookingId: null,

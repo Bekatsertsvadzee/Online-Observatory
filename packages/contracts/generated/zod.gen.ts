@@ -28,6 +28,8 @@ export const zErrorCode = z.enum([
     'TARGET_NOT_OBSERVABLE',
     'TARGET_NOT_A_CANDIDATE',
     'VOTE_LOCKED',
+    'CARD_ALREADY_PICKED',
+    'CARD_DRAW_CLOSED',
     'OBSERVER_CAPACITY_REACHED',
     'OBSERVER_CANNOT_COMMAND',
     'OBSERVATORY_OFFLINE',
@@ -326,6 +328,124 @@ export const zCastVoteRequest = z.strictObject({
     observatoryId: z.uuid(),
     week: z.iso.date(),
     targetId: z.uuid()
+});
+
+/**
+ * ADR-060. A card's rarity names its prize: LEGENDARY a free Observation Slot,
+ * EPIC a free observer seat, RARE a discount on one booking, COMMON nothing.
+ *
+ */
+export const zCardRarity = z.enum([
+    'LEGENDARY',
+    'EPIC',
+    'RARE',
+    'COMMON'
+]);
+
+export const zCardPrizeKind = z.enum([
+    'FREE_SLOT',
+    'OBSERVER_SEAT',
+    'DISCOUNT'
+]);
+
+/**
+ * ACTIVE until spent or past `expiresAt`. REDEEMED once a booking or an observer
+ * pack has taken it; a hold that lapses, a payment that fails and a refunded
+ * booking each make it ACTIVE again. EXPIRED is an ACTIVE prize past `expiresAt`.
+ *
+ */
+export const zCardPrizeStatus = z.enum([
+    'ACTIVE',
+    'REDEEMED',
+    'EXPIRED'
+]);
+
+/**
+ * ADR-060. A voucher won in the card draw, bound to the account that won it and
+ * to the observatory of the deal. Never exchangeable for cash.
+ *
+ * FREE_SLOT is spent with `voucherCode` on `POST /bookings`, for a slot of
+ * `durationMinutes`, as a gift voucher is. DISCOUNT is spent the same way and
+ * takes `percentOff` off the booking's price; the booking still pays the rest.
+ * OBSERVER_SEAT is spent with `voucherCode` on
+ * `POST /missions/{missionId}/observer-pack`.
+ *
+ */
+export const zCardPrize = z.strictObject({
+    id: z.uuid(),
+    kind: zCardPrizeKind,
+    status: zCardPrizeStatus,
+    observatoryId: z.uuid(),
+    voucherCode: z.string().nullable(),
+    codeLast4: z.string(),
+    durationMinutes: z.int().gt(0).nullable(),
+    percentOff: z.int().gte(1).lte(100).nullable(),
+    expiresAt: z.iso.datetime(),
+    redeemedBookingId: z.uuid().nullable(),
+    redeemedObserverPackId: z.uuid().nullable(),
+    createdAt: z.iso.datetime()
+});
+
+export const zCardPrizeList = z.strictObject({
+    items: z.array(zCardPrize)
+});
+
+/**
+ * One of a deal's three cards. Unturned, it says nothing but its position.
+ *
+ */
+export const zCardDrawCard = z.strictObject({
+    position: z.int().gte(0).lte(2),
+    turned: z.boolean(),
+    rarity: zCardRarity.nullable(),
+    targetSlug: z.string().regex(/^[a-z0-9-]+$/).nullable(),
+    prize: zCardPrize.nullable()
+});
+
+export const zCardDrawOddsEntry = z.strictObject({
+    rarity: zCardRarity,
+    prizeKind: zCardPrizeKind.nullable(),
+    chance: z.number().gte(0).lte(1)
+});
+
+/**
+ * ADR-060. The rules every deal is drawn under, as configured on the platform.
+ */
+export const zCardDrawOdds = z.strictObject({
+    cards: z.array(zCardDrawOddsEntry),
+    freeSlotsPerWeek: z.int().gte(0),
+    freeSlotDurationMinutes: z.int().gt(0),
+    discountPercentOff: z.int().gte(1).lte(100),
+    prizeValidDays: z.int().gt(0)
+});
+
+/**
+ * ADR-060. One account's deal for one week at one observatory: three cards,
+ * decided when dealt, of which the account turns one.
+ *
+ */
+export const zCardDraw = z.strictObject({
+    id: z.uuid(),
+    observatoryId: z.uuid(),
+    week: z.iso.date(),
+    dealtAt: z.iso.datetime(),
+    opensNextAt: z.iso.datetime(),
+    picked: z.int().gte(0).lte(2).nullable(),
+    pickedAt: z.iso.datetime().nullable(),
+    cards: z.tuple([
+        zCardDrawCard,
+        zCardDrawCard,
+        zCardDrawCard
+    ]),
+    odds: zCardDrawOdds
+});
+
+export const zPickCardRequest = z.strictObject({
+    position: z.int().gte(0).lte(2)
+});
+
+export const zPurchaseObserverPackRequest = z.strictObject({
+    voucherCode: z.string().min(8).max(64).optional()
 });
 
 /**
@@ -1058,7 +1178,7 @@ export const zObserverPack = z.strictObject({
 
 export const zObserverPackWithPaymentIntent = z.strictObject({
     observerPack: zObserverPack,
-    paymentIntent: zPaymentIntent
+    paymentIntent: zPaymentIntent.nullable()
 });
 
 /**
@@ -1640,7 +1760,8 @@ export const zAuditCategory = z.enum([
     'OPERATOR_OVERRIDE',
     'AGENT_LINK',
     'LOYALTY',
-    'SUBSCRIPTION'
+    'SUBSCRIPTION',
+    'CARD_DRAW'
 ]);
 
 /**
@@ -2339,6 +2460,40 @@ export const zCastVoteBody = zCastVoteRequest;
  */
 export const zCastVoteResponse = zWeekVote;
 
+/**
+ * The odds per card, the weekly free-slot cap and the prize rules.
+ */
+export const zGetCardDrawOddsResponse = zCardDrawOdds;
+
+export const zGetCurrentCardDrawQuery = z.object({
+    observatoryId: z.uuid()
+});
+
+/**
+ * The week's deal.
+ */
+export const zGetCurrentCardDrawResponse = zCardDraw;
+
+export const zPickCardBody = zPickCardRequest;
+
+export const zPickCardHeaders = z.object({
+    'Idempotency-Key': z.string().min(8).max(128).regex(/^[A-Za-z0-9_.:-]+$/).optional()
+});
+
+export const zPickCardPath = z.object({
+    drawId: z.uuid()
+});
+
+/**
+ * The deal with every card turned, and the prize when one was won.
+ */
+export const zPickCardResponse = zCardDraw;
+
+/**
+ * The caller's prizes.
+ */
+export const zListMyCardPrizesResponse = zCardPrizeList;
+
 export const zListSlotsQuery = z.object({
     observatoryId: z.uuid(),
     date: z.iso.date()
@@ -2563,12 +2718,14 @@ export const zJoinMissionAsObserverPath = z.object({
  */
 export const zJoinMissionAsObserverResponse = zMissionObserver;
 
+export const zPurchaseObserverPackBody = zPurchaseObserverPackRequest;
+
 export const zPurchaseObserverPackPath = z.object({
     missionId: z.uuid()
 });
 
 /**
- * Seat held and a payment intent opened.
+ * Seat held and a payment intent opened, or paid for by a prize.
  */
 export const zPurchaseObserverPackResponse = zObserverPackWithPaymentIntent;
 

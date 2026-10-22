@@ -400,7 +400,9 @@ describe("the sandbox checkout for an Observer Pack (#170)", () => {
   async function buySeat(missionId: string, buyer: string = userId, now: Date = NOW) {
     const result = await purchaseObserverPack({ missionId, userId: buyer, now });
     if (!result.ok) throw new Error(`fixture purchase failed: ${result.message}`);
-    return result.value;
+    const { observerPack, paymentIntent } = result.value;
+    if (!paymentIntent) throw new Error("fixture purchase opened no payment");
+    return { observerPack, paymentIntent };
   }
 
   it("is where a seat's payment intent redirects", async () => {

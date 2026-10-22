@@ -113,7 +113,11 @@ describe("every admin route is behind the operator guard", () => {
     //            rates and tiers, the same terms a public page prints (DV-090).
     // Two price lists. Both are read before somebody has an account, and the
     // contract marks each `security: []`.
+    //   card-draws/odds  public by contract (security: []) -- the card draw's odds
+    //            and rules, which the Terms publish (ADR-060). The deal and the pick
+    //            beside it need a session.
     const publicFiles = new Set([
+      "card-draws/odds/route.ts",
       "loyalty/scheme/route.ts",
       "subscription/plans/route.ts",
     ]);
