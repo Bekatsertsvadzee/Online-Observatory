@@ -512,11 +512,16 @@ if (process.env.NODE_ENV !== "test") {
     environment.NOTIFICATION_WEBHOOK_URL && environment.NOTIFICATION_WEBHOOK_SECRET
       ? { url: environment.NOTIFICATION_WEBHOOK_URL, secret: environment.NOTIFICATION_WEBHOOK_SECRET }
       : null;
-  if (webhook) {
+  const resend =
+    environment.RESEND_API_KEY && environment.EMAIL_FROM
+      ? { apiKey: environment.RESEND_API_KEY, from: environment.EMAIL_FROM, appUrl: environment.APP_URL }
+      : null;
+  if (webhook || resend) {
     setInterval(() => {
       void dispatchPendingEmails({
         database: notifications,
-        webhook,
+        webhook: webhook ?? undefined,
+        resend: resend ?? undefined,
         now: new Date(),
         voucherCodeSecret: environment.VOUCHER_CODE_SECRET,
       })
@@ -531,7 +536,7 @@ if (process.env.NODE_ENV !== "test") {
     }, sweepSeconds(deployment, EMAIL_DISPATCH_INTERVAL_SECONDS, 120) * 1000);
   } else {
     console.warn(
-      "darkview realtime: NOTIFICATION_WEBHOOK_URL is not set; emails are queued and not sent",
+      "darkview realtime: neither RESEND_API_KEY nor NOTIFICATION_WEBHOOK_URL is set; emails are queued and not sent",
     );
   }
 

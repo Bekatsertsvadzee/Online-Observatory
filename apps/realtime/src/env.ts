@@ -42,6 +42,13 @@ const schema = z.object({
   NOTIFICATION_WEBHOOK_URL: z.url().optional(),
   NOTIFICATION_WEBHOOK_SECRET: z.string().min(32).optional(),
   /**
+   * ADR-062. Sends the outbox straight to Resend, with the wording in
+   * `notifications/templates.ts`, instead of the webhook above; wins when both are set.
+   * The API holds the same pair for the verification email. Both or neither.
+   */
+  RESEND_API_KEY: z.string().min(1).optional(),
+  EMAIL_FROM: z.string().includes("@").optional(),
+  /**
    * Open-Meteo's commercial key (DV-110). Optional: unset, forecasts come from the
    * keyless endpoint, which Open-Meteo licenses for non-commercial use only.
    */
@@ -60,6 +67,9 @@ const schema = z.object({
     message: "NOTIFICATION_WEBHOOK_URL and NOTIFICATION_WEBHOOK_SECRET are set together.",
     path: ["NOTIFICATION_WEBHOOK_URL"],
   },
+).refine(
+  (environment) => Boolean(environment.RESEND_API_KEY) === Boolean(environment.EMAIL_FROM),
+  { message: "RESEND_API_KEY and EMAIL_FROM are set together.", path: ["RESEND_API_KEY"] },
 );
 
 export type RealtimeEnvironment = z.infer<typeof schema>;

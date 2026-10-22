@@ -12,6 +12,7 @@ import type {
 } from "@darkview/contracts";
 import type { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { queueEmail } from "@darkview/db/notifications";
 import {
   deriveCardPrizeCode,
   hashVoucherCode,
@@ -423,6 +424,13 @@ export async function pickCard(input: {
           isDemo: draw.isDemo,
         },
         select: { id: true, kind: true, expiresAt: true },
+      });
+      // ADR-062. In the pick's transaction, so a prize and its email share a fate.
+      await queueEmail(tx, {
+        userId,
+        kind: "CARD_PRIZE_WON",
+        dedupeKey: `card-prize-won:${id}`,
+        payload: { cardPrizeId: id },
       });
     }
 

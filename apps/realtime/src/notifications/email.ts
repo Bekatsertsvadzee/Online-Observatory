@@ -4,6 +4,8 @@ import type { PrismaClient } from "@darkview/db";
 import { queueEmail } from "@darkview/db/notifications";
 import { deriveVoucherCode, voucherCodeLast4 } from "@darkview/db/vouchers";
 
+import { renderEmail } from "@/notifications/templates";
+
 /**
  * DV-064: delivering the email outbox, and queueing slot reminders.
  *
@@ -29,6 +31,14 @@ const DELIVERY_TIMEOUT_MS = 5_000;
 const BATCH_SIZE = 25;
 
 export type EmailWebhook = { url: string; secret: string };
+
+/**
+ * ADR-062. Sending straight to Resend, with the wording in `templates.ts`. `appUrl` is
+ * the website every link in an email points to.
+ */
+export type ResendSender = { apiKey: string; from: string; appUrl: string };
+
+export const RESEND_ENDPOINT = "https://api.resend.com/emails";
 
 export type DispatchSummary = { sent: number; retrying: number; failed: number; skipped: number };
 
@@ -62,8 +72,9 @@ export async function queueSlotReminders(database: PrismaClient, now: Date): Pro
 /**
  * What the email says, read now. Null when it no longer applies.
  *
- * Both names are sent and the mail service picks by locale, so the template --
- * not this code -- owns the wording in Georgian and English.
+ * Both names are sent and the template picks by locale, so the template -- not
+ * this code -- owns the wording in Georgian and English: `templates.ts` when
+ * sending through Resend (ADR-062), the mail service's own behind the webhook.
  */
 type Recipient = { email: string; name: string | null };
 
@@ -79,9 +90,14 @@ async function describe(
   kind: string,
   payload: Record<string, unknown>,
   voucherCodeSecret: string | undefined,
+  now: Date,
 ): Promise<{ data: Record<string, unknown>; recipient: Recipient | null } | null> {
   if (kind === "GIFT_VOUCHER_ISSUED" || kind === "GIFT_VOUCHER_RESTORED") {
     return describeGiftVoucher(database, kind, String(payload.voucherId), voucherCodeSecret);
+  }
+  if (kind === "CARD_PRIZE_WON") {
+    const data = await describeCardPrize(database, String(payload.cardPrizeId), now);
+    return data ? { data, recipient: null } : null;
   }
   const data = await describeData(database, kind, payload);
   return data ? { data, recipient: null } : null;
@@ -142,6 +158,38 @@ async function describeGiftVoucher(
     recipient: voucher.recipientEmail
       ? { email: voucher.recipientEmail, name: voucher.recipientName }
       : null,
+  };
+}
+
+/**
+ * ADR-062. The prize a weekly card held. Its code is not written here: the winner reads
+ * it on the cards page, signed in. Not sent for a prize already spent or expired.
+ */
+async function describeCardPrize(
+  database: PrismaClient,
+  cardPrizeId: string,
+  now: Date,
+): Promise<Record<string, unknown> | null> {
+  const prize = await database.cardPrize.findUnique({
+    where: { id: cardPrizeId },
+    select: {
+      id: true,
+      kind: true,
+      status: true,
+      durationMinutes: true,
+      percentOff: true,
+      expiresAt: true,
+      observatory: { select: { nameEn: true, nameKa: true, timezone: true } },
+    },
+  });
+  if (!prize || prize.status !== "ACTIVE" || prize.expiresAt <= now) return null;
+  return {
+    cardPrizeId: prize.id,
+    kind: prize.kind,
+    durationMinutes: prize.durationMinutes,
+    percentOff: prize.percentOff,
+    expiresAt: prize.expiresAt.toISOString(),
+    observatory: prize.observatory,
   };
 }
 
@@ -268,13 +316,16 @@ async function describeData(
 
 export async function dispatchPendingEmails(input: {
   database: PrismaClient;
-  webhook: EmailWebhook;
+  /** Where the email goes: Resend when it is configured, else the mail service's webhook. */
+  webhook?: EmailWebhook;
+  resend?: ResendSender;
   now: Date;
   fetchImpl?: typeof fetch;
   /** DV-112. Required to write a gift voucher email; without it one is retried. */
   voucherCodeSecret?: string;
 }): Promise<DispatchSummary> {
-  const { database, webhook, now } = input;
+  const { database, webhook, resend, now } = input;
+  if (!webhook && !resend) throw new Error("dispatchPendingEmails needs a webhook or Resend");
   const fetchImpl = input.fetchImpl ?? fetch;
   const summary: DispatchSummary = { sent: 0, retrying: 0, failed: 0, skipped: 0 };
 
@@ -312,6 +363,7 @@ export async function dispatchPendingEmails(input: {
             row.kind,
             row.payload as Record<string, unknown>,
             input.voucherCodeSecret,
+            now,
           )
         : null;
     } catch (error) {
@@ -336,30 +388,33 @@ export async function dispatchPendingEmails(input: {
       continue;
     }
 
-    const body = JSON.stringify({
-      notificationId: row.id,
-      kind: row.kind,
-      locale: row.user.locale,
-      recipient: described.recipient ?? { email: row.user.email, name: row.user.name },
-      data: described.data,
-    });
+    const recipient = described.recipient ?? { email: row.user.email, name: row.user.name };
 
     try {
-      const response = await fetchImpl(webhook.url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-darkview-signature": createHmac("sha256", webhook.secret)
-            .update(body)
-            .digest("base64url"),
-          // The mail service deduplicates on this. A delivery that succeeded but
-          // whose response was lost is retried with the same key.
-          "idempotency-key": row.id,
-        },
-        body,
-        cache: "no-store",
-        signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
-      });
+      const [url, init] = resend
+        ? toResend(
+            resend,
+            row.id,
+            recipient,
+            renderEmail({
+              kind: row.kind,
+              locale: row.user.locale,
+              data: described.data,
+              appUrl: resend.appUrl,
+            }),
+          )
+        : toWebhook(
+            webhook!,
+            row.id,
+            JSON.stringify({
+              notificationId: row.id,
+              kind: row.kind,
+              locale: row.user.locale,
+              recipient,
+              data: described.data,
+            }),
+          );
+      const response = await fetchImpl(url, init);
       if (!response.ok) throw new Error(`mail service answered ${response.status}`);
 
       await database.emailNotification.update({
@@ -382,4 +437,54 @@ export async function dispatchPendingEmails(input: {
   }
 
   return summary;
+}
+
+type Delivery = [url: string, init: RequestInit];
+
+function toWebhook(webhook: EmailWebhook, notificationId: string, body: string): Delivery {
+  return [
+    webhook.url,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-darkview-signature": createHmac("sha256", webhook.secret).update(body).digest("base64url"),
+        // The mail service deduplicates on this. A delivery that succeeded but whose
+        // response was lost is retried with the same key.
+        "idempotency-key": notificationId,
+      },
+      body,
+      cache: "no-store",
+      signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+    },
+  ];
+}
+
+function toResend(
+  resend: ResendSender,
+  notificationId: string,
+  recipient: Recipient,
+  content: { subject: string; text: string; html: string },
+): Delivery {
+  return [
+    RESEND_ENDPOINT,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${resend.apiKey}`,
+        "content-type": "application/json",
+        // Resend sends one email per key, so a retry after a lost answer is not a second.
+        "idempotency-key": notificationId,
+      },
+      body: JSON.stringify({
+        from: resend.from,
+        to: [recipient.email],
+        subject: content.subject,
+        text: content.text,
+        html: content.html,
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+    },
+  ];
 }

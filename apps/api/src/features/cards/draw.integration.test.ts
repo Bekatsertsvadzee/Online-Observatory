@@ -530,6 +530,17 @@ describe("the pick", () => {
       rarity: "RARE",
       prizeKind: "DISCOUNT",
     });
+
+    // ADR-062. The winner is emailed once, by id: the email carries no code.
+    const emails = await database.emailNotification.findMany();
+    expect(emails).toMatchObject([
+      {
+        userId: customerId,
+        kind: "CARD_PRIZE_WON",
+        dedupeKey: `card-prize-won:${prize.id}`,
+        payload: { cardPrizeId: prize.id },
+      },
+    ]);
   });
 
   it("wins nothing on a common card", async () => {
@@ -539,6 +550,7 @@ describe("the pick", () => {
       true,
     );
     expect(await database.cardPrize.count()).toBe(0);
+    expect(await database.emailNotification.count()).toBe(0);
   });
 
   it("refuses a second pick with CARD_ALREADY_PICKED and changes nothing", async () => {

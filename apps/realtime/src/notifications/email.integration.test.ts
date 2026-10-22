@@ -573,3 +573,113 @@ describe("gift voucher emails (DV-112)", () => {
     expect(mail.sent).toHaveLength(0);
   });
 });
+
+describe("sending straight to Resend (ADR-062)", () => {
+  const RESEND = { apiKey: "re_integration_test", from: "Stellar <no-reply@stellar.test>", appUrl: "https://stellar.test" };
+
+  it("sends the template's words to the customer, once per outbox row", async () => {
+    const bookingId = await booking(90);
+    await queueSlotReminders(database, NOW);
+    const mail = mailService(() => new Response(JSON.stringify({ id: "email-1" }), { status: 200 }));
+
+    const summary = await dispatchPendingEmails({ database, resend: RESEND, now: NOW, fetchImpl: mail.fetchImpl });
+
+    expect(summary).toEqual({ sent: 1, retrying: 0, failed: 0, skipped: 0 });
+    const [{ headers, body }] = mail.sent;
+    const [row] = await outbox();
+    expect(headers.authorization).toBe(`Bearer ${RESEND.apiKey}`);
+    expect(headers["idempotency-key"]).toBe(row.id);
+    const sent = JSON.parse(body);
+    const user = await database.user.findUniqueOrThrow({ where: { id: userId } });
+    expect(sent).toMatchObject({ from: RESEND.from, to: [user.email] });
+    // The customer's locale is Georgian.
+    expect(sent.subject).toContain("მალე იწყება");
+    expect(sent.text).toContain(`https://stellar.test/ka/app/bookings/${bookingId}`);
+    expect(row).toMatchObject({ status: "SENT", sentAt: NOW });
+  });
+
+  it("retries when Resend refuses", async () => {
+    await booking(90);
+    await queueSlotReminders(database, NOW);
+    const mail = mailService(() => new Response(null, { status: 429 }));
+
+    const summary = await dispatchPendingEmails({ database, resend: RESEND, now: NOW, fetchImpl: mail.fetchImpl });
+
+    expect(summary.retrying).toBe(1);
+    const [row] = await outbox();
+    expect(row).toMatchObject({ status: "PENDING" });
+    expect(row.lastError).toContain("429");
+  });
+});
+
+describe("a weekly card's prize (ADR-062)", () => {
+  let weeks = 0;
+
+  async function prize(options: { status?: "ACTIVE" | "REDEEMED"; expiresAt?: Date } = {}) {
+    // One deal per account per week: each prize here is another week's.
+    const week = new Date(Date.UTC(2026, 11, 14 - 7 * weeks++));
+    const draw = await database.cardDraw.create({
+      data: {
+        userId,
+        observatoryId,
+        week,
+        closesAt: new Date(week.getTime() + 7 * 86_400_000),
+        pickedPosition: 0,
+        pickedAt: NOW,
+      },
+    });
+    const id = randomUUID();
+    await database.cardPrize.create({
+      data: {
+        id,
+        drawId: draw.id,
+        userId,
+        observatoryId,
+        kind: "OBSERVER_SEAT",
+        codeHash: `hash-${id}`,
+        codeLast4: "ABCD",
+        status: options.status ?? "ACTIVE",
+        expiresAt: options.expiresAt ?? new Date(NOW.getTime() + 30 * 86_400_000),
+      },
+    });
+    await database.emailNotification.create({
+      data: {
+        userId,
+        kind: "CARD_PRIZE_WON",
+        dedupeKey: `card-prize-won:${id}`,
+        payload: { cardPrizeId: id },
+      },
+    });
+    return id;
+  }
+
+  it("names the prize and when it lapses, and carries no code", async () => {
+    const id = await prize();
+    const mail = mailService();
+
+    await dispatchPendingEmails({ database, webhook: WEBHOOK, now: NOW, fetchImpl: mail.fetchImpl });
+
+    const sent = JSON.parse(mail.sent[0].body);
+    expect(sent).toMatchObject({
+      kind: "CARD_PRIZE_WON",
+      data: {
+        cardPrizeId: id,
+        kind: "OBSERVER_SEAT",
+        expiresAt: new Date(NOW.getTime() + 30 * 86_400_000).toISOString(),
+        observatory: { nameEn: "Tbilisi Observatory", timezone: "Asia/Tbilisi" },
+      },
+    });
+    expect(sent.data).not.toHaveProperty("code");
+  });
+
+  it("is not sent for a prize already spent, or expired", async () => {
+    await prize({ status: "REDEEMED" });
+    await prize({ expiresAt: new Date(NOW.getTime() - 1_000) });
+    const mail = mailService();
+
+    const summary = await dispatchPendingEmails({ database, webhook: WEBHOOK, now: NOW, fetchImpl: mail.fetchImpl });
+
+    expect(summary).toEqual({ sent: 0, retrying: 0, failed: 0, skipped: 2 });
+    expect(mail.sent).toHaveLength(0);
+  });
+});
