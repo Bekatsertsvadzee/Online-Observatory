@@ -4,9 +4,11 @@ import { zSlot, zSlotList } from "@darkview/contracts/zod";
 
 import { nightWindow } from "@/lib/slots/darkness";
 import {
+  clashesWithHeld,
   generateSlots,
   PROVISIONAL_SLOT_PRICE_MINOR,
   SLOT_DURATION_MINUTES,
+  SLOT_STRIDE_MINUTES,
   SLOT_TURNAROUND_MINUTES,
   type SlotAvailabilityInput,
 } from "@/lib/slots/generate";
@@ -25,7 +27,7 @@ function slots(overrides: Partial<SlotAvailabilityInput> = {}) {
     window,
     now: beforeTheNight,
     observatory: { online: true, weatherHold: false },
-    bookedStartAt: new Set<number>(),
+    held: [],
     ...overrides,
   });
 }
@@ -47,22 +49,25 @@ describe("slots tile the dark window", () => {
 
   it("never offers a slot that would run past dawn", () => {
     const last = slots().at(-1)!;
-    const wouldOverrun =
+    const next =
       new Date(last.startAt).getTime() +
-      (SLOT_DURATION_MINUTES + SLOT_TURNAROUND_MINUTES) * 60_000 +
+      SLOT_STRIDE_MINUTES * 60_000 +
       SLOT_DURATION_MINUTES * 60_000;
 
-    expect(wouldOverrun).toBeGreaterThan(window.dawnAt.getTime());
+    expect(next).toBeGreaterThan(window.dawnAt.getTime());
   });
 
-  it("leaves the turnaround gap between consecutive slots", () => {
+  it("offers a start every fifteen minutes, each a thirty-minute session", () => {
+    expect(SLOT_STRIDE_MINUTES).toBe(15);
     const generated = slots();
     for (let i = 1; i < generated.length; i += 1) {
-      const gapMinutes =
-        (new Date(generated[i].startAt).getTime() -
-          new Date(generated[i - 1].endAt).getTime()) /
-        60_000;
-      expect(gapMinutes).toBe(SLOT_TURNAROUND_MINUTES);
+      const strideMinutes =
+        (Date.parse(generated[i].startAt) - Date.parse(generated[i - 1].startAt)) / 60_000;
+      expect(strideMinutes).toBe(SLOT_STRIDE_MINUTES);
+    }
+    for (const slot of generated) {
+      expect(slot.durationMinutes).toBe(30);
+      expect((Date.parse(slot.endAt) - Date.parse(slot.startAt)) / 60_000).toBe(30);
     }
   });
 
@@ -72,7 +77,7 @@ describe("slots tile the dark window", () => {
       window: nightWindow("2026-06-21", "Asia/Tbilisi", site)!,
       now: new Date("2026-06-21T00:00:00Z"),
       observatory: { online: true, weatherHold: false },
-      bookedStartAt: new Set<number>(),
+      held: [],
     });
 
     expect(slots().length).toBeGreaterThan(summer.length);
@@ -146,26 +151,26 @@ describe("site state closes the night", () => {
 
   it("marks a taken slot ALREADY_BOOKED without affecting its neighbours", () => {
     const all = slots();
-    const taken = new Date(all[2].startAt).getTime();
-    const generated = slots({ bookedStartAt: new Set([taken]) });
+    const held = [{ slotStartAt: new Date(all[2].startAt), durationMinutes: 30 }];
+    const generated = slots({ held });
 
     expect(generated[2].available).toBe(false);
     expect(generated[2].unavailableReason).toBe("ALREADY_BOOKED");
-    expect(generated[1].available).toBe(true);
-    expect(generated[3].available).toBe(true);
+    expect(generated[1].unavailableReason).toBe("ALREADY_BOOKED");
+    expect(generated[3].unavailableReason).toBe("ALREADY_BOOKED");
   });
 
   it("prefers the more specific reason when several apply", () => {
     const all = slots();
-    const taken = new Date(all[2].startAt).getTime();
+    const held = [{ slotStartAt: new Date(all[2].startAt), durationMinutes: 30 }];
     const generated = slots({
-      bookedStartAt: new Set([taken]),
+      held,
       observatory: { online: false, weatherHold: true },
     });
 
     // Already booked is specific to the slot; the site-wide reasons are not.
     expect(generated[2].unavailableReason).toBe("ALREADY_BOOKED");
-    expect(generated[3].unavailableReason).toBe("WEATHER_HOLD");
+    expect(generated[6].unavailableReason).toBe("WEATHER_HOLD");
   });
 
   it("never reports available alongside a reason", () => {
@@ -197,13 +202,42 @@ describe("money is integer minor units", () => {
 });
 
 describe("slot times are presentable", () => {
-  it("starts every slot on a five-minute boundary with no stray seconds", () => {
+  it("starts every slot on a quarter hour of the observatory's clock", () => {
+    const local = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Tbilisi",
+      minute: "2-digit",
+      second: "2-digit",
+    });
     for (const slot of slots()) {
       const start = new Date(slot.startAt);
       expect(start.getUTCSeconds()).toBe(0);
       expect(start.getUTCMilliseconds()).toBe(0);
-      expect(start.getUTCMinutes() % 5).toBe(0);
+      const [minute, second] = local.format(start).split(":").map(Number);
+      expect(second).toBe(0);
+      expect([0, 15, 30, 45]).toContain(minute);
     }
+  });
+
+  it("aligns the first start forward to the next quarter hour after dusk", () => {
+    const first = Date.parse(slots()[0].startAt);
+    const quarter = 15 * 60_000;
+    expect(first).toBe(Math.ceil(window.duskAt.getTime() / quarter) * quarter);
+  });
+
+  it("starts at dusk itself when dusk falls on a quarter hour", () => {
+    const dusk = new Date("2026-12-21T15:00:00.000Z");
+    const generated = slots({
+      window: { duskAt: dusk, dawnAt: new Date("2026-12-21T17:00:00.000Z") },
+    });
+    expect(generated.map((slot) => slot.startAt.slice(11, 16))).toEqual([
+      "15:00",
+      "15:15",
+      "15:30",
+      "15:45",
+      "16:00",
+      "16:15",
+      "16:30",
+    ]);
   });
 
   it("never starts a slot before darkness by rounding down", () => {
@@ -212,5 +246,54 @@ describe("slot times are presentable", () => {
         window.duskAt.getTime(),
       );
     }
+  });
+});
+
+describe("the turnaround between customers blocks overlapping starts", () => {
+  const night = {
+    duskAt: new Date("2026-12-21T15:00:00.000Z"),
+    dawnAt: new Date("2026-12-21T19:00:00.000Z"),
+  };
+  const at = (hhmm: string) => new Date(`2026-12-21T${hhmm}:00.000Z`);
+
+  function reasons(held: { slotStartAt: Date; durationMinutes: number }[]) {
+    return Object.fromEntries(
+      slots({ window: night, held }).map((slot) => [
+        slot.startAt.slice(11, 16),
+        slot.unavailableReason,
+      ]),
+    );
+  }
+
+  it("blocks every start whose session would come within ten minutes of a held one", () => {
+    expect(SLOT_TURNAROUND_MINUTES).toBe(10);
+    const byStart = reasons([{ slotStartAt: at("16:30"), durationMinutes: 30 }]);
+
+    // 16:00 would end 16:30, with no turnaround before the held session.
+    expect(byStart["15:45"]).toBeNull();
+    expect(byStart["16:00"]).toBe("ALREADY_BOOKED");
+    expect(byStart["16:15"]).toBe("ALREADY_BOOKED");
+    expect(byStart["16:30"]).toBe("ALREADY_BOOKED");
+    expect(byStart["16:45"]).toBe("ALREADY_BOOKED");
+    // The held session ends 17:00; 17:00 and 17:05 are inside its turnaround.
+    expect(byStart["17:00"]).toBe("ALREADY_BOOKED");
+    expect(byStart["17:15"]).toBeNull();
+  });
+
+  it("reads a held booking that started off the grid, by its own duration", () => {
+    const byStart = reasons([{ slotStartAt: at("16:05"), durationMinutes: 60 }]);
+    // Held 16:05-17:05, turnaround to 17:15.
+    expect(byStart["15:15"]).toBeNull();
+    expect(byStart["15:30"]).toBe("ALREADY_BOOKED");
+    expect(byStart["17:00"]).toBe("ALREADY_BOOKED");
+    expect(byStart["17:15"]).toBeNull();
+  });
+
+  it("is symmetric and exact at the boundary", () => {
+    const held = [{ slotStartAt: at("16:00"), durationMinutes: 30 }];
+    expect(clashesWithHeld(at("16:40").getTime(), 30, held)).toBe(false);
+    expect(clashesWithHeld(at("16:39").getTime(), 30, held)).toBe(true);
+    expect(clashesWithHeld(at("15:20").getTime(), 30, held)).toBe(false);
+    expect(clashesWithHeld(at("15:21").getTime(), 30, held)).toBe(true);
   });
 });

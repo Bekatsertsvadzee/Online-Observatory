@@ -34,8 +34,12 @@ const { listSlotsForDate } = await import("@/features/booking/slots");
 const { listBookableObservatories } = await import("@/features/booking/observatories");
 const { cancelMyBooking, getMyBooking } = await import("@/features/booking/manage");
 const { nightWindow } = await import("@/lib/slots/darkness");
-const { generateSlots, PROVISIONAL_SLOT_PRICE_MINOR, SLOT_DURATION_MINUTES } =
-  await import("@/lib/slots/generate");
+const {
+  generateSlots,
+  PROVISIONAL_SLOT_PRICE_MINOR,
+  SLOT_DURATION_MINUTES,
+  SLOT_TURNAROUND_MINUTES,
+} = await import("@/lib/slots/generate");
 
 /**
  * DV-055 runs against a real PostgreSQL instance, on purpose.
@@ -77,7 +81,7 @@ const HELD_SLOT_CONSTRAINT = "Booking_held_slot_exclusion";
 const HELD_SLOT_CONSTRAINT_SQL =
   `ALTER TABLE "Booking" ADD CONSTRAINT "${HELD_SLOT_CONSTRAINT}" EXCLUDE USING gist (` +
   `"observatoryId" WITH =, ` +
-  `tsrange("slotStartAt", "slotStartAt" + make_interval(mins => "durationMinutes")) WITH &&` +
+  `tsrange("slotStartAt", "slotStartAt" + make_interval(mins => "durationMinutes" + ${SLOT_TURNAROUND_MINUTES})) WITH &&` +
   `) WHERE ("status" IN ('PENDING_PAYMENT', 'CONFIRMED'))`;
 
 const SITE = {
@@ -115,7 +119,7 @@ function firstSlotStartAt(): Date {
     window,
     now: NOW,
     observatory: { online: true, weatherHold: false },
-    bookedStartAt: new Set(),
+    held: [],
   }).find((candidate) => candidate.available);
 
   if (!slot) throw new Error("no available slot on the fixture night");
@@ -136,6 +140,8 @@ async function createUser(): Promise<string> {
 async function reserve(options: {
   userId?: string;
   observatoryId?: string;
+  /** Null sends no `targetId`, and the platform assigns one. */
+  targetId?: string | null;
   slotStartAt: Date;
   idempotencyKey?: string | null;
   now?: Date;
@@ -144,7 +150,7 @@ async function reserve(options: {
     userId: options.userId ?? userId,
     request: {
       observatoryId: options.observatoryId ?? observatoryId,
-      targetId,
+      ...(options.targetId === null ? {} : { targetId: options.targetId ?? targetId }),
       slotStartAt: options.slotStartAt.toISOString(),
       durationMinutes: SLOT_DURATION_MINUTES,
     },
@@ -316,8 +322,8 @@ describe("reserving a slot", () => {
   });
 
   it("refuses an instant that is not a slot the observatory offers", async () => {
-    // Two and a half minutes past a real slot: off the five-minute alignment grid
-    // and off the forty-minute stride, so the generator never emits it.
+    // Two and a half minutes past a real slot: off the quarter-hour grid, so the
+    // generator never emits it.
     const offGrid = new Date(firstSlotStartAt().getTime() + 150_000);
 
     const result = await reserve({ slotStartAt: offGrid });
@@ -484,7 +490,7 @@ describe("availability windows", () => {
       window,
       now: NOW,
       observatory: { online: true, weatherHold: false },
-      bookedStartAt: new Set(),
+      held: [],
     }).find(
       (candidate) =>
         candidate.available &&
@@ -716,8 +722,214 @@ describe("two people, one slot", () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0].def).toContain("EXCLUDE USING gist");
+    // The turnaround is part of the held interval, and it is the generator's.
+    expect(rows[0].def).toContain(`"durationMinutes" + ${SLOT_TURNAROUND_MINUTES}`);
     expect(rows[0].def).toContain("PENDING_PAYMENT");
     expect(rows[0].def).toContain("CONFIRMED");
+  });
+});
+
+/**
+ * Quarter-hour starts. Any free quarter hour is a start, and the turnaround
+ * between customers is part of the time a booking holds -- enforced by the same
+ * exclusion constraint, so it holds under concurrency as the overlap rule does.
+ */
+describe("quarter-hour starts", () => {
+  const minutes = (from: Date, count: number) => new Date(from.getTime() + count * 60_000);
+
+  it("takes a start on the quarter-hour grid that the old stride never offered", async () => {
+    const slotStartAt = minutes(firstSlotStartAt(), 15);
+
+    const result = await reserve({ slotStartAt });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.booking.slotStartAt).toBe(slotStartAt.toISOString());
+  });
+
+  it("refuses a start inside another booking's turnaround with 409, and takes the next one", async () => {
+    const first = firstSlotStartAt();
+    expect((await reserve({ slotStartAt: first })).ok).toBe(true);
+
+    for (const offset of [15, 30]) {
+      const refused = await reserve({
+        userId: await createUser(),
+        slotStartAt: minutes(first, offset),
+      });
+      expect(refused.ok).toBe(false);
+      if (refused.ok) return;
+      expect(refused.status).toBe(409);
+      expect(refused.code).toBe("SLOT_UNAVAILABLE");
+    }
+
+    const next = await reserve({ userId: await createUser(), slotStartAt: minutes(first, 45) });
+    expect(next.ok).toBe(true);
+    expect(await database.booking.count({ where: { status: "PENDING_PAYMENT" } })).toBe(2);
+    expect(await database.payment.count()).toBe(2);
+  });
+
+  it("refuses a start whose session would end inside the turnaround before a held one", async () => {
+    const first = firstSlotStartAt();
+    const held = minutes(first, 60);
+    expect((await reserve({ slotStartAt: held })).ok).toBe(true);
+
+    // 15 minutes after the first start would end 30 minutes before the held one;
+    // 30 would end at the very instant it begins.
+    const refused = await reserve({ userId: await createUser(), slotStartAt: minutes(first, 30) });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.status).toBe(409);
+
+    expect((await reserve({ userId: await createUser(), slotStartAt: minutes(first, 15) })).ok).toBe(
+      true,
+    );
+  });
+
+  it("gives exactly one of many racing, mutually clashing starts", async () => {
+    const first = firstSlotStartAt();
+    const users = await Promise.all(Array.from({ length: CONCURRENCY }, () => createUser()));
+
+    const results = await Promise.all(
+      users.map((id, index) =>
+        reserve({ userId: id, slotStartAt: minutes(first, (index % 3) * 15) }),
+      ),
+    );
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(
+      results.filter((result) => !result.ok).every((result) => !result.ok && result.status === 409),
+    ).toBe(true);
+    expect(
+      await database.booking.count({ where: { status: { in: ["PENDING_PAYMENT", "CONFIRMED"] } } }),
+    ).toBe(1);
+  });
+
+  it("lists every start a held booking and its turnaround reach as ALREADY_BOOKED", async () => {
+    const first = firstSlotStartAt();
+    const held = minutes(first, 60);
+    expect((await reserve({ slotStartAt: held })).ok).toBe(true);
+
+    const list = await listSlotsForDate(observatoryId, NIGHT, NOW);
+    const reasonAt = (offset: number) =>
+      list?.items.find((slot) => Date.parse(slot.startAt) === minutes(first, offset).getTime())
+        ?.unavailableReason;
+
+    expect(reasonAt(15)).toBeNull();
+    for (const offset of [30, 45, 60, 75, 90]) expect(reasonAt(offset)).toBe("ALREADY_BOOKED");
+    expect(reasonAt(105)).toBeNull();
+  });
+});
+
+/**
+ * Choosing a target is optional. With none, the platform assigns the enabled target
+ * that fits the slot and is observable across it, highest at mid-slot, ties to the
+ * earlier slug.
+ */
+describe("a booking with no target", () => {
+  async function fixedTarget(options: {
+    slug: string;
+    rightAscensionHours: number;
+    declinationDegrees: number;
+    expectedMissionMinutes?: number;
+  }) {
+    return database.target.create({
+      data: {
+        slug: `${options.slug}-${randomUUID()}`,
+        nameEn: options.slug,
+        nameKa: options.slug,
+        type: "DOUBLE_STAR",
+        positionSource: "FIXED",
+        rightAscensionHours: options.rightAscensionHours,
+        declinationDegrees: options.declinationDegrees,
+        angularSizeArcmin: 0.3,
+        magnitude: 2,
+        opticalConfig: "F10_NATIVE",
+        imagingProfile: "DOUBLE_STAR",
+        minAltitudeDegrees: 25,
+        expectedMissionMinutes: options.expectedMissionMinutes ?? 30,
+      },
+    });
+  }
+
+  it("assigns the observable target highest at mid-slot, whatever its slug", async () => {
+    // Algenib transits within minutes of the first slot's middle on this night, some
+    // 63 degrees up -- well above Polaris's 42. Its slug sorts after Polaris's, and a
+    // never-risen far-southern star's sorts first, so neither slug order nor the
+    // catalogue's first row can be what picks it.
+    const algenib = await fixedTarget({
+      slug: "z-algenib",
+      rightAscensionHours: 0.2209,
+      declinationDegrees: 15.1836,
+    });
+    await fixedTarget({ slug: "a-southern", rightAscensionHours: 0.2209, declinationDegrees: -80 });
+
+    const result = await reserve({ slotStartAt: firstSlotStartAt(), targetId: null });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.booking.targetId).toBe(algenib.id);
+    const row = await database.booking.findUniqueOrThrow({
+      where: { id: result.body.booking.id },
+    });
+    expect(row.targetId).toBe(algenib.id);
+  });
+
+  it("breaks a tie by the earlier slug", async () => {
+    const twin = await fixedTarget({
+      slug: "a-polaris-twin",
+      rightAscensionHours: 2.5303,
+      declinationDegrees: 89.2641,
+    });
+
+    const result = await reserve({ slotStartAt: firstSlotStartAt(), targetId: null });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.booking.targetId).toBe(twin.id);
+  });
+
+  it("never assigns a target too long for the slot, nor a disabled one", async () => {
+    const algenib = await fixedTarget({
+      slug: "z-algenib",
+      rightAscensionHours: 0.2209,
+      declinationDegrees: 15.1836,
+      expectedMissionMinutes: SLOT_DURATION_MINUTES + 15,
+    });
+    const disabled = await fixedTarget({
+      slug: "y-algenib",
+      rightAscensionHours: 0.2209,
+      declinationDegrees: 15.1836,
+    });
+    await database.target.update({ where: { id: disabled.id }, data: { enabled: false } });
+
+    const result = await reserve({ slotStartAt: firstSlotStartAt(), targetId: null });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.booking.targetId).not.toBe(algenib.id);
+    expect(result.body.booking.targetId).toBe(targetId);
+  });
+
+  it("is 422 VALIDATION_FAILED when nothing is observable, and holds nothing", async () => {
+    await database.target.update({ where: { id: targetId }, data: { enabled: false } });
+    await fixedTarget({ slug: "a-southern", rightAscensionHours: 0.2209, declinationDegrees: -80 });
+
+    const result = await reserve({ slotStartAt: firstSlotStartAt(), targetId: null });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(422);
+    expect(result.code).toBe("VALIDATION_FAILED");
+    expect(await database.booking.count()).toBe(0);
+    expect(await database.payment.count()).toBe(0);
+  });
+
+  it("still answers 404 for a named target that does not exist", async () => {
+    const result = await reserve({ slotStartAt: firstSlotStartAt(), targetId: randomUUID() });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(404);
   });
 });
 
@@ -772,14 +984,30 @@ describe("mixed slot lengths", () => {
   });
 
   /**
-   * '[)' bounds, and why they are the right ones. A stride of adjacent slots is
-   * the ordinary case -- if touching counted as overlapping, the constraint would
-   * refuse the night's second slot.
+   * '[)' bounds, and why they are the right ones. Each booking holds its interval
+   * plus the turnaround; a booking that begins exactly when that ends is the
+   * ordinary next customer, and touching must not count as overlapping.
    */
-  it("allows a booking that begins exactly when another ends", async () => {
+  it("allows a booking that begins exactly a turnaround after another ends", async () => {
     await hold(at("21:00"), 20);
-    await hold(at("21:20"), 20);
+    await hold(at("21:30"), 20);
 
+    expect(await database.booking.count()).toBe(2);
+  });
+
+  it("refuses a booking that begins inside another's turnaround", async () => {
+    await hold(at("21:00"), 20);
+
+    await expect(hold(at("21:20"), 20)).rejects.toThrow();
+    await expect(hold(at("21:29"), 20)).rejects.toThrow();
+    expect(await database.booking.count()).toBe(1);
+  });
+
+  it("refuses a booking whose turnaround would run into one already held", async () => {
+    await hold(at("21:30"), 20);
+
+    await expect(hold(at("21:01"), 20)).rejects.toThrow();
+    await hold(at("21:00"), 20);
     expect(await database.booking.count()).toBe(2);
   });
 
@@ -1390,7 +1618,7 @@ describe("retrying a booking", () => {
 
   it("keys are scoped to the user, so two customers cannot collide on one", async () => {
     const slotStartAt = firstSlotStartAt();
-    const otherSlotStartAt = new Date(slotStartAt.getTime() + 40 * 60_000);
+    const otherSlotStartAt = new Date(slotStartAt.getTime() + 45 * 60_000);
     const key = "shared-client-default-key";
 
     const mine = await reserve({ slotStartAt, idempotencyKey: key });
@@ -1410,7 +1638,7 @@ describe("retrying a booking", () => {
 
   it("does not replay a key onto a different slot", async () => {
     const slotStartAt = firstSlotStartAt();
-    const otherSlotStartAt = new Date(slotStartAt.getTime() + 40 * 60_000);
+    const otherSlotStartAt = new Date(slotStartAt.getTime() + 45 * 60_000);
     const key = `sticky-${randomUUID()}`;
 
     const first = await reserve({ slotStartAt, idempotencyKey: key });

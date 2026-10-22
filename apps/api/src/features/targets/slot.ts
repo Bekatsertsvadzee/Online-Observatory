@@ -9,7 +9,7 @@ import {
 import { toContractTarget, type TargetRow } from "@/features/targets/projection";
 import { getDatabase } from "@/lib/db/client";
 import { evaluateSlotVisibility } from "@/lib/ephemeris/slot-visibility";
-import type { VisibilityInput } from "@/lib/ephemeris/visibility";
+import { evaluateVisibility, type VisibilityInput } from "@/lib/ephemeris/visibility";
 import { loadSafetyEnvelope, siteOf } from "@/lib/safety/store";
 
 type EnvelopeOf = Awaited<ReturnType<typeof loadSafetyEnvelope>>;
@@ -75,4 +75,42 @@ export async function slotVisibilityForBooking(
 ): Promise<SlotVisibility> {
   const envelope = await loadSafetyEnvelope(observatory.id);
   return judge(observatory, envelope, target, startAt, durationMinutes);
+}
+
+/**
+ * The target the platform assigns when a booking names none: of the enabled targets
+ * that fit the slot's length and that `GET /targets/visibility` judges observable
+ * across the whole slot, the one highest above the horizon at mid-slot. Ties go to
+ * the earlier slug, the catalogue's order, so the same slot always gets the same
+ * answer. Null when nothing qualifies.
+ */
+export async function bestTargetForSlot(
+  observatory: BookableObservatory,
+  startAt: Date,
+  durationMinutes: number,
+) {
+  const envelope = await loadSafetyEnvelope(observatory.id);
+  const targets = await getDatabase().target.findMany({
+    where: { enabled: true, expectedMissionMinutes: { lte: durationMinutes } },
+    orderBy: { slug: "asc" },
+  });
+  const midSlot = new Date(startAt.getTime() + (durationMinutes * 60_000) / 2);
+
+  let best: { target: (typeof targets)[number]; altitude: number } | null = null;
+  for (const target of targets) {
+    const visibility = judge(observatory, envelope, target, startAt, durationMinutes);
+    if (!visibility.observable) continue;
+    const altitude = evaluateVisibility({
+      target,
+      site: siteOf(observatory),
+      envelope,
+      observatory: {
+        online: observatory.status === "ONLINE",
+        weatherHold: observatory.weatherHold,
+      },
+      at: midSlot,
+    }).horizontal.altitudeDegrees;
+    if (!best || altitude > best.altitude) best = { target, altitude };
+  }
+  return best?.target ?? null;
 }

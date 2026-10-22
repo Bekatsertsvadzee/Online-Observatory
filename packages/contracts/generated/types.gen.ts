@@ -1239,7 +1239,22 @@ export type CreateBookingRequest = {
      * An `id` from `GET /observatories`.
      */
     observatoryId: string;
-    targetId: string;
+    /**
+     * Optional. When omitted the platform assigns a target for the slot: of the
+     * enabled targets whose `expectedMissionMinutes` fits `durationMinutes` and
+     * that `GET /targets/visibility` judges observable across the whole slot,
+     * the one highest above the horizon at the middle of the slot, ties going to
+     * the earlier slug. The booking returned names it. When none qualifies the
+     * request is 422 `VALIDATION_FAILED`.
+     *
+     */
+    targetId?: string;
+    /**
+     * A start `GET /slots` offers: a quarter hour of the observatory's clock
+     * inside darkness and the hours the observatory is available. A start whose
+     * session would come within the turnaround of another held booking is 409.
+     *
+     */
     slotStartAt: string;
     durationMinutes: number;
     locale?: Locale;
