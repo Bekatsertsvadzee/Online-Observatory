@@ -60,6 +60,14 @@ const SESSION_ISSUING = new Set([
 ]);
 
 /**
+ * ADR-061: the native client's sign-in. It issues a session with no Origin check,
+ * which is safe only because it sets no cookie: a cross-site form cannot sign anybody
+ * in through it, and the bearer token it answers is unreadable to another site's page.
+ * The test below holds it to setting no cookie.
+ */
+const NATIVE_SESSION_ISSUING = new Set(["auth/native-sign-in/route.ts"]);
+
+/**
  * ADR-048: the two legs of a Google sign-in. GET navigations a browser follows, so
  * they carry no Origin to check; the callback is held to the state cookie the
  * start set instead, and nothing changes until it matches. They issue a session
@@ -132,6 +140,7 @@ describe("every admin route is behind the operator guard", () => {
           !publicFiles.has(relative) &&
           !SIGNED_SERVER_TO_SERVER.has(relative) &&
           !SESSION_ISSUING.has(relative) &&
+          !NATIVE_SESSION_ISSUING.has(relative) &&
           !GOOGLE_NAVIGATIONS.has(relative)
         );
       })
@@ -181,7 +190,10 @@ describe("every admin route is behind the operator guard", () => {
       })
       .map((file) => path.relative(appDirectory, file))
       .filter(
-        (relative) => !SIGNED_SERVER_TO_SERVER.has(relative) && !SESSION_ISSUING.has(relative),
+        (relative) =>
+          !SIGNED_SERVER_TO_SERVER.has(relative) &&
+          !SESSION_ISSUING.has(relative) &&
+          !NATIVE_SESSION_ISSUING.has(relative),
       );
 
     expect(withoutOriginCheck).toEqual([]);
@@ -194,6 +206,14 @@ describe("every admin route is behind the operator guard", () => {
       expect(handler, relative).toMatch(
         /^export async function POST\(request: Request\) \{\n\s+const refusal = await crossOriginRefusal\(\);\n\s+if \(refusal\) return refusal;/,
       );
+    }
+  });
+
+  it("lets the native sign-in skip the Origin check only by setting no cookie", () => {
+    for (const relative of NATIVE_SESSION_ISSUING) {
+      const source = readFileSync(path.join(appDirectory, relative), "utf8");
+      expect(source, relative).toContain("signInNative(");
+      expect(source, relative).not.toMatch(/createSession\(|cookies\(|set-cookie/i);
     }
   });
 

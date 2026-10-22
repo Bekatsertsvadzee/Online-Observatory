@@ -221,11 +221,13 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
     async findUserBySessionTokenHash(
       tokenHash: string,
       now: Date,
+      client: "WEB" | "NATIVE",
     ): Promise<ChannelUser | null> {
       const session = await database.session.findUnique({
         where: { tokenHash },
         select: {
           expiresAt: true,
+          client: true,
           user: { select: { id: true, role: true, emailVerifiedAt: true } },
         },
       });
@@ -233,7 +235,13 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       // The same three refusals as the API's getCurrentSession: no such session,
       // lapsed, or an account whose email was never verified. An unverified
       // account cannot hold a mission, so it has nothing here to watch.
-      if (!session || session.expiresAt <= now || !session.user.emailVerifiedAt) {
+      // ADR-061: a cookie only for a WEB session, a bearer token only for a NATIVE one.
+      if (
+        !session ||
+        session.client !== client ||
+        session.expiresAt <= now ||
+        !session.user.emailVerifiedAt
+      ) {
         return null;
       }
 

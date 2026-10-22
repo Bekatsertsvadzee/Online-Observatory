@@ -5,6 +5,7 @@ vi.mock("server-only", () => ({}));
 const {
   requestHeaders,
   signIn,
+  signInNative,
   register,
   verifyEmail,
   requestPasswordReset,
@@ -12,6 +13,7 @@ const {
 } = vi.hoisted(() => ({
   requestHeaders: { origin: "https://darkview.test" as string | null },
   signIn: vi.fn(),
+  signInNative: vi.fn(),
   register: vi.fn(),
   verifyEmail: vi.fn(),
   requestPasswordReset: vi.fn(),
@@ -26,13 +28,14 @@ vi.mock("@/lib/validation/env", () => ({
   getServerEnvironment: () => ({ APP_URL: "https://darkview.test" }),
 }));
 vi.mock("@/lib/auth/session", () => ({ getCurrentSession: vi.fn() }));
-vi.mock("@/features/auth/authenticate", () => ({ signIn, register, verifyEmail }));
+vi.mock("@/features/auth/authenticate", () => ({ signIn, signInNative, register, verifyEmail }));
 vi.mock("@/features/auth/password", () => ({ requestPasswordReset, confirmPasswordReset }));
 
-import { zUser } from "@darkview/contracts/zod";
+import { zNativeSession, zUser } from "@darkview/contracts/zod";
 
 import { POST as confirmPasswordResetRoute } from "./password-reset/confirm/route";
 import { POST as requestPasswordResetRoute } from "./password-reset/route";
+import { POST as nativeSignInRoute } from "./native-sign-in/route";
 import { POST as registerRoute } from "./register/route";
 import { POST as signInRoute } from "./sign-in/route";
 import { POST as verifyEmailRoute } from "./verify-email/route";
@@ -131,6 +134,48 @@ describe("POST /auth/sign-in", () => {
       code: "UNAUTHENTICATED",
       message: "Email or password is incorrect.",
     });
+  });
+});
+
+describe("POST /auth/native-sign-in (ADR-061)", () => {
+  const session = { user, token: "t".repeat(43), expiresAt: "2026-10-29T00:00:00.000Z" };
+
+  it("answers a NativeSession the contract's own schema accepts, uncached", async () => {
+    signInNative.mockResolvedValueOnce({ ok: true, session });
+
+    const response = await nativeSignInRoute(post({ email: user.email, password: "x" }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(zNativeSession.parse(await response.json())).toEqual(session);
+  });
+
+  it("needs no Origin: a native request has none, and nothing here is a cookie", async () => {
+    requestHeaders.origin = null;
+    signInNative.mockResolvedValueOnce({ ok: true, session });
+
+    const response = await nativeSignInRoute(post({ email: user.email, password: "x" }));
+    expect(response.status).toBe(200);
+  });
+
+  it("answers 400 to a body that is not JSON and 422 to one the contract rejects", async () => {
+    expect((await nativeSignInRoute(post("not json"))).status).toBe(400);
+    expect((await nativeSignInRoute(post({ email: "nope" }))).status).toBe(422);
+    expect(signInNative).not.toHaveBeenCalled();
+  });
+
+  it("passes a refusal through as a contract ApiError", async () => {
+    signInNative.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      code: "EMAIL_UNVERIFIED",
+      message: "Verify the email address before signing in.",
+    });
+
+    const response = await nativeSignInRoute(post({ email: user.email, password: "x" }));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "EMAIL_UNVERIFIED" });
   });
 });
 

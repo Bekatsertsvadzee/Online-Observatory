@@ -65,6 +65,8 @@ const UNMETERED_BY_DESIGN = [
   "admin/network/nodes/[nodeId]/suspend/route.ts",
   // A reset token is 256 random bits and single-use, as a verification token is
   // (below), and is exempt for the same reason (ADR-040).
+  // ADR-061: the native sign-in is metered by the same consumeLimit as sign-in, below.
+  "auth/native-sign-in/route.ts",
   "auth/password-reset/confirm/route.ts",
   // Registration, sign-in and asking for a reset are metered, but not by meterRequest: they have no
   // account to key on, so `features/auth/authenticate.ts` meters them with

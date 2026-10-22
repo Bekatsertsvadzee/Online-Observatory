@@ -77,7 +77,7 @@ describe("authenticating a client", () => {
   it("resolves the signed-in user", async () => {
     const found = await authenticateClient(
       store,
-      `darkview_session=${TOKEN}`,
+      { cookie: `darkview_session=${TOKEN}` },
       now,
       "development",
     );
@@ -92,7 +92,7 @@ describe("authenticating a client", () => {
 
     const found = await authenticateClient(
       store,
-      `__Host-darkview_session=${TOKEN}`,
+      { cookie: `__Host-darkview_session=${TOKEN}` },
       now,
       "production",
     );
@@ -106,7 +106,7 @@ describe("authenticating a client", () => {
     // `.darkview.ge`, and the browser would attach it to this handshake.
     const found = await authenticateClient(
       store,
-      `darkview_session=${TOKEN}`,
+      { cookie: `darkview_session=${TOKEN}` },
       now,
       "production",
     );
@@ -116,7 +116,7 @@ describe("authenticating a client", () => {
   it("refuses the __Host- name outside production, where nothing sets it", async () => {
     const found = await authenticateClient(
       store,
-      `__Host-darkview_session=${TOKEN}`,
+      { cookie: `__Host-darkview_session=${TOKEN}` },
       now,
       "development",
     );
@@ -124,16 +124,16 @@ describe("authenticating a client", () => {
   });
 
   it("refuses an unknown token", async () => {
-    expect(await authenticateClient(store, "darkview_session=guessed", now)).toBeNull();
+    expect(await authenticateClient(store, { cookie: "darkview_session=guessed" }, now)).toBeNull();
   });
 
   it("refuses a lapsed session", async () => {
     const later = new Date(now.getTime() + 61 * 60_000);
-    expect(await authenticateClient(store, `darkview_session=${TOKEN}`, later)).toBeNull();
+    expect(await authenticateClient(store, { cookie: `darkview_session=${TOKEN}` }, later)).toBeNull();
   });
 
   it("refuses a request carrying no cookie", async () => {
-    expect(await authenticateClient(store, undefined, now)).toBeNull();
+    expect(await authenticateClient(store, {}, now)).toBeNull();
   });
 
   it("never asks storage for the token itself", async () => {
@@ -150,9 +150,59 @@ describe("authenticating a client", () => {
       mayWatchMission: store.mayWatchMission.bind(store),
     };
 
-    await authenticateClient(spy, `darkview_session=${TOKEN}`, now);
+    await authenticateClient(spy, { cookie: `darkview_session=${TOKEN}` }, now);
 
     expect(asked).not.toContain(TOKEN);
     expect(asked).toEqual([hashSessionToken(TOKEN)]);
+  });
+});
+
+describe("a native client's bearer session (ADR-061)", () => {
+  const NATIVE = "a-native-session-token-of-forty-three-chars";
+
+  beforeEach(() => {
+    store.registerUserSession(
+      hashSessionToken(NATIVE),
+      user,
+      new Date(now.getTime() + 60 * 60_000),
+      "NATIVE",
+    );
+  });
+
+  it("resolves a NATIVE session from Authorization: Bearer", async () => {
+    expect(await authenticateClient(store, { authorization: `Bearer ${NATIVE}` }, now)).toEqual(
+      user,
+    );
+  });
+
+  it("refuses a WEB session's token presented as a bearer", async () => {
+    // A cookie session's token must not be replayable outside a cookie.
+    const webToken = "a-browser-session-cookie-value-long-enough";
+    store.registerUserSession(hashSessionToken(webToken), user, new Date(now.getTime() + 60_000));
+    expect(await authenticateClient(store, { authorization: `Bearer ${webToken}` }, now)).toBeNull();
+  });
+
+  it("refuses a NATIVE token presented as the cookie", async () => {
+    expect(
+      await authenticateClient(store, { cookie: `darkview_session=${NATIVE}` }, now, "development"),
+    ).toBeNull();
+  });
+
+  it("judges by the header alone: a malformed one is not rescued by a good cookie", async () => {
+    expect(
+      await authenticateClient(
+        store,
+        { authorization: "Basic dXNlcjpwYXNz", cookie: `darkview_session=${TOKEN}` },
+        now,
+        "development",
+      ),
+    ).toBeNull();
+  });
+
+  it("refuses a lapsed native session", async () => {
+    const later = new Date(now.getTime() + 61 * 60_000);
+    expect(
+      await authenticateClient(store, { authorization: `Bearer ${NATIVE}` }, later),
+    ).toBeNull();
   });
 });

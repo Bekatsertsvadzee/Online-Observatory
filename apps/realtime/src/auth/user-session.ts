@@ -71,23 +71,45 @@ export function isAllowedOrigin(origin: string | undefined, appUrl: string): boo
 }
 
 /**
+ * The bearer token on an upgrade or stream request (ADR-061): `undefined` without an
+ * Authorization header, `null` with one that is not a well-formed bearer credential.
+ * The same grammar as the API's `requestBearerToken`; duplicated for the reason the
+ * cookie name is.
+ */
+export function readBearer(header: string | undefined): string | null | undefined {
+  if (header === undefined) return undefined;
+  const match = /^Bearer ([A-Za-z0-9_-]{32,128})$/.exec(header.trim());
+  return match ? match[1] : null;
+}
+
+/**
  * Who is on the other end of this upgrade request, if anyone.
+ *
+ * With an Authorization header the request is judged by its bearer token alone, as a
+ * NATIVE session (ADR-061 §4); the cookies are not a fallback. Without one, the WEB
+ * session cookie.
  *
  * Deliberately does not check the CSRF cookie the API's `getCurrentSession`
  * checks. That cookie defends form posts, where the browser attaches credentials
  * to a request another site composed; here the same defence is the Origin check
- * above, performed before this runs. Requiring the CSRF cookie as well would not
- * add a check -- it is readable by our own page's script and so by anything that
- * has already defeated the origin rule.
+ * the caller performs for a cookie request before this runs. Requiring the CSRF
+ * cookie as well would not add a check -- it is readable by our own page's script
+ * and so by anything that has already defeated the origin rule.
  */
 export async function authenticateClient(
   store: MissionChannelStore,
-  cookieHeader: string | undefined,
+  request: { cookie?: string; authorization?: string },
   now: Date,
   nodeEnv: string | undefined = process.env.NODE_ENV,
 ): Promise<ChannelUser | null> {
-  const token = readCookie(cookieHeader, sessionCookieName(nodeEnv));
+  const bearer = readBearer(request.authorization);
+  if (bearer !== undefined) {
+    if (bearer === null) return null;
+    return store.findUserBySessionTokenHash(hashSessionToken(bearer), now, "NATIVE");
+  }
+
+  const token = readCookie(request.cookie, sessionCookieName(nodeEnv));
   if (!token) return null;
 
-  return store.findUserBySessionTokenHash(hashSessionToken(token), now);
+  return store.findUserBySessionTokenHash(hashSessionToken(token), now, "WEB");
 }

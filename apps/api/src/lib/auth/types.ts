@@ -20,7 +20,10 @@ export type VerifiedSession = {
   id: string;
   user: AuthenticatedUser;
   expiresAt: Date;
+  /** Empty for a bearer session, which has no CSRF cookie (ADR-061). */
   csrfToken: string;
+  /** How the request proved it: the web client's cookies, or a native bearer token. */
+  credential: "cookie" | "bearer";
 };
 
 export interface SessionProvider {

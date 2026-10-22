@@ -126,6 +126,20 @@ class SignInRequest(BaseModel):
     password: str = Field(..., max_length=128, min_length=1)
 
 
+class NativeSession(BaseModel):
+    """
+    A native client's session (ADR-061). `token` is shown once; the platform keeps
+    only its hash. Present it as `Authorization: Bearer <token>` until `expiresAt`.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    user: User
+    token: str = Field(..., min_length=32)
+    expires_at: AwareDatetime = Field(..., alias='expiresAt')
+
+
 class VerifyEmailRequest(BaseModel):
     model_config = ConfigDict(
         extra='forbid',

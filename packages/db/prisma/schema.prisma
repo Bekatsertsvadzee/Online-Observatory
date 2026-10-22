@@ -13,6 +13,13 @@ enum UserRole {
   OPERATOR
 }
 
+/// ADR-061: which client a session belongs to. A cookie is honoured only for WEB, a
+/// bearer token only for NATIVE, so neither credential stands in for the other.
+enum SessionClient {
+  WEB
+  NATIVE
+}
+
 enum AuthEventType {
   REGISTERED
   EMAIL_VERIFIED
@@ -431,6 +438,7 @@ model Session {
   id            String   @id @default(uuid()) @db.Uuid
   tokenHash     String   @unique
   csrfTokenHash String
+  client        SessionClient @default(WEB)
   userId        String   @db.Uuid
   expiresAt     DateTime
   createdAt     DateTime @default(now())

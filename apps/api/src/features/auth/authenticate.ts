@@ -3,6 +3,7 @@ import "server-only";
 import type {
   ErrorCode,
   Locale,
+  NativeSession,
   RegisterRequest,
   SignInRequest,
   User,
@@ -16,7 +17,7 @@ import { recordAuthEvent } from "@/lib/auth/audit";
 import { createOpaqueToken, hashToken } from "@/lib/auth/crypto";
 import { sendEmailVerification } from "@/lib/auth/email-verification";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
-import { createSession } from "@/lib/auth/session";
+import { createNativeSession, createSession } from "@/lib/auth/session";
 import { getDatabase } from "@/lib/db/client";
 import {
   AUTHENTICATION_POLICY,
@@ -64,6 +65,30 @@ export function normalizedEmail(value: string) {
 export async function signIn(
   request: SignInRequest,
 ): Promise<{ ok: true; user: User } | Refusal> {
+  const result = await checkCredentials(request);
+  if (!result.ok) return result;
+  await createSession(result.user.id);
+  await recordAuthEvent("LOGIN_SUCCEEDED", { userId: result.user.id, actor: result.actor });
+  return { ok: true, user: result.user };
+}
+
+/**
+ * ADR-061 §1: the same checks as `signIn`, answered with a bearer session in the body
+ * instead of cookies.
+ */
+export async function signInNative(
+  request: SignInRequest,
+): Promise<{ ok: true; session: NativeSession } | Refusal> {
+  const result = await checkCredentials(request);
+  if (!result.ok) return result;
+  const { token, expiresAt } = await createNativeSession(result.user.id);
+  await recordAuthEvent("LOGIN_SUCCEEDED", { userId: result.user.id, actor: result.actor });
+  return { ok: true, session: { user: result.user, token, expiresAt: expiresAt.toISOString() } };
+}
+
+async function checkCredentials(
+  request: SignInRequest,
+): Promise<{ ok: true; user: User; actor: string } | Refusal> {
   const email = normalizedEmail(request.email);
   const actor = await requestActor();
   const identity = `${actor}:${email}`;
@@ -91,9 +116,7 @@ export async function signIn(
     return refuse(403, "EMAIL_UNVERIFIED", "Verify the email address before signing in.");
   }
 
-  await createSession(user.id);
-  await recordAuthEvent("LOGIN_SUCCEEDED", { userId: user.id, actor });
-  return { ok: true, user: toContractUser(user) };
+  return { ok: true, user: toContractUser(user), actor };
 }
 
 /**
