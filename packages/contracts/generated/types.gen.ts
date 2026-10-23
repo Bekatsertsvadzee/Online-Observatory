@@ -992,6 +992,25 @@ export type HorizonMaskEntry = {
     minAltitudeDegrees: number;
 };
 
+export type ObservatoryHorizon = {
+    observatoryId: string;
+    /**
+     * Rounded to 0.1°, about ten kilometres: enough to place the stars, and no
+     * closer than that. A partner's site is somebody's property.
+     *
+     */
+    latitudeDegrees: number;
+    /**
+     * Rounded to 0.1°, as `latitudeDegrees`.
+     */
+    longitudeDegrees: number;
+    minAltitudeDegrees: number | null;
+    /**
+     * Surveyed bearings in order of azimuth.
+     */
+    mask: Array<HorizonMaskEntry>;
+};
+
 /**
  * Inclusive-start, exclusive-end sector, measured clockwise from north.
  */
@@ -3948,6 +3967,36 @@ export type GetObservatoryUptimeResponses = {
 };
 
 export type GetObservatoryUptimeResponse = GetObservatoryUptimeResponses[keyof GetObservatoryUptimeResponses];
+
+export type GetObservatoryHorizonData = {
+    body?: never;
+    path: {
+        /**
+         * An `id` from `GET /observatories`, or for an operator any observatory.
+         */
+        observatoryId: string;
+    };
+    query?: never;
+    url: '/observatories/{observatoryId}/horizon';
+};
+
+export type GetObservatoryHorizonErrors = {
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+};
+
+export type GetObservatoryHorizonError = GetObservatoryHorizonErrors[keyof GetObservatoryHorizonErrors];
+
+export type GetObservatoryHorizonResponses = {
+    /**
+     * The horizon.
+     */
+    200: ObservatoryHorizon;
+};
+
+export type GetObservatoryHorizonResponse = GetObservatoryHorizonResponses[keyof GetObservatoryHorizonResponses];
 
 export type ListBookableObservatoriesData = {
     body?: never;

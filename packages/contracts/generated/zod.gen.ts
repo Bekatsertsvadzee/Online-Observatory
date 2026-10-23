@@ -664,6 +664,14 @@ export const zHorizonMaskEntry = z.strictObject({
     minAltitudeDegrees: z.number().gte(0).lte(90)
 });
 
+export const zObservatoryHorizon = z.strictObject({
+    observatoryId: z.uuid(),
+    latitudeDegrees: z.number().gte(-90).lte(90),
+    longitudeDegrees: z.number().gte(-180).lte(180),
+    minAltitudeDegrees: z.number().gte(0).lte(90).nullable(),
+    mask: z.array(zHorizonMaskEntry)
+});
+
 /**
  * Inclusive-start, exclusive-end sector, measured clockwise from north.
  */
@@ -2467,6 +2475,15 @@ export const zGetObservatoryUptimePath = z.object({
  * Thirty days of link uptime.
  */
 export const zGetObservatoryUptimeResponse = zObservatoryUptime;
+
+export const zGetObservatoryHorizonPath = z.object({
+    observatoryId: z.uuid()
+});
+
+/**
+ * The horizon.
+ */
+export const zGetObservatoryHorizonResponse = zObservatoryHorizon;
 
 /**
  * Every bookable observatory.

@@ -673,6 +673,36 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /observatories/{observatoryId}/horizon:
+    get:
+      operationId: getObservatoryHorizon
+      tags: [observatory]
+      summary: The horizon the telescope cannot see below, for drawing the sky.
+      description: |
+        Phase 6.2. The surveyed horizon mask and the lowest altitude the observatory
+        points at, so the live room's sky chart can shade what the telescope cannot
+        reach. Read-only and drawn only: the cloud and the agent each enforce the full
+        safety envelope themselves, and nothing here changes it.
+
+        `minAltitudeDegrees` is null and `mask` empty when the observatory has no safety
+        envelope recorded. Between surveyed bearings the horizon is interpolated linearly,
+        wrapping across north, as the agent reads it (`horizon_minimum_altitude`).
+
+        ADR-019: answered for an observatory `GET /observatories` lists. An id that does
+        not exist and one that is not bookable are one 404.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/ObservatoryId"
+      responses:
+        "200":
+          description: The horizon.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObservatoryHorizon"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /observatories:
     get:
       operationId: listBookableObservatories
@@ -4221,6 +4251,36 @@ components:
           type: number
           minimum: 0
           maximum: 90
+
+    ObservatoryHorizon:
+      type: object
+      additionalProperties: false
+      required: [observatoryId, latitudeDegrees, longitudeDegrees, minAltitudeDegrees, mask]
+      properties:
+        observatoryId:
+          type: string
+          format: uuid
+        latitudeDegrees:
+          type: number
+          minimum: -90
+          maximum: 90
+          description: |
+            Rounded to 0.1°, about ten kilometres: enough to place the stars, and no
+            closer than that. A partner's site is somebody's property.
+        longitudeDegrees:
+          type: number
+          minimum: -180
+          maximum: 180
+          description: Rounded to 0.1°, as `latitudeDegrees`.
+        minAltitudeDegrees:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 90
+        mask:
+          type: array
+          description: Surveyed bearings in order of azimuth.
+          items:
+            $ref: "#/components/schemas/HorizonMaskEntry"
 
     AzimuthSector:
       type: object
