@@ -1170,18 +1170,95 @@ export type Slot = {
     priceMinor: number;
     currency: Currency;
     unavailableReason?: SlotUnavailableReason | null;
+    forecast: SlotForecast;
 };
 
+/**
+ * Clients ADR-068. The forecast for the hours the slot touches: its cloud cover is
+ * the cloudiest of them, and it is UNKNOWN when any of them has no stored forecast or
+ * only one older than the configured maximum age. **Advisory only**, as viewing
+ * conditions are: it never sets or clears a weather hold and changes no price.
+ *
+ */
+export type SlotForecast = {
+    status: ViewingConditionsStatus;
+    /**
+     * Null when UNKNOWN, or when the source gave no total cover.
+     */
+    cloudCoverPercent: number | null;
+};
+
+/**
+ * HELD_FOR_WAITLIST (clients ADR-068): a freed slot offered to the first person
+ * waiting for it, for fifteen minutes. Only they may reserve it meanwhile.
+ *
+ */
 export const SlotUnavailableReason = {
     ALREADY_BOOKED: 'ALREADY_BOOKED',
     OUTSIDE_ASTRONOMICAL_DARKNESS: 'OUTSIDE_ASTRONOMICAL_DARKNESS',
     WEATHER_HOLD: 'WEATHER_HOLD',
     OBSERVATORY_OFFLINE: 'OBSERVATORY_OFFLINE',
     MAINTENANCE: 'MAINTENANCE',
-    IN_THE_PAST: 'IN_THE_PAST'
+    IN_THE_PAST: 'IN_THE_PAST',
+    HELD_FOR_WAITLIST: 'HELD_FOR_WAITLIST'
 } as const;
 
+/**
+ * HELD_FOR_WAITLIST (clients ADR-068): a freed slot offered to the first person
+ * waiting for it, for fifteen minutes. Only they may reserve it meanwhile.
+ *
+ */
 export type SlotUnavailableReason = typeof SlotUnavailableReason[keyof typeof SlotUnavailableReason];
+
+/**
+ * Clients ADR-068. WAITING in line; OFFERED the freed slot until `offerExpiresAt`;
+ * CLAIMED by reserving it; LAPSED when the offer ran out; ENDED when the slot started
+ * or was booked by someone else first; LEFT when its holder left the list.
+ *
+ */
+export const WaitlistEntryStatus = {
+    WAITING: 'WAITING',
+    OFFERED: 'OFFERED',
+    CLAIMED: 'CLAIMED',
+    LAPSED: 'LAPSED',
+    ENDED: 'ENDED',
+    LEFT: 'LEFT'
+} as const;
+
+/**
+ * Clients ADR-068. WAITING in line; OFFERED the freed slot until `offerExpiresAt`;
+ * CLAIMED by reserving it; LAPSED when the offer ran out; ENDED when the slot started
+ * or was booked by someone else first; LEFT when its holder left the list.
+ *
+ */
+export type WaitlistEntryStatus = typeof WaitlistEntryStatus[keyof typeof WaitlistEntryStatus];
+
+export type WaitlistEntry = {
+    id: string;
+    observatoryId: string;
+    slotStartAt: string;
+    durationMinutes: number;
+    status: WaitlistEntryStatus;
+    /**
+     * Place in line, counting from 1, while WAITING. Null otherwise.
+     */
+    position: number | null;
+    /**
+     * While OFFERED, when the hold on the slot lapses.
+     */
+    offerExpiresAt: string | null;
+    createdAt: string;
+};
+
+export type WaitlistEntryList = {
+    items: Array<WaitlistEntry>;
+};
+
+export type JoinWaitlistRequest = {
+    observatoryId: string;
+    slotStartAt: string;
+    durationMinutes: number;
+};
 
 export type SlotList = {
     observatoryId: string;
@@ -4498,6 +4575,99 @@ export type ListSlotsResponses = {
 };
 
 export type ListSlotsResponse = ListSlotsResponses[keyof ListSlotsResponses];
+
+export type ListMyWaitlistEntriesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/waitlist';
+};
+
+export type ListMyWaitlistEntriesErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+};
+
+export type ListMyWaitlistEntriesError = ListMyWaitlistEntriesErrors[keyof ListMyWaitlistEntriesErrors];
+
+export type ListMyWaitlistEntriesResponses = {
+    /**
+     * The caller's places.
+     */
+    200: WaitlistEntryList;
+};
+
+export type ListMyWaitlistEntriesResponse = ListMyWaitlistEntriesResponses[keyof ListMyWaitlistEntriesResponses];
+
+export type JoinWaitlistData = {
+    body: JoinWaitlistRequest;
+    path?: never;
+    query?: never;
+    url: '/waitlist';
+};
+
+export type JoinWaitlistErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type JoinWaitlistError = JoinWaitlistErrors[keyof JoinWaitlistErrors];
+
+export type JoinWaitlistResponses = {
+    /**
+     * In line.
+     */
+    201: WaitlistEntry;
+};
+
+export type JoinWaitlistResponse = JoinWaitlistResponses[keyof JoinWaitlistResponses];
+
+export type LeaveWaitlistData = {
+    body?: never;
+    path: {
+        entryId: string;
+    };
+    query?: never;
+    url: '/waitlist/{entryId}';
+};
+
+export type LeaveWaitlistErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+};
+
+export type LeaveWaitlistError = LeaveWaitlistErrors[keyof LeaveWaitlistErrors];
+
+export type LeaveWaitlistResponses = {
+    /**
+     * Left.
+     */
+    204: void;
+};
+
+export type LeaveWaitlistResponse = LeaveWaitlistResponses[keyof LeaveWaitlistResponses];
 
 export type ListBookingsData = {
     body?: never;

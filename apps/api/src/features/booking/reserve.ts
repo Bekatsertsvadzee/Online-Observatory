@@ -22,6 +22,7 @@ import {
 } from "@darkview/db/loyalty";
 import { queueEmail } from "@darkview/db/notifications";
 import { hashVoucherCode, normaliseVoucherCode } from "@darkview/db/vouchers";
+import { offersAround } from "@darkview/db/waitlist";
 
 import {
   findBookableObservatory,
@@ -455,6 +456,25 @@ export async function reserveSlot(input: {
       };
     default:
       break;
+  }
+
+  // Clients ADR-068: a freed slot offered to someone waiting is theirs for a while.
+  if (
+    (
+      await offersAround(
+        getDatabase(),
+        { observatoryId: observatory.id, slotStartAt, durationMinutes: slot.durationMinutes },
+        now,
+        userId,
+      )
+    ).length > 0
+  ) {
+    return {
+      ok: false,
+      status: 409,
+      code: "SLOT_UNAVAILABLE",
+      message: "That slot is being offered to someone on its waitlist.",
+    };
   }
 
   let target;

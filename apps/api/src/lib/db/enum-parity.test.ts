@@ -43,6 +43,7 @@ const SHARED_ENUMS = [
   "TargetPositionSource",
   "TargetType",
   "UserRole",
+  "WaitlistEntryStatus",
   "WeatherStatus",
 ] as const;
 

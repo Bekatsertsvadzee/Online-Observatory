@@ -2,6 +2,7 @@ import { zListSlotsQuery } from "@darkview/contracts/zod";
 
 import { listSlotsForDate } from "@/features/booking/slots";
 import { apiError } from "@/lib/http/api-error";
+import { getServerEnvironment } from "@/lib/validation/env";
 
 /**
  * GET /slots?observatoryId=...&date=YYYY-MM-DD -- bookable slots on one
@@ -40,7 +41,12 @@ export async function GET(request: Request) {
     return apiError(422, "VALIDATION_FAILED", `${date} is not a real date.`);
   }
 
-  const slots = await listSlotsForDate(observatoryId as string, date, new Date());
+  const slots = await listSlotsForDate(
+    observatoryId as string,
+    date,
+    new Date(),
+    getServerEnvironment().VIEWING_CONDITIONS_MAX_AGE_MINUTES,
+  );
 
   // Unknown and not bookable are one answer. Whether a suspended partner node
   // exists is not something a caller may learn by probing ids.

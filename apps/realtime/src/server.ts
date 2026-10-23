@@ -5,6 +5,7 @@ import * as Sentry from "@sentry/node";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { PrismaClient } from "@darkview/db";
+import { sweepWaitlist } from "@darkview/db/waitlist";
 import { monitoringOptions } from "@darkview/monitoring/options";
 
 import { authenticateAgent } from "@/auth/device-token";
@@ -53,6 +54,13 @@ const EMAIL_DISPATCH_INTERVAL_SECONDS = 30;
  * Neither is urgent to the minute; both are idempotent.
  */
 const ENTITLEMENT_SWEEP_INTERVAL_SECONDS = 60;
+
+/**
+ * Clients ADR-068. How often freed slots are offered and lapsed offers moved on. An
+ * offer lasts fifteen minutes, so a minute is a small share of it; the demo's slower
+ * sweep (`sweepSeconds`) keeps an idle database quiet.
+ */
+const WAITLIST_SWEEP_INTERVAL_SECONDS = 60;
 
 /**
  * How often ended subscription periods are expired, cancelled or charged (ADR-022).
@@ -469,6 +477,16 @@ if (process.env.NODE_ENV !== "test") {
       });
     },
     sweepSeconds(deployment, REMINDER_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS) * 1000,
+  );
+
+  // Clients ADR-068, sharing the notifications client: an offer queues an email.
+  setInterval(
+    () => {
+      void sweepWaitlist(notifications, new Date()).catch((error) => {
+        console.error("darkview realtime: waitlist", error);
+      });
+    },
+    sweepSeconds(deployment, WAITLIST_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS) * 1000,
   );
 
   // DV-111, sharing the notifications client: both write to the email outbox.

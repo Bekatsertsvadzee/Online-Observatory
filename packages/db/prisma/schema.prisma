@@ -297,6 +297,8 @@ enum SlotUnavailableReason {
   OBSERVATORY_OFFLINE
   MAINTENANCE
   IN_THE_PAST
+  /// Clients ADR-068: offered to the first person on its waitlist.
+  HELD_FOR_WAITLIST
 }
 
 /// Contract: PaymentProvider. SANDBOX is never selectable in production.
@@ -422,6 +424,7 @@ model User {
   votes               Vote[]
   cardDraws           CardDraw[]
   cardPrizes          CardPrize[]
+  waitlistEntries     WaitlistEntry[]
 }
 
 model Account {
@@ -553,6 +556,7 @@ model Observatory {
   cardDraws           CardDraw[]
   cardDrawWeeks       CardDrawWeek[]
   cardPrizes          CardPrize[]
+  waitlistEntries     WaitlistEntry[]
 }
 
 /// Contract: SafetyEnvelopeConfig. The numbers that stop the telescope destroying
@@ -1482,6 +1486,8 @@ enum EmailNotificationKind {
   OBSERVER_PACK_REFUNDED
   /// ADR-062: a weekly card held a prize.
   CARD_PRIZE_WON
+  /// Clients ADR-068: a freed slot is held for the first person waiting for it.
+  WAITLIST_OFFER
 }
 
 /// Contract: BookingLossCause (DV-111).
@@ -1790,5 +1796,41 @@ model CardPrize {
   redeemedBooking        Booking?        @relation(fields: [redeemedBookingId], references: [id], onDelete: SetNull)
   redeemedObserverPack   ObserverPack?   @relation(fields: [redeemedObserverPackId], references: [id], onDelete: SetNull)
 
+  @@index([userId, createdAt])
+}
+
+/// Contract: WaitlistEntryStatus (clients ADR-068).
+enum WaitlistEntryStatus {
+  WAITING
+  OFFERED
+  CLAIMED
+  LAPSED
+  ENDED
+  LEFT
+}
+
+/// Clients ADR-068. A place in line for a slot somebody else holds. The realtime sweep
+/// offers a freed slot to the earliest WAITING place, holding it until
+/// `offerExpiresAt`; reserving it claims the place. At most one active (WAITING or
+/// OFFERED) place per person per slot: `WaitlistEntry_active_place_key`, a partial
+/// unique index in the migration.
+model WaitlistEntry {
+  id               String              @id @default(uuid()) @db.Uuid
+  userId           String              @db.Uuid
+  observatoryId    String              @db.Uuid
+  slotStartAt      DateTime
+  durationMinutes  Int
+  status           WaitlistEntryStatus @default(WAITING)
+  offeredAt        DateTime?
+  offerExpiresAt   DateTime?
+  endedAt          DateTime?
+  claimedBookingId String?             @unique @db.Uuid
+  isDemo           Boolean             @default(false)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  observatory      Observatory         @relation(fields: [observatoryId], references: [id], onDelete: Cascade)
+
+  @@index([observatoryId, slotStartAt, status, createdAt])
   @@index([userId, createdAt])
 }
