@@ -1025,9 +1025,11 @@ export const zGiftVoucher = z.strictObject({
     durationMinutes: z.int().gt(0),
     priceMinor: z.int().gte(0),
     currency: zCurrency,
+    code: z.string().nullable(),
     codeLast4: z.string().nullable(),
     recipientEmail: z.email().nullable(),
     recipientName: z.string().nullable(),
+    message: z.string().nullable(),
     expiresAt: z.iso.datetime().nullable(),
     redeemedBookingId: z.uuid().nullable(),
     createdAt: z.iso.datetime()

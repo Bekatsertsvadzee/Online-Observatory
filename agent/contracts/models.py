@@ -1186,9 +1186,11 @@ class GiftVoucher(BaseModel):
     duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
     price_minor: int = Field(..., alias='priceMinor', ge=0)
     currency: Currency
+    code: str | None = Field(..., description='Clients ADR-067. The full code, for the buyer to hand over or print, while the\nvoucher is ACTIVE. Null otherwise, and on a deployment with no voucher secret.\nDerived again on every read; never stored.\n')
     code_last4: str | None = Field(..., alias='codeLast4', description="The code's last four characters. Null until the payment settles.")
     recipient_email: EmailStr | None = Field(..., alias='recipientEmail')
     recipient_name: str | None = Field(..., alias='recipientName')
+    message: str | None = Field(..., description="The buyer's note, as they wrote it.")
     expires_at: AwareDatetime | None = Field(..., alias='expiresAt', description='Twelve months from payment. Null until the payment settles.')
     redeemed_booking_id: UUID | None = Field(..., alias='redeemedBookingId')
     created_at: AwareDatetime = Field(..., alias='createdAt')
