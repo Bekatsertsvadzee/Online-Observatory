@@ -52,6 +52,16 @@ export function when(locale: EmailLocale, iso: string, timeZone: string) {
   }).format(new Date(iso));
 }
 
+/** "21:15" in the observatory's own time. */
+function clock(locale: EmailLocale, iso: string, timeZone: string) {
+  return new Intl.DateTimeFormat(locale === "ka" ? "ka-GE" : "en-GB", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date(iso));
+}
+
 /** "15 December 2026": a voucher's or prize's last day, in the observatory's time. */
 function day(locale: EmailLocale, iso: string, timeZone = "Asia/Tbilisi") {
   return new Intl.DateTimeFormat(locale === "ka" ? "ka-GE" : "en-GB", {
@@ -361,6 +371,40 @@ const DRAFTS: Record<string, Record<EmailLocale, (data: Data) => Draft>> = {
       ],
       action: { label: "სეანსის დაჯავშნა", path: "/ka/app/book" },
     }),
+  },
+  WAITLIST_OFFER: {
+    en: (data) => {
+      const observatory = data.observatory as Names & { timezone: string };
+      const at = when("en", String(data.slotStartAt), observatory.timezone);
+      const until = clock("en", String(data.offerExpiresAt), observatory.timezone);
+      return {
+        subject: `The slot you waited for is free: ${at}`,
+        paragraphs: [
+          `The ${data.durationMinutes}-minute session at ${observatory.nameEn}, ${at} local time, has come free, and it is held for you until ${until}.`,
+          "Reserve it on the booking page and pay as usual. After that, it goes to the next person waiting.",
+        ],
+        action: {
+          label: "Reserve it",
+          path: `/en/app/book?startAt=${encodeURIComponent(String(data.slotStartAt))}`,
+        },
+      };
+    },
+    ka: (data) => {
+      const observatory = data.observatory as Names & { timezone: string };
+      const at = when("ka", String(data.slotStartAt), observatory.timezone);
+      const until = clock("ka", String(data.offerExpiresAt), observatory.timezone);
+      return {
+        subject: `სეანსი, რომელსაც ელოდი, გათავისუფლდა: ${at}`,
+        paragraphs: [
+          `${data.durationMinutes}-წუთიანი სეანსი — ${observatory.nameKa}, ${at} (ადგილობრივი დრო) — გათავისუფლდა და ${until}-მდე შენთვისაა დაკავებული.`,
+          "დაჯავშნე ჯავშნის გვერდზე და გადაიხადე ჩვეულებრივ. ამის შემდეგ ის რიგში შემდეგს გადაეცემა.",
+        ],
+        action: {
+          label: "დაჯავშნა",
+          path: `/ka/app/book?startAt=${encodeURIComponent(String(data.slotStartAt))}`,
+        },
+      };
+    },
   },
   CARD_PRIZE_WON: {
     en: (data) => {

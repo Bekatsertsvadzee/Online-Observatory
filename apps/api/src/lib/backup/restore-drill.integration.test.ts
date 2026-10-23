@@ -228,6 +228,8 @@ describe("a backup restores into an empty database", () => {
       "MissionSession_active_owner_unique",
       "Mission_active_per_observatory_unique",
       "Payment_subscription_period_live_key",
+      "WaitlistEntry_active_place_key",
+      "WaitlistEntry_one_offer_per_slot_key",
     ]);
 
     for (const index of partial) {

@@ -738,13 +738,31 @@ export const zBookableTelescope = z.strictObject({
     focalLengthMm: z.number().gt(0)
 });
 
+/**
+ * Clients ADR-068. The forecast for the hours the slot touches: its cloud cover is
+ * the cloudiest of them, and it is UNKNOWN when any of them has no stored forecast or
+ * only one older than the configured maximum age. **Advisory only**, as viewing
+ * conditions are: it never sets or clears a weather hold and changes no price.
+ *
+ */
+export const zSlotForecast = z.strictObject({
+    status: zViewingConditionsStatus,
+    cloudCoverPercent: z.number().gte(0).lte(100).nullable()
+});
+
+/**
+ * HELD_FOR_WAITLIST (clients ADR-068): a freed slot offered to the first person
+ * waiting for it, for fifteen minutes. Only they may reserve it meanwhile.
+ *
+ */
 export const zSlotUnavailableReason = z.enum([
     'ALREADY_BOOKED',
     'OUTSIDE_ASTRONOMICAL_DARKNESS',
     'WEATHER_HOLD',
     'OBSERVATORY_OFFLINE',
     'MAINTENANCE',
-    'IN_THE_PAST'
+    'IN_THE_PAST',
+    'HELD_FOR_WAITLIST'
 ]);
 
 export const zSlot = z.strictObject({
@@ -755,7 +773,44 @@ export const zSlot = z.strictObject({
     available: z.boolean(),
     priceMinor: z.int().gte(0),
     currency: zCurrency,
-    unavailableReason: zSlotUnavailableReason.nullish()
+    unavailableReason: zSlotUnavailableReason.nullish(),
+    forecast: zSlotForecast
+});
+
+/**
+ * Clients ADR-068. WAITING in line; OFFERED the freed slot until `offerExpiresAt`;
+ * CLAIMED by reserving it; LAPSED when the offer ran out; ENDED when the slot started
+ * or was booked by someone else first; LEFT when its holder left the list.
+ *
+ */
+export const zWaitlistEntryStatus = z.enum([
+    'WAITING',
+    'OFFERED',
+    'CLAIMED',
+    'LAPSED',
+    'ENDED',
+    'LEFT'
+]);
+
+export const zWaitlistEntry = z.strictObject({
+    id: z.uuid(),
+    observatoryId: z.uuid(),
+    slotStartAt: z.iso.datetime(),
+    durationMinutes: z.int().gt(0),
+    status: zWaitlistEntryStatus,
+    position: z.int().gte(1).nullable(),
+    offerExpiresAt: z.iso.datetime().nullable(),
+    createdAt: z.iso.datetime()
+});
+
+export const zWaitlistEntryList = z.strictObject({
+    items: z.array(zWaitlistEntry)
+});
+
+export const zJoinWaitlistRequest = z.strictObject({
+    observatoryId: z.uuid(),
+    slotStartAt: z.iso.datetime(),
+    durationMinutes: z.int().gt(0)
 });
 
 export const zSlotList = z.strictObject({
@@ -2647,6 +2702,27 @@ export const zListSlotsQuery = z.object({
  * Slots for the requested date.
  */
 export const zListSlotsResponse = zSlotList;
+
+/**
+ * The caller's places.
+ */
+export const zListMyWaitlistEntriesResponse = zWaitlistEntryList;
+
+export const zJoinWaitlistBody = zJoinWaitlistRequest;
+
+/**
+ * In line.
+ */
+export const zJoinWaitlistResponse = zWaitlistEntry;
+
+export const zLeaveWaitlistPath = z.object({
+    entryId: z.uuid()
+});
+
+/**
+ * Left.
+ */
+export const zLeaveWaitlistResponse = z.void();
 
 export const zListBookingsQuery = z.object({
     cursor: z.string().optional(),

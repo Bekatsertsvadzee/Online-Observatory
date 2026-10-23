@@ -6,7 +6,7 @@ import { apiError } from "@/lib/http/api-error";
 import { meterRequest, VOUCHER_PURCHASE_POLICY } from "@/lib/security/rate-limit";
 
 /**
- * GET /vouchers -- the gift vouchers the signed-in user bought, never their codes.
+ * GET /vouchers -- the gift vouchers the signed-in user bought; an ACTIVE one carries its code (clients ADR-067).
  * POST /vouchers -- buy one (DV-112).
  *
  * The price is Darkview's, read from the slot price for the length; the body names

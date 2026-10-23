@@ -1137,6 +1137,76 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /waitlist:
+    get:
+      operationId: listMyWaitlistEntries
+      tags: [booking]
+      summary: The places the signed-in customer holds or held on slot waitlists.
+      description: Clients ADR-068. Newest first; ended places stay for thirty days.
+      responses:
+        "200":
+          description: The caller's places.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WaitlistEntryList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: joinWaitlist
+      tags: [booking]
+      summary: Wait for a slot somebody else holds.
+      description: |
+        Clients ADR-068. Only a slot another booking holds can be waited for. When it
+        frees, the first in line is offered it for fifteen minutes (`HELD_FOR_WAITLIST`)
+        and told by email; reserving it claims the place.
+
+        409 when the slot is not held by someone else (book it), when the caller already
+        waits for it, or when the slot has started. 422 for a slot the observatory does
+        not offer, or at three active places.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JoinWaitlistRequest"
+      responses:
+        "201":
+          description: In line.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WaitlistEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /waitlist/{entryId}:
+    delete:
+      operationId: leaveWaitlist
+      tags: [booking]
+      summary: Leave a slot's waitlist, or turn down an offer.
+      description: Clients ADR-068. Another person's place and none are one 404.
+      parameters:
+        - name: entryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Left.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /bookings:
     get:
       operationId: listBookings
@@ -1461,8 +1531,8 @@ paths:
       tags: [booking]
       summary: The gift vouchers the signed-in user bought.
       description: |
-        DV-112. Never includes a code: codes are stored hashed and reach only the
-        email sent when the payment settles. `codeLast4` lets a buyer tell vouchers apart.
+        DV-112. Codes are stored hashed. `code` is derived again for the buyer while a
+        voucher is ACTIVE (clients ADR-067); `codeLast4` lets a buyer tell vouchers apart.
       responses:
         "200":
           description: The buyer's vouchers, newest first.
@@ -1480,7 +1550,7 @@ paths:
         DV-112. Opens a payment intent through the same provider path as a booking. When
         the payment settles the voucher becomes ACTIVE for twelve months and its code is
         emailed to `recipientEmail`, or to the buyer when none is given. Its buyer also
-        reads the full code on `GET /gift-vouchers` while it is ACTIVE (clients ADR-067).
+        reads the full code on `GET /vouchers` while it is ACTIVE (clients ADR-067).
         On the sandbox the intent's `redirectUrl` is the sandbox checkout, as for a
         booking.
 
@@ -4583,7 +4653,7 @@ components:
     Slot:
       type: object
       additionalProperties: false
-      required: [observatoryId, startAt, endAt, durationMinutes, available, priceMinor, currency]
+      required: [observatoryId, startAt, endAt, durationMinutes, available, priceMinor, currency, forecast]
       properties:
         observatoryId:
           type: string
@@ -4610,9 +4680,32 @@ components:
           oneOf:
             - $ref: "#/components/schemas/SlotUnavailableReason"
             - type: "null"
+        forecast:
+          $ref: "#/components/schemas/SlotForecast"
+
+    SlotForecast:
+      type: object
+      description: |
+        Clients ADR-068. The forecast for the hours the slot touches: its cloud cover is
+        the cloudiest of them, and it is UNKNOWN when any of them has no stored forecast or
+        only one older than the configured maximum age. **Advisory only**, as viewing
+        conditions are: it never sets or clears a weather hold and changes no price.
+      additionalProperties: false
+      required: [status, cloudCoverPercent]
+      properties:
+        status:
+          $ref: "#/components/schemas/ViewingConditionsStatus"
+        cloudCoverPercent:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+          description: Null when UNKNOWN, or when the source gave no total cover.
 
     SlotUnavailableReason:
       type: string
+      description: |
+        HELD_FOR_WAITLIST (clients ADR-068): a freed slot offered to the first person
+        waiting for it, for fifteen minutes. Only they may reserve it meanwhile.
       enum:
         - ALREADY_BOOKED
         - OUTSIDE_ASTRONOMICAL_DARKNESS
@@ -4620,6 +4713,79 @@ components:
         - OBSERVATORY_OFFLINE
         - MAINTENANCE
         - IN_THE_PAST
+        - HELD_FOR_WAITLIST
+
+    WaitlistEntryStatus:
+      type: string
+      description: |
+        Clients ADR-068. WAITING in line; OFFERED the freed slot until `offerExpiresAt`;
+        CLAIMED by reserving it; LAPSED when the offer ran out; ENDED when the slot started
+        or was booked by someone else first; LEFT when its holder left the list.
+      enum: [WAITING, OFFERED, CLAIMED, LAPSED, ENDED, LEFT]
+
+    WaitlistEntry:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - observatoryId
+        - slotStartAt
+        - durationMinutes
+        - status
+        - position
+        - offerExpiresAt
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        observatoryId:
+          type: string
+          format: uuid
+        slotStartAt:
+          type: string
+          format: date-time
+        durationMinutes:
+          type: integer
+          exclusiveMinimum: 0
+        status:
+          $ref: "#/components/schemas/WaitlistEntryStatus"
+        position:
+          type: [integer, "null"]
+          minimum: 1
+          description: Place in line, counting from 1, while WAITING. Null otherwise.
+        offerExpiresAt:
+          type: [string, "null"]
+          format: date-time
+          description: While OFFERED, when the hold on the slot lapses.
+        createdAt:
+          type: string
+          format: date-time
+
+    WaitlistEntryList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/WaitlistEntry"
+
+    JoinWaitlistRequest:
+      type: object
+      additionalProperties: false
+      required: [observatoryId, slotStartAt, durationMinutes]
+      properties:
+        observatoryId:
+          type: string
+          format: uuid
+        slotStartAt:
+          type: string
+          format: date-time
+        durationMinutes:
+          type: integer
+          exclusiveMinimum: 0
 
     SlotList:
       type: object

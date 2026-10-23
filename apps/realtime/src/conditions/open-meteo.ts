@@ -19,8 +19,11 @@ const HOURLY = [
   "wind_speed_10m",
 ] as const;
 
-/** Today and tomorrow in UTC, which covers the rest of tonight at any hour. */
-const FORECAST_DAYS = 2;
+/**
+ * A week ahead in UTC, which covers every night the booking board offers (clients
+ * ADR-068), and the rest of tonight at any hour.
+ */
+const FORECAST_DAYS = 7;
 
 const REQUEST_TIMEOUT_MS = 10_000;
 

@@ -95,12 +95,47 @@ async function describe(
   if (kind === "GIFT_VOUCHER_ISSUED" || kind === "GIFT_VOUCHER_RESTORED") {
     return describeGiftVoucher(database, kind, String(payload.voucherId), voucherCodeSecret);
   }
+  if (kind === "WAITLIST_OFFER") {
+    const data = await describeWaitlistOffer(database, String(payload.waitlistEntryId), now);
+    return data ? { data, recipient: null } : null;
+  }
   if (kind === "CARD_PRIZE_WON") {
     const data = await describeCardPrize(database, String(payload.cardPrizeId), now);
     return data ? { data, recipient: null } : null;
   }
   const data = await describeData(database, kind, payload);
   return data ? { data, recipient: null } : null;
+}
+
+/**
+ * Clients ADR-068. Only an offer still open is worth an email: one already claimed,
+ * lapsed or ended is not sent.
+ */
+async function describeWaitlistOffer(
+  database: PrismaClient,
+  entryId: string,
+  now: Date,
+): Promise<Record<string, unknown> | null> {
+  const entry = await database.waitlistEntry.findUnique({
+    where: { id: entryId },
+    select: {
+      id: true,
+      status: true,
+      slotStartAt: true,
+      durationMinutes: true,
+      offerExpiresAt: true,
+      observatory: { select: { nameEn: true, nameKa: true, timezone: true } },
+    },
+  });
+  if (!entry || entry.status !== "OFFERED" || !entry.offerExpiresAt) return null;
+  if (entry.offerExpiresAt <= now) return null;
+  return {
+    waitlistEntryId: entry.id,
+    slotStartAt: entry.slotStartAt.toISOString(),
+    durationMinutes: entry.durationMinutes,
+    offerExpiresAt: entry.offerExpiresAt.toISOString(),
+    observatory: entry.observatory,
+  };
 }
 
 /**

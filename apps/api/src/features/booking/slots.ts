@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { SlotList } from "@darkview/contracts";
+import type { SlotForecast, SlotList } from "@darkview/contracts";
 
 import { findBookableObservatory } from "@/features/booking/observatories";
 import { getDatabase } from "@/lib/db/client";
@@ -35,6 +35,7 @@ export async function listSlotsForDate(
   observatoryId: string,
   isoDate: string,
   now: Date,
+  forecastMaxAgeMinutes = 0,
 ): Promise<SlotList | null> {
   const observatory = await findBookableObservatory(observatoryId);
   if (!observatory) return null;
@@ -82,6 +83,29 @@ export async function listSlotsForDate(
     weatherHold: observatory.weatherHold,
   };
 
+  // Clients ADR-068: freed slots offered to the first person waiting, still open. GET
+  // /slots is public, so an offer reads as held to everyone here; the offeree sees it as
+  // theirs on GET /waitlist, and reserving it is open to them alone.
+  const offers = await getDatabase().waitlistEntry.findMany({
+    where: {
+      observatoryId: observatory.id,
+      status: "OFFERED",
+      offerExpiresAt: { gt: now },
+      slotStartAt: {
+        gt: new Date(window.duskAt.getTime() - HELD_LOOKBACK_MS),
+        lt: new Date(window.dawnAt.getTime() + SLOT_TURNAROUND_MINUTES * 60_000),
+      },
+    },
+    select: { slotStartAt: true, durationMinutes: true },
+  });
+
+  const forecastFor = await readSlotForecasts(
+    observatory.id,
+    window,
+    now,
+    forecastMaxAgeMinutes,
+  );
+
   return {
     ...empty,
     items: open.flatMap((interval) =>
@@ -91,8 +115,50 @@ export async function listSlotsForDate(
         now,
         observatory: state,
         held,
+        offers,
+        forecastFor,
       }),
     ),
+  };
+}
+
+const HOUR_MS = 3_600_000;
+
+/**
+ * Clients ADR-068. The forecast for any span of the night, from the hours the realtime
+ * service stored: the cloudiest hour the span touches, UNKNOWN when any of them has no
+ * forecast fresher than the maximum age. One read per night, not per slot.
+ */
+async function readSlotForecasts(
+  observatoryId: string,
+  window: { duskAt: Date; dawnAt: Date },
+  now: Date,
+  maxAgeMinutes: number,
+): Promise<(startMs: number, endMs: number) => SlotForecast> {
+  const unknown: SlotForecast = { status: "UNKNOWN", cloudCoverPercent: null };
+  if (maxAgeMinutes <= 0) return () => unknown;
+
+  const rows = await getDatabase().viewingForecastHour.findMany({
+    where: {
+      observatoryId,
+      at: {
+        gte: new Date(Math.floor(window.duskAt.getTime() / HOUR_MS) * HOUR_MS),
+        lt: window.dawnAt,
+      },
+      fetchedAt: { gte: new Date(now.getTime() - maxAgeMinutes * 60_000) },
+    },
+    select: { at: true, cloudCoverPercent: true },
+  });
+  const byHour = new Map(rows.map((row) => [row.at.getTime(), row.cloudCoverPercent]));
+
+  return (startMs, endMs) => {
+    let cloudiest: number | null = null;
+    for (let at = Math.floor(startMs / HOUR_MS) * HOUR_MS; at < endMs; at += HOUR_MS) {
+      if (!byHour.has(at)) return unknown;
+      const cover = byHour.get(at) ?? null;
+      if (cover !== null) cloudiest = cloudiest === null ? cover : Math.max(cloudiest, cover);
+    }
+    return { status: "KNOWN", cloudCoverPercent: cloudiest };
   };
 }
 

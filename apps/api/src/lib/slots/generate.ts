@@ -1,4 +1,4 @@
-import type { Slot, SlotUnavailableReason } from "@darkview/contracts";
+import type { Slot, SlotForecast, SlotUnavailableReason } from "@darkview/contracts";
 
 import type { NightWindow } from "@/lib/slots/darkness";
 
@@ -87,9 +87,19 @@ export type SlotAvailabilityInput = {
    * A start whose session would overlap one, or its turnaround, is ALREADY_BOOKED.
    */
   held: readonly HeldBooking[];
+  /**
+   * Clients ADR-068. Freed slots offered to the first person waiting, still open. A
+   * start that would overlap one is HELD_FOR_WAITLIST. The offeree's own offer is left
+   * out by the caller, so for them the slot is simply available.
+   */
+  offers?: readonly HeldBooking[];
+  /** Clients ADR-068. The forecast for [startMs, endMs); unknown when not given. */
+  forecastFor?: (startMs: number, endMs: number) => SlotForecast;
 };
 
 export type HeldBooking = { slotStartAt: Date; durationMinutes: number };
+
+const UNKNOWN_FORECAST: SlotForecast = { status: "UNKNOWN", cloudCoverPercent: null };
 
 /**
  * Whether a session starting at `startMs` would come within the turnaround of a
@@ -119,6 +129,7 @@ export function clashesWithHeld(
  *
  *   IN_THE_PAST         nothing the customer can do; the slot is simply gone
  *   ALREADY_BOOKED      specific to this slot -- another slot will work
+ *   HELD_FOR_WAITLIST   the same, for fifteen minutes, then perhaps free (ADR-068)
  *   WEATHER_HOLD        the whole night is off, but tomorrow may not be
  *   OBSERVATORY_OFFLINE a fault, and the least useful thing to tell someone
  *
@@ -133,6 +144,9 @@ function unavailableReason(
   if (slotStartAt.getTime() <= input.now.getTime()) return "IN_THE_PAST";
   if (clashesWithHeld(slotStartAt.getTime(), SLOT_DURATION_MINUTES, input.held)) {
     return "ALREADY_BOOKED";
+  }
+  if (clashesWithHeld(slotStartAt.getTime(), SLOT_DURATION_MINUTES, input.offers ?? [])) {
+    return "HELD_FOR_WAITLIST";
   }
   if (input.observatory.weatherHold) return "WEATHER_HOLD";
   if (!input.observatory.online) return "OBSERVATORY_OFFLINE";
@@ -171,6 +185,7 @@ export function generateSlots(input: SlotAvailabilityInput): Slot[] {
       priceMinor: PROVISIONAL_SLOT_PRICE_MINOR,
       currency: "GEL",
       unavailableReason: reason,
+      forecast: input.forecastFor?.(startMs, startMs + durationMs) ?? UNKNOWN_FORECAST,
     });
   }
 

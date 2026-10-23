@@ -881,13 +881,79 @@ class BookableTelescope(BaseModel):
     focal_length_mm: float = Field(..., alias='focalLengthMm', gt=0.0)
 
 
+class SlotForecast(BaseModel):
+    """
+    Clients ADR-068. The forecast for the hours the slot touches: its cloud cover is
+    the cloudiest of them, and it is UNKNOWN when any of them has no stored forecast or
+    only one older than the configured maximum age. **Advisory only**, as viewing
+    conditions are: it never sets or clears a weather hold and changes no price.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    status: ViewingConditionsStatus
+    cloud_cover_percent: float | None = Field(..., alias='cloudCoverPercent', description='Null when UNKNOWN, or when the source gave no total cover.', ge=0.0, le=100.0)
+
+
 class SlotUnavailableReason(StrEnum):
+    """
+    HELD_FOR_WAITLIST (clients ADR-068): a freed slot offered to the first person
+    waiting for it, for fifteen minutes. Only they may reserve it meanwhile.
+
+    """
     already_booked = 'ALREADY_BOOKED'
     outside_astronomical_darkness = 'OUTSIDE_ASTRONOMICAL_DARKNESS'
     weather_hold = 'WEATHER_HOLD'
     observatory_offline = 'OBSERVATORY_OFFLINE'
     maintenance = 'MAINTENANCE'
     in_the_past = 'IN_THE_PAST'
+    held_for_waitlist = 'HELD_FOR_WAITLIST'
+
+
+class WaitlistEntryStatus(StrEnum):
+    """
+    Clients ADR-068. WAITING in line; OFFERED the freed slot until `offerExpiresAt`;
+    CLAIMED by reserving it; LAPSED when the offer ran out; ENDED when the slot started
+    or was booked by someone else first; LEFT when its holder left the list.
+
+    """
+    waiting = 'WAITING'
+    offered = 'OFFERED'
+    claimed = 'CLAIMED'
+    lapsed = 'LAPSED'
+    ended = 'ENDED'
+    left = 'LEFT'
+
+
+class WaitlistEntry(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: UUID
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    slot_start_at: AwareDatetime = Field(..., alias='slotStartAt')
+    duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
+    status: WaitlistEntryStatus
+    position: int | None = Field(..., description='Place in line, counting from 1, while WAITING. Null otherwise.', ge=1)
+    offer_expires_at: AwareDatetime | None = Field(..., alias='offerExpiresAt', description='While OFFERED, when the hold on the slot lapses.')
+    created_at: AwareDatetime = Field(..., alias='createdAt')
+
+
+class WaitlistEntryList(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    items: list[WaitlistEntry]
+
+
+class JoinWaitlistRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    slot_start_at: AwareDatetime = Field(..., alias='slotStartAt')
+    duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
 
 
 class BookingStatus(StrEnum):
@@ -2734,6 +2800,7 @@ class Slot(BaseModel):
     price_minor: int = Field(..., alias='priceMinor', description='Price in the minor unit of `currency` (tetri for GEL). Never a float.', ge=0)
     currency: Currency
     unavailable_reason: SlotUnavailableReason | None = Field(None, alias='unavailableReason')
+    forecast: SlotForecast
 
 
 class SlotList(BaseModel):

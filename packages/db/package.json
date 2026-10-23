@@ -19,7 +19,8 @@
     "./credits": "./credits.ts",
     "./subscriptions": "./subscriptions.ts",
     "./rate-limit": "./rate-limit.ts",
-    "./simulator-envelope": "./simulator-envelope.ts"
+    "./simulator-envelope": "./simulator-envelope.ts",
+    "./waitlist": "./waitlist.ts"
   },
   "scripts": {
     "db:generate": "prisma generate",

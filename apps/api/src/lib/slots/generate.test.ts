@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { zSlot, zSlotList } from "@darkview/contracts/zod";
 
+import { TURNAROUND_MINUTES } from "@darkview/db/waitlist";
+
 import { nightWindow } from "@/lib/slots/darkness";
 import {
   clashesWithHeld,
@@ -295,5 +297,57 @@ describe("the turnaround between customers blocks overlapping starts", () => {
     expect(clashesWithHeld(at("16:39").getTime(), 30, held)).toBe(true);
     expect(clashesWithHeld(at("15:20").getTime(), 30, held)).toBe(false);
     expect(clashesWithHeld(at("15:21").getTime(), 30, held)).toBe(true);
+  });
+});
+
+describe("a slot offered to its waitlist (clients ADR-068)", () => {
+  it("is HELD_FOR_WAITLIST to everyone the offer is not for, and its neighbours stay open", () => {
+    const all = slots();
+    const offered = all[8];
+    const marked = slots({
+      offers: [{ slotStartAt: new Date(offered.startAt), durationMinutes: SLOT_DURATION_MINUTES }],
+    });
+    expect(marked[8]).toMatchObject({ available: false, unavailableReason: "HELD_FOR_WAITLIST" });
+    expect(marked[2].available).toBe(true);
+    expect(marked[14].available).toBe(true);
+  });
+
+  it("still says ALREADY_BOOKED where a booking holds the slot as well", () => {
+    const start = new Date(slots()[8].startAt);
+    const marked = slots({
+      held: [{ slotStartAt: start, durationMinutes: SLOT_DURATION_MINUTES }],
+      offers: [{ slotStartAt: start, durationMinutes: SLOT_DURATION_MINUTES }],
+    });
+    expect(marked[8].unavailableReason).toBe("ALREADY_BOOKED");
+  });
+
+  it("uses the exclusion constraint's turnaround, as the waitlist does", () => {
+    expect(SLOT_TURNAROUND_MINUTES).toBe(TURNAROUND_MINUTES);
+  });
+});
+
+describe("every slot carries a forecast (clients ADR-068)", () => {
+  it("is UNKNOWN when nothing is read", () => {
+    for (const slot of slots()) {
+      expect(slot.forecast).toEqual({ status: "UNKNOWN", cloudCoverPercent: null });
+    }
+  });
+
+  it("is what the reader answers for the slot's own span", () => {
+    const spans: [number, number][] = [];
+    const generated = slots({
+      forecastFor: (startMs, endMs) => {
+        spans.push([startMs, endMs]);
+        return { status: "KNOWN", cloudCoverPercent: 20 };
+      },
+    });
+    expect(generated[0].forecast).toEqual({ status: "KNOWN", cloudCoverPercent: 20 });
+    expect(spans[0]).toEqual([
+      Date.parse(generated[0].startAt),
+      Date.parse(generated[0].endAt),
+    ]);
+    expect(zSlotList.parse({ observatoryId, date: "2026-12-21", items: generated }).items).toHaveLength(
+      generated.length,
+    );
   });
 });
