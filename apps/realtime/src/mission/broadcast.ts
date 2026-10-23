@@ -6,6 +6,8 @@ import {
   missionCommandResult,
   missionStateUpdate,
   missionTelemetryUpdate,
+  missionFrameInfo,
+  type LiveFrameDetail,
 } from "@/mission/protocol";
 import type { MissionChannelRegistry } from "@/mission/registry";
 import type { MissionSnapshot } from "@/mission/store";
@@ -24,7 +26,7 @@ export interface MissionBroadcast {
   missionMoved(snapshot: MissionSnapshot): void;
   telemetryReported(missionId: string, delta: AgentStateDelta): void;
   commandAnswered(ack: AgentCommandAck): Promise<void>;
-  liveFrameArrived(frame: LiveFrame): void;
+  liveFrameArrived(frame: LiveFrame, detail: LiveFrameDetail): void;
   captureRecorded(capture: Capture): void;
 }
 
@@ -78,11 +80,16 @@ export class MissionRelay implements MissionBroadcast {
    * frame bandwidth through the same socket as mission state would leave one slow
    * reader's telemetry and command verdicts queued behind stale pictures.
    */
-  liveFrameArrived(frame: LiveFrame): void {
+  liveFrameArrived(frame: LiveFrame, detail: LiveFrameDetail): void {
     this.frames.publish(frame);
     for (const channel of this.registry.subscribers(frame.missionId)) {
       channel.offerStream();
     }
+    // After the offer, so a client learns what the frame is once it can fetch it.
+    this.registry.broadcast(
+      frame.missionId,
+      missionFrameInfo(frame.missionId, frame.mode, detail),
+    );
   }
 
   /**

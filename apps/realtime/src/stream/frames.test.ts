@@ -162,3 +162,26 @@ describe("letting go", () => {
     expect(store.size).toBe(0);
   });
 });
+
+describe("a live view for the whole of OBSERVING (#199)", () => {
+  it("keeps a ten-minute stream open while frames keep arriving, the staleness sweep running throughout", () => {
+    // The longest live exposure the agent's profiles use is 4 s; a stack shown every
+    // 4 s plus the encode is well inside the 30 s the sweep allows.
+    let ended = 0;
+    let delivered = 0;
+    store.publish(frame());
+    store.listen(MISSION, { frame: () => (delivered += 1), end: () => (ended += 1) });
+
+    const start = now;
+    for (let second = 5; second <= 600; second += 5) {
+      now = start + second * 1000;
+      store.publish(frame({ sequence: second / 5, receivedAt: now }));
+      // The heartbeat sweep runs every few seconds in server.ts.
+      expect(store.releaseStale(now)).toBe(0);
+    }
+
+    expect(ended).toBe(0);
+    expect(delivered).toBe(120);
+    expect(store.latest(MISSION)?.sequence).toBe(120);
+  });
+});

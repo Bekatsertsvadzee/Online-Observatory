@@ -50,7 +50,8 @@ function subscribe(overrides: Record<string, unknown> = {}) {
   });
 }
 
-const streams = () => sent.filter((m): m is MissionStreamInfo => m.type === "MISSION_STREAM");
+const streams = () =>
+  sent.filter((m): m is MissionStreamInfo => m.type === "MISSION_STREAM");
 
 beforeEach(() => {
   store = new FakeLinkStore();
@@ -186,6 +187,14 @@ describe("a frame reaching the fan-out", () => {
     };
   }
 
+  const detail = {
+    sequence: 9,
+    capturedAt: "2026-09-08T21:00:00.000Z",
+    exposureMilliseconds: 2000,
+    gain: 200,
+    stackedFrames: 12,
+  };
+
   beforeEach(() => {
     registry = new MissionChannelRegistry();
     frames = new RecordingFrameSink();
@@ -199,7 +208,7 @@ describe("a frame reaching the fan-out", () => {
     await channel.receive(subscribe());
     sent.length = 0;
 
-    relay.liveFrameArrived(frame({ sequence: 9 }));
+    relay.liveFrameArrived(frame({ sequence: 9 }), detail);
 
     expect(frames.published).toHaveLength(1);
     expect(frames.published[0].sequence).toBe(9);
@@ -218,9 +227,34 @@ describe("a frame reaching the fan-out", () => {
     const before = offers.minted.length;
 
     now += STREAM_TOKEN_TTL_SECONDS * 1000;
-    relay.liveFrameArrived(frame());
+    relay.liveFrameArrived(frame(), detail);
 
     expect(offers.minted.length - before).toBe(2);
+  });
+
+  it("tells every subscriber what the frame is: exposure, gain and stack (#199)", async () => {
+    offers.streaming.add(MISSION);
+    store.addObserverSeat(MISSION, OBSERVER);
+    const controller = makeChannel(owner);
+    const watcher = makeChannel(observer);
+    registry.add(MISSION, controller);
+    registry.add(MISSION, watcher);
+    await controller.receive(subscribe());
+    await watcher.receive(subscribe({ sessionId: null }));
+    sent.length = 0;
+
+    relay.liveFrameArrived(frame({ sequence: 9 }), detail);
+
+    const infos = sent.filter((message) => message.type === "MISSION_FRAME");
+    expect(infos).toHaveLength(2);
+    expect(infos[0]).toMatchObject({
+      missionId: MISSION,
+      sequence: 9,
+      exposureMilliseconds: 2000,
+      gain: 200,
+      stackedFrames: 12,
+      mode: "SIMULATED",
+    });
   });
 
   it("frees the frame when the mission ends", async () => {
@@ -246,7 +280,11 @@ describe("a frame reaching the fan-out", () => {
   });
 
   it("frees the frame when the mission fails or is cancelled", () => {
-    relay.missionMoved({ missionId: MISSION, state: "FAILED", failureReason: "MOUNT_FAULT" });
+    relay.missionMoved({
+      missionId: MISSION,
+      state: "FAILED",
+      failureReason: "MOUNT_FAULT",
+    });
     relay.missionMoved({ missionId: MISSION, state: "CANCELLED", failureReason: null });
 
     expect(frames.released).toEqual([MISSION, MISSION]);

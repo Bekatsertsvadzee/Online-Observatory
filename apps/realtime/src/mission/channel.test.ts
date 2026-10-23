@@ -347,9 +347,7 @@ describe("an observer watching (DV-103)", () => {
     // real enforcement is elsewhere and independent -- the cloud mints envelopes
     // only for the session owner, and the agent refuses any other sessionId -- but
     // a channel that grew a command method would be the first step wrong.
-    const surface = Object.getOwnPropertyNames(
-      Object.getPrototypeOf(channel) as object,
-    );
+    const surface = Object.getOwnPropertyNames(Object.getPrototypeOf(channel) as object);
     expect(surface).not.toContain("command");
     expect(surface).not.toContain("send");
     expect(surface.filter((name) => /command|slew|capture|park/i.test(name))).toEqual([]);

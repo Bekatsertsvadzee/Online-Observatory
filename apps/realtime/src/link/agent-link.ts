@@ -143,9 +143,7 @@ export class AgentLink {
         // the contract pins the version to an enum, so an agent speaking a future
         // protocol fails validation here rather than at the version check below.
         // Telling it BAD_REQUEST forever would be a silent hang, not a refusal.
-        this.send(
-          cloudError("BAD_REQUEST", `Hello rejected: ${parsed.reason}.`, true),
-        );
+        this.send(cloudError("BAD_REQUEST", `Hello rejected: ${parsed.reason}.`, true));
         this.terminate("unsupported protocol version");
         return;
       }
@@ -301,7 +299,13 @@ export class AgentLink {
       receivedAt: this.now(),
     };
 
-    this.broadcast.liveFrameArrived(frame);
+    this.broadcast.liveFrameArrived(frame, {
+      sequence: header.sequence,
+      capturedAt: header.capturedAt,
+      exposureMilliseconds: header.exposureMilliseconds,
+      gain: header.gain,
+      stackedFrames: header.stackedFrames ?? null,
+    });
   }
 
   /**
@@ -591,10 +595,7 @@ export class AgentLink {
     const cached = this.missionOwnership.get(missionId);
     if (cached !== undefined) return cached;
 
-    const owned = await this.store.observatoryOwnsMission(
-      this.observatory.id,
-      missionId,
-    );
+    const owned = await this.store.observatoryOwnsMission(this.observatory.id, missionId);
     this.missionOwnership.set(missionId, owned);
     return owned;
   }

@@ -13,6 +13,7 @@ import type {
   MissionClientMessage,
   MissionCommandResult,
   MissionFailureReason,
+  MissionFrameInfo,
   MissionState,
   MissionStateUpdate,
   MissionStreamInfo,
@@ -200,6 +201,38 @@ export function missionStreamInfo(
     encoding: offer.encoding,
     mode: offer.mode,
     expiresAt: offer.expiresAt.toISOString(),
+  };
+}
+
+/** What the agent's live-frame header said about the frame, minus its transport. */
+export type LiveFrameDetail = {
+  sequence: number;
+  capturedAt: string;
+  exposureMilliseconds: number;
+  gain: number;
+  stackedFrames: number | null;
+};
+
+/**
+ * What the frame now at the stream URL is (#199): exposure, gain and stack count, so
+ * the room can say "12 x 2 s stacked" beside the picture. `mode` is the observatory
+ * row's, as in MissionStreamInfo, never the agent's account of itself.
+ */
+export function missionFrameInfo(
+  missionId: string,
+  mode: ObservatoryMode,
+  detail: LiveFrameDetail,
+): MissionFrameInfo {
+  return {
+    type: "MISSION_FRAME",
+    ...messageHeader(),
+    missionId,
+    sequence: detail.sequence,
+    capturedAt: detail.capturedAt,
+    exposureMilliseconds: detail.exposureMilliseconds,
+    gain: detail.gain,
+    stackedFrames: detail.stackedFrames,
+    mode,
   };
 }
 

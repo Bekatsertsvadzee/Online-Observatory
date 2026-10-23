@@ -7362,6 +7362,49 @@ components:
           type: string
           format: date-time
 
+    MissionFrameInfo:
+      type: object
+      description: |
+        What the live-view frame now at the stream URL is (#199): its exposure, gain and
+        how many sub-exposures the live stack holds. Sent with each frame the cloud
+        relays, at most as often as the agent's live view sends one. The pixels travel
+        only over the stream URL.
+      additionalProperties: false
+      required:
+        [type, messageId, sentAt, missionId, sequence, capturedAt, exposureMilliseconds, gain, stackedFrames, mode]
+      properties:
+        type:
+          type: string
+          enum: [MISSION_FRAME]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          minimum: 0
+        capturedAt:
+          type: string
+          format: date-time
+        exposureMilliseconds:
+          type: number
+          exclusiveMinimum: 0
+          description: One sub-exposure's length, not the stack's total.
+        gain:
+          type: integer
+          minimum: 0
+        stackedFrames:
+          type: [integer, "null"]
+          exclusiveMinimum: 0
+          description: Null when the frame is a single sub-exposure rather than a live stack.
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+
     MissionCaptureReady:
       type: object
       additionalProperties: false
@@ -7435,6 +7478,7 @@ components:
         - $ref: "#/components/schemas/MissionStateUpdate"
         - $ref: "#/components/schemas/MissionTelemetryUpdate"
         - $ref: "#/components/schemas/MissionStreamInfo"
+        - $ref: "#/components/schemas/MissionFrameInfo"
         - $ref: "#/components/schemas/MissionCaptureReady"
         - $ref: "#/components/schemas/MissionCommandResult"
         - $ref: "#/components/schemas/MissionChannelError"
@@ -7444,6 +7488,7 @@ components:
           MISSION_STATE: "#/components/schemas/MissionStateUpdate"
           MISSION_TELEMETRY: "#/components/schemas/MissionTelemetryUpdate"
           MISSION_STREAM: "#/components/schemas/MissionStreamInfo"
+          MISSION_FRAME: "#/components/schemas/MissionFrameInfo"
           MISSION_CAPTURE_READY: "#/components/schemas/MissionCaptureReady"
           MISSION_COMMAND_RESULT: "#/components/schemas/MissionCommandResult"
           MISSION_ERROR: "#/components/schemas/MissionChannelError"

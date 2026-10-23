@@ -1,6 +1,7 @@
 import type { AgentCommandAck, AgentStateDelta, Capture } from "@darkview/contracts";
 
 import type { MissionBroadcast } from "@/mission/broadcast";
+import type { LiveFrameDetail } from "@/mission/protocol";
 import type { MissionSnapshot } from "@/mission/store";
 import type { LiveFrame } from "@/stream/frames";
 
@@ -31,8 +32,11 @@ export class RecordingBroadcast implements MissionBroadcast {
     this.answered.push(ack);
   }
 
-  liveFrameArrived(frame: LiveFrame): void {
+  readonly frameDetails: LiveFrameDetail[] = [];
+
+  liveFrameArrived(frame: LiveFrame, detail: LiveFrameDetail): void {
     this.frames.push(frame);
+    this.frameDetails.push(detail);
   }
 
   captureRecorded(capture: Capture): void {

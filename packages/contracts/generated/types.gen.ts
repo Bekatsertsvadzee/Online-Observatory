@@ -3204,6 +3204,32 @@ export type MissionStreamInfo = {
     expiresAt: string;
 };
 
+/**
+ * What the live-view frame now at the stream URL is (#199): its exposure, gain and
+ * how many sub-exposures the live stack holds. Sent with each frame the cloud
+ * relays, at most as often as the agent's live view sends one. The pixels travel
+ * only over the stream URL.
+ *
+ */
+export type MissionFrameInfo = {
+    type: 'MISSION_FRAME';
+    messageId: string;
+    sentAt: string;
+    missionId: string;
+    sequence: number;
+    capturedAt: string;
+    /**
+     * One sub-exposure's length, not the stack's total.
+     */
+    exposureMilliseconds: number;
+    gain: number;
+    /**
+     * Null when the frame is a single sub-exposure rather than a live stack.
+     */
+    stackedFrames: number | null;
+    mode: ObservatoryMode;
+};
+
 export type MissionCaptureReady = {
     type: 'MISSION_CAPTURE_READY';
     messageId: string;
@@ -3243,6 +3269,8 @@ export type MissionChannelMessage = ({
 } & MissionTelemetryUpdate) | ({
     type: 'MISSION_STREAM';
 } & MissionStreamInfo) | ({
+    type: 'MISSION_FRAME';
+} & MissionFrameInfo) | ({
     type: 'MISSION_CAPTURE_READY';
 } & MissionCaptureReady) | ({
     type: 'MISSION_COMMAND_RESULT';
