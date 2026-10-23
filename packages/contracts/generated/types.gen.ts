@@ -1611,11 +1611,22 @@ export type GiftVoucher = {
     priceMinor: number;
     currency: Currency;
     /**
+     * Clients ADR-067. The full code, for the buyer to hand over or print, while the
+     * voucher is ACTIVE. Null otherwise, and on a deployment with no voucher secret.
+     * Derived again on every read; never stored.
+     *
+     */
+    code: string | null;
+    /**
      * The code's last four characters. Null until the payment settles.
      */
     codeLast4: string | null;
     recipientEmail: string | null;
     recipientName: string | null;
+    /**
+     * The buyer's note, as they wrote it.
+     */
+    message: string | null;
     /**
      * Twelve months from payment. Null until the payment settles.
      */

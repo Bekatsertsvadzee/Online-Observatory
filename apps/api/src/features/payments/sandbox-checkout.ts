@@ -40,7 +40,7 @@ export type SandboxCheckoutView = {
   currency: string;
   paymentStatus: string;
   /** What the payment buys, for the page's wording. */
-  purpose: "BOOKING" | "OBSERVER_PACK";
+  purpose: Purpose;
   /** False once the hold has lapsed or the booking or seat has moved on without paying. */
   payable: boolean;
   holdExpiresAt: Date | null;
@@ -53,6 +53,8 @@ export type SandboxCheckoutConfirmed = {
   applied: boolean;
   returnUrl: string;
 };
+
+type Purpose = "BOOKING" | "OBSERVER_PACK" | "GIFT_VOUCHER";
 
 /** The path, relative to the API's own root, the checkout is served at. */
 export function sandboxCheckoutPath(paymentId: string): string {
@@ -89,6 +91,15 @@ export function watchReturnUrl(locale: string, missionId: string): string {
   return new URL(path, getServerEnvironment().APP_URL).toString();
 }
 
+/**
+ * Clients ADR-067. The gift's page on the web client, where its buyer reads and prints
+ * the code; built like the others, from APP_URL and the voucher, never the request.
+ */
+export function giftReturnUrl(locale: string, voucherId: string): string {
+  const path = `/${isLocale(locale) ? locale : defaultLocale}/gift/${voucherId}`;
+  return new URL(path, getServerEnvironment().APP_URL).toString();
+}
+
 const notFound: SandboxCheckoutFailure = {
   ok: false,
   status: 404,
@@ -99,6 +110,13 @@ const notFound: SandboxCheckoutFailure = {
 function conflict(message: string): SandboxCheckoutFailure {
   return { ok: false, status: 409, code: "CONFLICT", message };
 }
+
+type Hold = {
+  status: string;
+  holdExpiresAt: Date | null;
+  missionEnded: boolean;
+  deadline: boolean;
+};
 
 type Loaded =
   | SandboxCheckoutFailure
@@ -111,12 +129,13 @@ type Loaded =
         amountMinor: number;
         currency: string;
       };
-      purpose: "BOOKING" | "OBSERVER_PACK";
+      purpose: Purpose;
       /**
        * What the payment holds: a booking's slot, or an Observer Pack's seat, whose
        * mission must not have ended. A seat on a finished session can never be used.
+       * A gift voucher holds nothing scarce, so it has no deadline (ADR-067).
        */
-      hold: { status: string; holdExpiresAt: Date | null; missionEnded: boolean };
+      hold: Hold;
       returnUrl: string;
     };
 
@@ -154,6 +173,7 @@ async function loadCheckout(userId: string, paymentId: string): Promise<Loaded> 
           mission: { select: { state: true } },
         },
       },
+      giftVoucher: { select: { id: true, status: true } },
     },
   });
 
@@ -169,7 +189,7 @@ async function loadCheckout(userId: string, paymentId: string): Promise<Loaded> 
       adapter: sandbox.adapter,
       payment,
       purpose: "BOOKING",
-      hold: { ...payment.booking, missionEnded: false },
+      hold: { ...payment.booking, missionEnded: false, deadline: true },
       returnUrl: bookingReturnUrl(payment.user.locale, payment.booking.id),
     };
   }
@@ -185,28 +205,39 @@ async function loadCheckout(userId: string, paymentId: string): Promise<Loaded> 
         status: pack.status,
         holdExpiresAt: pack.holdExpiresAt,
         missionEnded: (TERMINAL_MISSION_STATES as readonly string[]).includes(pack.mission.state),
+        deadline: true,
       },
       returnUrl: watchReturnUrl(payment.user.locale, pack.missionId),
     };
   }
 
-  return conflict("This payment is not a sandbox booking or seat payment.");
+  if (payment.purpose === "GIFT_VOUCHER" && payment.giftVoucher) {
+    return {
+      ok: true,
+      adapter: sandbox.adapter,
+      payment,
+      purpose: "GIFT_VOUCHER",
+      hold: {
+        status: payment.giftVoucher.status,
+        holdExpiresAt: null,
+        missionEnded: false,
+        deadline: false,
+      },
+      returnUrl: giftReturnUrl(payment.user.locale, payment.giftVoucher.id),
+    };
+  }
+
+  return conflict("This payment is not a sandbox booking, seat or gift payment.");
 }
 
 /**
  * Still held for the payer: awaiting payment, before its deadline, and -- for a seat
- * -- on a mission that has not ended.
+ * -- on a mission that has not ended. A gift has no deadline: awaiting payment is open.
  */
-function holdIsOpen(
-  hold: { status: string; holdExpiresAt: Date | null; missionEnded: boolean },
-  now: Date,
-): boolean {
-  return (
-    hold.status === "PENDING_PAYMENT" &&
-    hold.holdExpiresAt !== null &&
-    hold.holdExpiresAt.getTime() > now.getTime() &&
-    !hold.missionEnded
-  );
+function holdIsOpen(hold: Hold, now: Date): boolean {
+  if (hold.status !== "PENDING_PAYMENT" || hold.missionEnded) return false;
+  if (!hold.deadline) return true;
+  return hold.holdExpiresAt !== null && hold.holdExpiresAt.getTime() > now.getTime();
 }
 
 export async function readSandboxCheckout(input: {
@@ -267,7 +298,9 @@ export async function confirmSandboxCheckout(input: {
     return conflict(
       loaded.purpose === "BOOKING"
         ? "The hold on this slot has lapsed."
-        : "The hold on this seat has lapsed, or its session has ended.",
+        : loaded.purpose === "GIFT_VOUCHER"
+          ? "This gift is no longer awaiting payment."
+          : "The hold on this seat has lapsed, or its session has ended.",
     );
   }
 

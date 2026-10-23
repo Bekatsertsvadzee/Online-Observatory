@@ -101,14 +101,19 @@ function formatMinor(amountMinor: number, currency: string): string {
   return `${major}.${minor} ${currency}`;
 }
 
+const backLabel: Record<SandboxCheckoutView["purpose"], string> = {
+  BOOKING: "Back to the booking",
+  OBSERVER_PACK: "Back to the session",
+  GIFT_VOUCHER: "Back to the gift",
+};
+
 function renderPage(view: SandboxCheckoutView): string {
   const amount = escapeHtml(formatMinor(view.amountMinor, view.currency));
   const back = escapeHtml(view.returnUrl);
 
   const body = view.payable
     ? `<p>Amount: ${amount}</p>
-<p>Hold expires: ${escapeHtml(view.holdExpiresAt?.toISOString() ?? "")}</p>
-<form method="post">
+${view.holdExpiresAt ? `<p>Hold expires: ${escapeHtml(view.holdExpiresAt.toISOString())}</p>\n` : ""}<form method="post">
 <button type="submit" name="result" value="CAPTURED">Pay (simulated)</button>
 <button type="submit" name="result" value="FAILED">Decline (simulated)</button>
 </form>`
@@ -126,7 +131,7 @@ function renderPage(view: SandboxCheckoutView): string {
 <h1>Sandbox checkout</h1>
 <p>This is the development payment sandbox. No card is asked for and no money moves.</p>
 ${body}
-<p><a href="${back}">${view.purpose === "BOOKING" ? "Back to the booking" : "Back to the session"}</a></p>
+<p><a href="${back}">${backLabel[view.purpose]}</a></p>
 </body>
 </html>
 `;

@@ -248,9 +248,15 @@ describe("buying a gift voucher", () => {
     expect(ordered.body.voucher).toMatchObject({
       status: "PENDING_PAYMENT",
       priceMinor: PROVISIONAL_SLOT_PRICE_MINOR,
+      code: null,
       codeLast4: null,
+      message: null,
       expiresAt: null,
     });
+    // Clients ADR-067: the sandbox checkout, as a booking's payment intent carries.
+    expect(ordered.body.paymentIntent.redirectUrl).toBe(
+      `https://darkview.test/api/payments/${ordered.body.paymentIntent.paymentId}/sandbox-checkout`,
+    );
 
     const row = await voucherRow(ordered.body.voucher.id);
     const code = deriveVoucherCode(SECRET, row.id);
@@ -366,6 +372,48 @@ describe("buying a gift voucher", () => {
       status: 422,
     });
     expect(await database.emailNotification.count()).toBe(0);
+  });
+});
+
+describe("the buyer's own view of a gift (clients ADR-067)", () => {
+  it("carries the full code only while it can be spent, and the note as written", async () => {
+    const ordered = await purchaseGiftVoucher({
+      userId: buyerId,
+      request: { durationMinutes: SLOT_DURATION_MINUTES, message: "Clear skies, Nino" },
+      now: NOW,
+    });
+    if (!ordered.ok) throw new Error(ordered.message);
+    expect((await listMyGiftVouchers(buyerId, NOW)).items[0]).toMatchObject({
+      code: null,
+      message: "Clear skies, Nino",
+    });
+
+    const { voucherId, code } = await paidVoucher();
+    const paid = (await listMyGiftVouchers(buyerId, NOW)).items.find(
+      (item) => item.id === voucherId,
+    );
+    expect(paid?.code).toBe(code);
+    expect(paid?.codeLast4).toBe(code.replace(/-/g, "").slice(-4));
+
+    // Spent: the code is gone from the list, and nobody else ever sees it.
+    await expect(redeem(code)).resolves.toMatchObject({ ok: true });
+    const spent = (await listMyGiftVouchers(buyerId, NOW)).items.find(
+      (item) => item.id === voucherId,
+    );
+    expect(spent).toMatchObject({ status: "REDEEMED", code: null });
+    expect((await listMyGiftVouchers(customerId, NOW)).items).toEqual([]);
+  });
+
+  it("carries no code once expired", async () => {
+    const { voucherId } = await paidVoucher();
+    await database.giftVoucher.update({
+      where: { id: voucherId },
+      data: { expiresAt: new Date(NOW.getTime() - 1) },
+    });
+    expect((await listMyGiftVouchers(buyerId, NOW)).items[0]).toMatchObject({
+      status: "EXPIRED",
+      code: null,
+    });
   });
 });
 

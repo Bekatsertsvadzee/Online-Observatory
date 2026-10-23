@@ -13,6 +13,7 @@ const { testDatabase, environment } = vi.hoisted(() => ({
     NODE_ENV: "test" as string,
     APP_URL: "https://darkview.test",
     PAYMENT_SANDBOX_WEBHOOK_SECRET: "s".repeat(32) as string | undefined,
+    VOUCHER_CODE_SECRET: "v".repeat(32),
   },
 }));
 
@@ -25,6 +26,9 @@ const { confirmSandboxCheckout, readSandboxCheckout } = await import(
 );
 const { OBSERVER_PACK_HOLD_MINUTES, purchaseObserverPack } = await import(
   "@/features/missions/observer-pack"
+);
+const { listMyGiftVouchers, purchaseGiftVoucher } = await import(
+  "@/features/vouchers/vouchers"
 );
 const { nightWindow } = await import("@/lib/slots/darkness");
 const { generateSlots, SLOT_DURATION_MINUTES } = await import("@/lib/slots/generate");
@@ -111,9 +115,11 @@ beforeEach(async () => {
   await database.missionSession.deleteMany();
   await database.missionEvent.deleteMany();
   await database.auditLog.deleteMany();
+  await database.emailNotification.deleteMany();
   await database.observerPack.deleteMany();
   await database.booking.deleteMany();
   await database.mission.deleteMany();
+  await database.giftVoucher.deleteMany();
   await database.payment.deleteMany();
   await database.telescope.deleteMany();
   await database.target.deleteMany();
@@ -544,6 +550,97 @@ describe("the sandbox checkout for an Observer Pack (#170)", () => {
     expect(
       await readSandboxCheckout({ userId: stranger, paymentId: paymentIntent.paymentId, now: NOW }),
     ).toMatchObject({ ok: false, status: 404 });
+    expect(
+      await confirmSandboxCheckout({
+        userId: stranger,
+        paymentId: paymentIntent.paymentId,
+        result: "CAPTURED",
+        now: NOW,
+      }),
+    ).toMatchObject({ ok: false, status: 404 });
+  });
+});
+
+describe("the sandbox checkout for a gift voucher (clients ADR-067)", () => {
+  beforeEach(() => {
+    environment.NODE_ENV = "test";
+    environment.PAYMENT_SANDBOX_WEBHOOK_SECRET = "s".repeat(32);
+  });
+
+  async function buyGift(buyer: string = userId) {
+    const ordered = await purchaseGiftVoucher({
+      userId: buyer,
+      request: { durationMinutes: SLOT_DURATION_MINUTES },
+      now: NOW,
+    });
+    if (!ordered.ok) throw new Error(ordered.message);
+    return ordered.body;
+  }
+
+  it("is where a gift's payment intent redirects, with no hold to lapse", async () => {
+    const { paymentIntent } = await buyGift();
+    expect(paymentIntent.redirectUrl).toBe(
+      `https://darkview.test/api/payments/${paymentIntent.paymentId}/sandbox-checkout`,
+    );
+    // A day later it can still be paid: a gift holds nothing anybody else wants.
+    const later = new Date(NOW.getTime() + 24 * 60 * 60_000);
+    expect(
+      await readSandboxCheckout({ userId, paymentId: paymentIntent.paymentId, now: later }),
+    ).toMatchObject({ ok: true, purpose: "GIFT_VOUCHER", payable: true, holdExpiresAt: null });
+  });
+
+  it("activates the gift and returns the buyer to its page, where the code is", async () => {
+    const { voucher, paymentIntent } = await buyGift();
+    const confirmed = await confirmSandboxCheckout({
+      userId,
+      paymentId: paymentIntent.paymentId,
+      result: "CAPTURED",
+      now: NOW,
+    });
+    expect(confirmed).toEqual({
+      ok: true,
+      applied: true,
+      returnUrl: `https://darkview.test/en/gift/${voucher.id}`,
+    });
+    const [listed] = (await listMyGiftVouchers(userId, NOW)).items;
+    expect(listed).toMatchObject({ id: voucher.id, status: "ACTIVE" });
+    expect(listed.code).toMatch(/^[0-9A-Z-]+$/);
+
+    // Answered again the same way: nothing new, and no second payment answer.
+    expect(
+      await confirmSandboxCheckout({
+        userId,
+        paymentId: paymentIntent.paymentId,
+        result: "CAPTURED",
+        now: NOW,
+      }),
+    ).toMatchObject({ ok: true, applied: false });
+    expect(
+      await confirmSandboxCheckout({
+        userId,
+        paymentId: paymentIntent.paymentId,
+        result: "FAILED",
+        now: NOW,
+      }),
+    ).toMatchObject({ ok: false, status: 409 });
+  });
+
+  it("cancels the gift when the buyer declines", async () => {
+    const { voucher, paymentIntent } = await buyGift();
+    await confirmSandboxCheckout({
+      userId,
+      paymentId: paymentIntent.paymentId,
+      result: "FAILED",
+      now: NOW,
+    });
+    expect(
+      (await database.giftVoucher.findUniqueOrThrow({ where: { id: voucher.id } })).status,
+    ).toBe("CANCELLED");
+  });
+
+  it("refuses somebody else, and says nothing about the payment", async () => {
+    const { paymentIntent } = await buyGift();
+    const stranger = await createUser();
     expect(
       await confirmSandboxCheckout({
         userId: stranger,

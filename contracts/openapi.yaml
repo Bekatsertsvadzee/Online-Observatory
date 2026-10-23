@@ -1479,7 +1479,10 @@ paths:
       description: |
         DV-112. Opens a payment intent through the same provider path as a booking. When
         the payment settles the voucher becomes ACTIVE for twelve months and its code is
-        emailed to `recipientEmail`, or to the buyer when none is given.
+        emailed to `recipientEmail`, or to the buyer when none is given. Its buyer also
+        reads the full code on `GET /gift-vouchers` while it is ACTIVE (clients ADR-067).
+        On the sandbox the intent's `redirectUrl` is the sandbox checkout, as for a
+        booking.
 
         A voucher pays for exactly one booking of `durationMinutes`, redeemed with
         `voucherCode` on `POST /bookings`. It is not exchangeable for cash: a refunded
@@ -5170,9 +5173,11 @@ components:
         - durationMinutes
         - priceMinor
         - currency
+        - code
         - codeLast4
         - recipientEmail
         - recipientName
+        - message
         - expiresAt
         - redeemedBookingId
         - createdAt
@@ -5190,6 +5195,12 @@ components:
           minimum: 0
         currency:
           $ref: "#/components/schemas/Currency"
+        code:
+          type: [string, "null"]
+          description: |
+            Clients ADR-067. The full code, for the buyer to hand over or print, while the
+            voucher is ACTIVE. Null otherwise, and on a deployment with no voucher secret.
+            Derived again on every read; never stored.
         codeLast4:
           type: [string, "null"]
           description: The code's last four characters. Null until the payment settles.
@@ -5198,6 +5209,9 @@ components:
           format: email
         recipientName:
           type: [string, "null"]
+        message:
+          type: [string, "null"]
+          description: The buyer's note, as they wrote it.
         expiresAt:
           type: [string, "null"]
           format: date-time

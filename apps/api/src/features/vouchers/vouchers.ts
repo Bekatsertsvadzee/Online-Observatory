@@ -21,6 +21,7 @@ import {
 } from "@darkview/db/vouchers";
 
 import type { PaymentOutcome } from "@/features/payments/provider";
+import { sandboxCheckoutUrl } from "@/features/payments/sandbox-checkout";
 import { getDatabase } from "@/lib/db/client";
 import { sandboxMoneyAllowed } from "@/lib/deployment";
 import {
@@ -53,24 +54,37 @@ type VoucherRow = {
   codeLast4: string;
   recipientEmail: string | null;
   recipientName: string | null;
+  message: string | null;
   expiresAt: Date | null;
   redeemedBookingId: string | null;
   createdAt: Date;
 };
 
-export function toContractVoucher(row: VoucherRow, now: Date): GiftVoucher {
+/**
+ * `codeSecret` is VOUCHER_CODE_SECRET: with it, an ACTIVE voucher carries its full code
+ * for its buyer (clients ADR-067), derived again on every read and never stored, as a
+ * card prize's is. Without it, or once spent, expired or unpaid, the code is null.
+ */
+export function toContractVoucher(
+  row: VoucherRow,
+  now: Date,
+  codeSecret?: string,
+): GiftVoucher {
   const paid = row.status !== "PENDING_PAYMENT" && row.status !== "CANCELLED";
   const expired =
     row.status === "ACTIVE" && row.expiresAt !== null && row.expiresAt <= now;
+  const spendable = row.status === "ACTIVE" && !expired;
   return {
     id: row.id,
     status: (expired ? "EXPIRED" : row.status) as GiftVoucher["status"],
     durationMinutes: row.durationMinutes,
     priceMinor: row.priceMinor,
     currency: row.currency as GiftVoucher["currency"],
+    code: spendable && codeSecret ? deriveVoucherCode(codeSecret, row.id) : null,
     codeLast4: paid ? row.codeLast4 : null,
     recipientEmail: row.recipientEmail,
     recipientName: row.recipientName,
+    message: row.message,
     expiresAt: row.expiresAt?.toISOString() ?? null,
     redeemedBookingId: row.redeemedBookingId,
     createdAt: row.createdAt.toISOString(),
@@ -115,12 +129,17 @@ export async function purchaseGiftVoucher(input: {
   const code = deriveVoucherCode(environment.VOUCHER_CODE_SECRET, id);
   const priceMinor = PROVISIONAL_SLOT_PRICE_MINOR;
 
+  // As for a booking or a seat: the sandbox is its own provider, so the cloud supplies
+  // the redirect, a checkout page it serves keyed by this payment's id (ADR-067).
+  const paymentId = randomUUID();
   const { voucher, payment } = await getDatabase().$transaction(async (tx) => {
     const payment = await tx.payment.create({
       data: {
+        id: paymentId,
         userId,
         purpose: "GIFT_VOUCHER",
         provider: PHASE_1_PROVIDER,
+        redirectUrl: sandboxCheckoutUrl(paymentId),
         status: "PENDING",
         amountMinor: priceMinor,
       },
@@ -162,7 +181,7 @@ export async function purchaseGiftVoucher(input: {
   return {
     ok: true,
     body: {
-      voucher: toContractVoucher(voucher, now),
+      voucher: toContractVoucher(voucher, now, environment.VOUCHER_CODE_SECRET),
       paymentIntent: {
         paymentId: payment.id,
         provider: payment.provider,
@@ -182,7 +201,8 @@ export async function listMyGiftVouchers(
     where: { buyerUserId: userId },
     orderBy: { createdAt: "desc" },
   });
-  return { items: rows.map((row) => toContractVoucher(row, now)) };
+  const secret = getServerEnvironment().VOUCHER_CODE_SECRET;
+  return { items: rows.map((row) => toContractVoucher(row, now, secret)) };
 }
 
 /**
