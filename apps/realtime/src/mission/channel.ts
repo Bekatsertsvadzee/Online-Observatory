@@ -65,9 +65,7 @@ export class MissionChannel {
 
     const parsed = parseClientMessage(raw);
     if (!parsed.ok) {
-      this.send(
-        missionChannelError("BAD_REQUEST", `Message rejected: ${parsed.reason}.`),
-      );
+      this.send(missionChannelError("BAD_REQUEST", `Message rejected: ${parsed.reason}.`));
       if (this.state === "AWAITING_SUBSCRIBE") this.terminate("malformed subscribe");
       return;
     }

@@ -123,10 +123,7 @@ describe("fan-out", () => {
 
     expect(first.received).toHaveLength(1);
     expect(second.received).toHaveLength(1);
-    expect(first.received[0]).toMatchObject({
-      type: "MISSION_STATE",
-      state: "CAPTURING",
-    });
+    expect(first.received[0]).toMatchObject({ type: "MISSION_STATE", state: "CAPTURING" });
   });
 
   it("delivers nothing to a subscriber on another mission", async () => {
@@ -199,7 +196,11 @@ describe("where the mount is pointing (#148)", () => {
    * A channel registered the way `server.ts` registers one -- before its subscribe
    * is judged -- so a refused socket sits in the fan-out exactly as it would live.
    */
-  async function watcher(missionId: string, userId: string, sessionId: string | null) {
+  async function watcher(
+    missionId: string,
+    userId: string,
+    sessionId: string | null,
+  ) {
     const received: MissionChannelMessage[] = [];
     const channel = new MissionChannel(
       missionId,

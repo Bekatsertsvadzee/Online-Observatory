@@ -50,8 +50,7 @@ function subscribe(overrides: Record<string, unknown> = {}) {
   });
 }
 
-const streams = () =>
-  sent.filter((m): m is MissionStreamInfo => m.type === "MISSION_STREAM");
+const streams = () => sent.filter((m): m is MissionStreamInfo => m.type === "MISSION_STREAM");
 
 beforeEach(() => {
   store = new FakeLinkStore();
@@ -280,11 +279,7 @@ describe("a frame reaching the fan-out", () => {
   });
 
   it("frees the frame when the mission fails or is cancelled", () => {
-    relay.missionMoved({
-      missionId: MISSION,
-      state: "FAILED",
-      failureReason: "MOUNT_FAULT",
-    });
+    relay.missionMoved({ missionId: MISSION, state: "FAILED", failureReason: "MOUNT_FAULT" });
     relay.missionMoved({ missionId: MISSION, state: "CANCELLED", failureReason: null });
 
     expect(frames.released).toEqual([MISSION, MISSION]);

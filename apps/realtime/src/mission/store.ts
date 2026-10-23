@@ -1,4 +1,8 @@
-import type { MissionFailureReason, MissionState, UserRole } from "@darkview/contracts";
+import type {
+  MissionFailureReason,
+  MissionState,
+  UserRole,
+} from "@darkview/contracts";
 
 /**
  * Everything the mission client channel needs from storage, and nothing else.
