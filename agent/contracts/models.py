@@ -803,6 +803,15 @@ class HorizonMaskEntry(BaseModel):
     min_altitude_degrees: float = Field(..., alias='minAltitudeDegrees', ge=0.0, le=90.0)
 
 
+class ObservatoryHorizon(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    min_altitude_degrees: float | None = Field(..., alias='minAltitudeDegrees', ge=0.0, le=90.0)
+    mask: list[HorizonMaskEntry] = Field(..., description='Surveyed bearings in order of azimuth.')
+
+
 class AzimuthSector(BaseModel):
     """
     Inclusive-start, exclusive-end sector, measured clockwise from north.
