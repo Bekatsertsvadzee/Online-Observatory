@@ -35,7 +35,7 @@ import { getDatabase } from "@/lib/db/client";
 import { sandboxMoneyAllowed } from "@/lib/deployment";
 import { openIntervals } from "@/lib/slots/availability";
 import { nightWindow } from "@/lib/slots/darkness";
-import { generateSlots, SLOT_DURATION_MINUTES } from "@/lib/slots/generate";
+import { generateSlots, isSessionLength, SLOT_DURATION_MINUTES } from "@/lib/slots/generate";
 import { getServerEnvironment } from "@/lib/validation/env";
 
 /**
@@ -401,7 +401,17 @@ export async function reserveSlot(input: {
     };
   }
 
-  const slot = findGeneratedSlot(slotStartAt, observatory, now);
+  // Clients ADR-072: any quarter hour from 15 minutes to 4 hours.
+  if (!isSessionLength(request.durationMinutes)) {
+    return {
+      ok: false,
+      status: 422,
+      code: "VALIDATION_FAILED",
+      message: "A session runs 15 minutes to 4 hours, in quarter hours.",
+    };
+  }
+
+  const slot = findGeneratedSlot(slotStartAt, observatory, now, request.durationMinutes);
 
   if (!slot) {
     return {
@@ -412,15 +422,6 @@ export async function reserveSlot(input: {
         "That instant is not a slot this observatory offers. Slots come from " +
         "GET /slots and start on the grid inside astronomical darkness, within " +
         "the hours the observatory is available.",
-    };
-  }
-
-  if (slot.durationMinutes !== request.durationMinutes) {
-    return {
-      ok: false,
-      status: 422,
-      code: "VALIDATION_FAILED",
-      message: `Slots are ${slot.durationMinutes} minutes.`,
     };
   }
 
@@ -1228,6 +1229,7 @@ export function findGeneratedSlot(
   slotStartAt: Date,
   observatory: BookableObservatory,
   now: Date,
+  durationMinutes = SLOT_DURATION_MINUTES,
 ) {
   const site = {
     latitudeDegrees: observatory.latitude,
@@ -1259,6 +1261,7 @@ export function findGeneratedSlot(
         now,
         observatory: observatoryState,
         held: [],
+        durationMinutes,
       }).find((slot) => Date.parse(slot.startAt) === slotStartAt.getTime());
 
       if (match) return match;

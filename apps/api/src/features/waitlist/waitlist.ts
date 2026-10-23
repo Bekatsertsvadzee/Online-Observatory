@@ -14,6 +14,7 @@ import {
 
 import { findBookableObservatory } from "@/features/booking/observatories";
 import { findGeneratedSlot } from "@/features/booking/reserve";
+import { isSessionLength } from "@/lib/slots/generate";
 import { getDatabase } from "@/lib/db/client";
 
 /**
@@ -98,10 +99,11 @@ export async function joinWaitlist(input: {
   }
 
   const slotStartAt = new Date(request.slotStartAt);
-  const slot = Number.isNaN(slotStartAt.getTime())
-    ? null
-    : findGeneratedSlot(slotStartAt, observatory, now);
-  if (!slot || slot.durationMinutes !== request.durationMinutes) {
+  const slot =
+    Number.isNaN(slotStartAt.getTime()) || !isSessionLength(request.durationMinutes)
+      ? null
+      : findGeneratedSlot(slotStartAt, observatory, now, request.durationMinutes);
+  if (!slot) {
     return {
       ok: false,
       status: 422,

@@ -3,20 +3,30 @@ import type { Slot, SlotForecast, SlotUnavailableReason } from "@darkview/contra
 import type { NightWindow } from "@/lib/slots/darkness";
 
 /**
- * How long one customer has the telescope.
+ * How long one customer has the telescope when they do not say: the default length of
+ * `GET /slots`, and the length a gift voucher or a free-slot prize is issued for.
  *
- * DV-052 derived two session lengths from the observing method -- 15 minutes for
- * short-exposure targets, 30 for the ones that need live stacking. Neither number
- * comes from a controlling document: session lengths belong to the /pricing page
- * and are stated nowhere else.
- *
- * Phase 1 sells one slot length, and it is the longer of the two, so that any
- * catalogue target fits in any slot. Selling a 15-minute slot and then letting a
- * customer choose M13 would be selling something we cannot deliver.
- *
- * CHANGE THIS ONE CONSTANT when pricing is settled. Nothing else encodes it.
+ * Clients ADR-072: a customer may ask for any quarter hour from 15 minutes to 4 hours
+ * (SESSION_MIN_MINUTES to SESSION_MAX_MINUTES). A target that needs longer than the
+ * session is never offered for it (`expectedMissionMinutes`), so a short session
+ * cannot sell M13.
  */
 export const SLOT_DURATION_MINUTES = 30;
+
+/** Clients ADR-072. The shortest and longest session, and the step between lengths. */
+export const SESSION_MIN_MINUTES = 15;
+export const SESSION_MAX_MINUTES = 240;
+export const SESSION_STEP_MINUTES = 15;
+
+/** Whether a customer may book a session this long. */
+export function isSessionLength(minutes: number): boolean {
+  return (
+    Number.isInteger(minutes) &&
+    minutes >= SESSION_MIN_MINUTES &&
+    minutes <= SESSION_MAX_MINUTES &&
+    minutes % SESSION_STEP_MINUTES === 0
+  );
+}
 
 /**
  * Dead time between customers: park, slew to the next target, refocus, and
@@ -52,6 +62,15 @@ export const SLOT_STRIDE_MINUTES = 15;
  * reconciliation failure against a payment provider.
  */
 export const PROVISIONAL_SLOT_PRICE_MINOR = 4500;
+
+/**
+ * Clients ADR-072. A session of any length costs the same per minute as the default
+ * one: 150 tetri a minute while the default is 4500 for 30. Whole tetri, rounded down
+ * in the customer's favour should the rate ever stop dividing evenly.
+ */
+export function sessionPriceMinor(minutes: number): number {
+  return Math.floor((PROVISIONAL_SLOT_PRICE_MINOR * minutes) / SLOT_DURATION_MINUTES);
+}
 
 /**
  * Slots start on a quarter hour of the observatory's clock: :00, :15, :30, :45.
@@ -95,6 +114,8 @@ export type SlotAvailabilityInput = {
   offers?: readonly HeldBooking[];
   /** Clients ADR-068. The forecast for [startMs, endMs); unknown when not given. */
   forecastFor?: (startMs: number, endMs: number) => SlotForecast;
+  /** Clients ADR-072. How long each slot runs; SLOT_DURATION_MINUTES when not given. */
+  durationMinutes?: number;
 };
 
 export type HeldBooking = { slotStartAt: Date; durationMinutes: number };
@@ -139,13 +160,14 @@ export function clashesWithHeld(
  */
 function unavailableReason(
   slotStartAt: Date,
+  durationMinutes: number,
   input: SlotAvailabilityInput,
 ): SlotUnavailableReason | null {
   if (slotStartAt.getTime() <= input.now.getTime()) return "IN_THE_PAST";
-  if (clashesWithHeld(slotStartAt.getTime(), SLOT_DURATION_MINUTES, input.held)) {
+  if (clashesWithHeld(slotStartAt.getTime(), durationMinutes, input.held)) {
     return "ALREADY_BOOKED";
   }
-  if (clashesWithHeld(slotStartAt.getTime(), SLOT_DURATION_MINUTES, input.offers ?? [])) {
+  if (clashesWithHeld(slotStartAt.getTime(), durationMinutes, input.offers ?? [])) {
     return "HELD_FOR_WAITLIST";
   }
   if (input.observatory.weatherHold) return "WEATHER_HOLD";
@@ -159,10 +181,12 @@ function unavailableReason(
  * A slot is only emitted if it fits entirely inside darkness. A session that
  * would run past dawn is not offered at all rather than offered short: the
  * customer booked thirty minutes on a telescope, and thirty minutes is what the
- * slot has to be able to deliver.
+ * slot has to be able to deliver. Every slot runs `input.durationMinutes`.
  */
 export function generateSlots(input: SlotAvailabilityInput): Slot[] {
-  const durationMs = SLOT_DURATION_MINUTES * 60_000;
+  const durationMinutes = input.durationMinutes ?? SLOT_DURATION_MINUTES;
+  const durationMs = durationMinutes * 60_000;
+  const priceMinor = sessionPriceMinor(durationMinutes);
   const strideMs = SLOT_STRIDE_MINUTES * 60_000;
 
   const slots: Slot[] = [];
@@ -174,15 +198,15 @@ export function generateSlots(input: SlotAvailabilityInput): Slot[] {
     startMs += strideMs
   ) {
     const startAt = new Date(startMs);
-    const reason = unavailableReason(startAt, input);
+    const reason = unavailableReason(startAt, durationMinutes, input);
 
     slots.push({
       observatoryId: input.observatoryId,
       startAt: startAt.toISOString(),
       endAt: new Date(startMs + durationMs).toISOString(),
-      durationMinutes: SLOT_DURATION_MINUTES,
+      durationMinutes,
       available: reason === null,
-      priceMinor: PROVISIONAL_SLOT_PRICE_MINOR,
+      priceMinor,
       currency: "GEL",
       unavailableReason: reason,
       forecast: input.forecastFor?.(startMs, startMs + durationMs) ?? UNKNOWN_FORECAST,

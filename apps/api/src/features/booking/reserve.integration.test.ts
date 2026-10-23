@@ -145,6 +145,7 @@ async function reserve(options: {
   slotStartAt: Date;
   idempotencyKey?: string | null;
   now?: Date;
+  durationMinutes?: number;
 }) {
   return reserveSlot({
     userId: options.userId ?? userId,
@@ -152,7 +153,7 @@ async function reserve(options: {
       observatoryId: options.observatoryId ?? observatoryId,
       ...(options.targetId === null ? {} : { targetId: options.targetId ?? targetId }),
       slotStartAt: options.slotStartAt.toISOString(),
-      durationMinutes: SLOT_DURATION_MINUTES,
+      durationMinutes: options.durationMinutes ?? SLOT_DURATION_MINUTES,
     },
     idempotencyKey: options.idempotencyKey ?? null,
     now: options.now ?? NOW,
@@ -817,6 +818,56 @@ describe("quarter-hour starts", () => {
     expect(reasonAt(15)).toBeNull();
     for (const offset of [30, 45, 60, 75, 90]) expect(reasonAt(offset)).toBe("ALREADY_BOOKED");
     expect(reasonAt(105)).toBeNull();
+  });
+});
+
+/** Clients ADR-072: a session of any quarter hour from 15 minutes to 4 hours. */
+describe("any session length", () => {
+  const minutes = (from: Date, count: number) => new Date(from.getTime() + count * 60_000);
+
+  it("sells a 60-minute session at the 30-minute rate per minute, and holds all of it", async () => {
+    const slotStartAt = firstSlotStartAt();
+
+    const result = await reserve({ slotStartAt, durationMinutes: 60 });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.booking.durationMinutes).toBe(60);
+    const list = PROVISIONAL_SLOT_PRICE_MINOR * 2;
+    expect(result.body.booking.priceMinor).toBe(list - Math.floor(list / 10));
+
+    // Held for its whole hour and the turnaround after it.
+    for (const offset of [45, 60]) {
+      const refused = await reserve({
+        userId: await createUser(),
+        slotStartAt: minutes(slotStartAt, offset),
+      });
+      expect(refused.ok).toBe(false);
+      if (refused.ok) return;
+      expect(refused.status).toBe(409);
+    }
+    expect(
+      (await reserve({ userId: await createUser(), slotStartAt: minutes(slotStartAt, 75) })).ok,
+    ).toBe(true);
+  });
+
+  it("refuses a length that is not a quarter hour from 15 to 240, and holds nothing", async () => {
+    for (const durationMinutes of [10, 20, 255]) {
+      const refused = await reserve({ slotStartAt: firstSlotStartAt(), durationMinutes });
+      expect(refused.ok).toBe(false);
+      if (refused.ok) return;
+      expect(refused.status).toBe(422);
+    }
+    expect(await database.booking.count()).toBe(0);
+  });
+
+  it("lists slots of the length asked for, priced for it", async () => {
+    const list = await listSlotsForDate(observatoryId, NIGHT, NOW, 0, 45);
+    expect(list?.items.length).toBeGreaterThan(0);
+    for (const slot of list?.items ?? []) {
+      expect(slot.durationMinutes).toBe(45);
+      expect(slot.priceMinor).toBe((PROVISIONAL_SLOT_PRICE_MINOR * 3) / 2);
+    }
   });
 });
 
