@@ -124,7 +124,9 @@ def test_capture_waits_for_the_live_exposure_and_starts_its_own_stack() -> None:
     assert camera.running, "expected a live exposure in flight"
 
     accepted = runner.request_capture(
-        "cmd-1", ImagingProfile.double_star, Profile(exposure_milliseconds=250.0, gain=150, frames=4)
+        "cmd-1",
+        ImagingProfile.double_star,
+        Profile(exposure_milliseconds=250.0, gain=150, frames=4),
     )
     assert accepted
     for _ in range(200):
