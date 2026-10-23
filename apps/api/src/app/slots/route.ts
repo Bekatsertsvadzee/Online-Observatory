@@ -1,12 +1,13 @@
 import { zListSlotsQuery } from "@darkview/contracts/zod";
 
 import { listSlotsForDate } from "@/features/booking/slots";
+import { isSessionLength, SLOT_DURATION_MINUTES } from "@/lib/slots/generate";
 import { apiError } from "@/lib/http/api-error";
 import { getServerEnvironment } from "@/lib/validation/env";
 
 /**
- * GET /slots?observatoryId=...&date=YYYY-MM-DD -- bookable slots on one
- * observatory, for one of its local dates.
+ * GET /slots?observatoryId=...&date=YYYY-MM-DD[&durationMinutes=45] -- bookable slots
+ * on one observatory, for one of its local dates, of one length (clients ADR-072).
  *
  * Public: someone deciding whether to book should not have to sign up first.
  * Computed from astronomical darkness at request time.
@@ -41,11 +42,22 @@ export async function GET(request: Request) {
     return apiError(422, "VALIDATION_FAILED", `${date} is not a real date.`);
   }
 
+  const length = params.get("durationMinutes");
+  const durationMinutes = length === null ? SLOT_DURATION_MINUTES : Number(length);
+  if (!/^\d+$/.test(length ?? "30") || !isSessionLength(durationMinutes)) {
+    return apiError(
+      422,
+      "VALIDATION_FAILED",
+      "`durationMinutes` must be a quarter hour from 15 to 240.",
+    );
+  }
+
   const slots = await listSlotsForDate(
     observatoryId as string,
     date,
     new Date(),
     getServerEnvironment().VIEWING_CONDITIONS_MAX_AGE_MINUTES,
+    durationMinutes,
   );
 
   // Unknown and not bookable are one answer. Whether a suspended partner node

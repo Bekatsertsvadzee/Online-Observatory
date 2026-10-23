@@ -953,7 +953,7 @@ class JoinWaitlistRequest(BaseModel):
     )
     observatory_id: UUID = Field(..., alias='observatoryId')
     slot_start_at: AwareDatetime = Field(..., alias='slotStartAt')
-    duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
+    duration_minutes: int = Field(..., alias='durationMinutes', description='Clients ADR-072. The length of the session waited for.', ge=15, le=240, multiple_of=15)
 
 
 class BookingStatus(StrEnum):
@@ -1032,7 +1032,7 @@ class CreateBookingRequest(BaseModel):
     observatory_id: UUID = Field(..., alias='observatoryId', description='An `id` from `GET /observatories`.')
     target_id: UUID | None = Field(None, alias='targetId', description='Optional. When omitted the platform assigns a target for the slot: of the\nenabled targets whose `expectedMissionMinutes` fits `durationMinutes` and\nthat `GET /targets/visibility` judges observable across the whole slot,\nthe one highest above the horizon at the middle of the slot, ties going to\nthe earlier slug. The booking returned names it. When none qualifies the\nrequest is 422 `VALIDATION_FAILED`.\n')
     slot_start_at: AwareDatetime = Field(..., alias='slotStartAt', description="A start `GET /slots` offers: a quarter hour of the observatory's clock\ninside darkness and the hours the observatory is available. A start whose\nsession would come within the turnaround of another held booking is 409.\n")
-    duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
+    duration_minutes: int = Field(..., alias='durationMinutes', description="Clients ADR-072. The session's length, a `durationMinutes` `GET /slots`\nwas asked for: any quarter hour from 15 minutes to 4 hours. A gift\nvoucher or a free-slot prize pays only for the length it was issued for.\n", ge=15, le=240, multiple_of=15)
     locale: Locale | None = None
     voucher_code: str | None = Field(None, alias='voucherCode', description='A gift voucher code (DV-112), or a FREE_SLOT or DISCOUNT prize code won in\nthe card draw (ADR-060). Case and separators are ignored.\n', max_length=64, min_length=8)
     loyalty_points: int | None = Field(None, alias='loyaltyPoints', description='Points to spend on this booking (DV-095). Never with `voucherCode`.', ge=100, multiple_of=100)

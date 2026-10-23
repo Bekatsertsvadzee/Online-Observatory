@@ -810,7 +810,7 @@ export const zWaitlistEntryList = z.strictObject({
 export const zJoinWaitlistRequest = z.strictObject({
     observatoryId: z.uuid(),
     slotStartAt: z.iso.datetime(),
-    durationMinutes: z.int().gt(0)
+    durationMinutes: z.int().gte(15).lte(240)
 });
 
 export const zSlotList = z.strictObject({
@@ -871,7 +871,7 @@ export const zCreateBookingRequest = z.strictObject({
     observatoryId: z.uuid(),
     targetId: z.uuid().optional(),
     slotStartAt: z.iso.datetime(),
-    durationMinutes: z.int().gt(0),
+    durationMinutes: z.int().gte(15).lte(240),
     locale: zLocale.optional(),
     voucherCode: z.string().min(8).max(64).optional(),
     loyaltyPoints: z.int().gte(100).optional(),
@@ -2695,7 +2695,8 @@ export const zListMyCardPrizesResponse = zCardPrizeList;
 
 export const zListSlotsQuery = z.object({
     observatoryId: z.uuid(),
-    date: z.iso.date()
+    date: z.iso.date(),
+    durationMinutes: z.int().gte(15).lte(240).optional().default(30)
 });
 
 /**

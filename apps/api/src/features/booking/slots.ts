@@ -20,7 +20,8 @@ import {
 const HELD_LOOKBACK_MS = 24 * 60 * 60_000;
 
 /**
- * Bookable slots on one observatory, for one of its local dates.
+ * Bookable slots on one observatory, for one of its local dates, each `durationMinutes`
+ * long (clients ADR-072).
  *
  * The date names the night that *begins* that evening: asking for 3 September
  * returns the window from dusk on the 3rd to dawn on the 4th, which is what
@@ -36,6 +37,7 @@ export async function listSlotsForDate(
   isoDate: string,
   now: Date,
   forecastMaxAgeMinutes = 0,
+  durationMinutes = SLOT_DURATION_MINUTES,
 ): Promise<SlotList | null> {
   const observatory = await findBookableObservatory(observatoryId);
   if (!observatory) return null;
@@ -117,6 +119,7 @@ export async function listSlotsForDate(
         held,
         offers,
         forecastFor,
+        durationMinutes,
       }),
     ),
   };

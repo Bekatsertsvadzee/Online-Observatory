@@ -8,7 +8,9 @@ import { nightWindow } from "@/lib/slots/darkness";
 import {
   clashesWithHeld,
   generateSlots,
+  isSessionLength,
   PROVISIONAL_SLOT_PRICE_MINOR,
+  sessionPriceMinor,
   SLOT_DURATION_MINUTES,
   SLOT_STRIDE_MINUTES,
   SLOT_TURNAROUND_MINUTES,
@@ -349,5 +351,63 @@ describe("every slot carries a forecast (clients ADR-068)", () => {
     expect(zSlotList.parse({ observatoryId, date: "2026-12-21", items: generated }).items).toHaveLength(
       generated.length,
     );
+  });
+});
+
+describe("a session of any quarter hour from 15 minutes to 4 hours (clients ADR-072)", () => {
+  it("accepts exactly the quarter hours from 15 to 240", () => {
+    for (const minutes of [15, 30, 45, 60, 90, 135, 240]) {
+      expect(isSessionLength(minutes), String(minutes)).toBe(true);
+    }
+    for (const minutes of [0, 10, 14, 20, 31, 44.5, 255, 300, -15, Number.NaN]) {
+      expect(isSessionLength(minutes), String(minutes)).toBe(false);
+    }
+  });
+
+  it("prices every length at the default length's rate per minute", () => {
+    expect(sessionPriceMinor(SLOT_DURATION_MINUTES)).toBe(PROVISIONAL_SLOT_PRICE_MINOR);
+    expect(sessionPriceMinor(15)).toBe(2250);
+    expect(sessionPriceMinor(45)).toBe(6750);
+    expect(sessionPriceMinor(60)).toBe(9000);
+    expect(sessionPriceMinor(240)).toBe(36000);
+  });
+
+  it("makes every slot as long as asked, priced for its length", () => {
+    for (const durationMinutes of [15, 45, 60, 240]) {
+      const generated = slots({ durationMinutes });
+      expect(generated.length).toBeGreaterThan(0);
+      for (const slot of generated) {
+        expect(slot.durationMinutes).toBe(durationMinutes);
+        expect(Date.parse(slot.endAt) - Date.parse(slot.startAt)).toBe(
+          durationMinutes * 60_000,
+        );
+        expect(slot.priceMinor).toBe(sessionPriceMinor(durationMinutes));
+        expect(Date.parse(slot.endAt)).toBeLessThanOrEqual(window.dawnAt.getTime());
+        expect(zSlot.safeParse(slot).success).toBe(true);
+      }
+    }
+  });
+
+  it("offers fewer starts for a longer session, still on the quarter-hour grid", () => {
+    const half = slots({ durationMinutes: 30 });
+    const four = slots({ durationMinutes: 240 });
+    expect(four.length).toBe(half.length - (240 - 30) / SLOT_STRIDE_MINUTES);
+    expect(four[0].startAt).toBe(half[0].startAt);
+  });
+
+  it("blocks every start whose longer session would reach a held booking's turnaround", () => {
+    const held = slots()[12];
+    const heldStartMs = Date.parse(held.startAt);
+    const generated = slots({
+      durationMinutes: 60,
+      held: [{ slotStartAt: new Date(heldStartMs), durationMinutes: 30 }],
+    });
+    for (const slot of generated) {
+      const startMs = Date.parse(slot.startAt);
+      const clashes =
+        startMs < heldStartMs + (30 + SLOT_TURNAROUND_MINUTES) * 60_000 &&
+        heldStartMs < startMs + (60 + SLOT_TURNAROUND_MINUTES) * 60_000;
+      expect(slot.unavailableReason === "ALREADY_BOOKED", slot.startAt).toBe(clashes);
+    }
   });
 });

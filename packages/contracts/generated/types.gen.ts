@@ -1257,6 +1257,9 @@ export type WaitlistEntryList = {
 export type JoinWaitlistRequest = {
     observatoryId: string;
     slotStartAt: string;
+    /**
+     * Clients ADR-072. The length of the session waited for.
+     */
     durationMinutes: number;
 };
 
@@ -1401,6 +1404,12 @@ export type CreateBookingRequest = {
      *
      */
     slotStartAt: string;
+    /**
+     * Clients ADR-072. The session's length, a `durationMinutes` `GET /slots`
+     * was asked for: any quarter hour from 15 minutes to 4 hours. A gift
+     * voucher or a free-slot prize pays only for the length it was issued for.
+     *
+     */
     durationMinutes: number;
     locale?: Locale;
     /**
@@ -4550,6 +4559,15 @@ export type ListSlotsData = {
          *
          */
         date: string;
+        /**
+         * Clients ADR-072. How long the session runs: any quarter hour from 15
+         * minutes to 4 hours, 30 when omitted. Every slot returned is that long, is
+         * priced at the per-minute rate times its length, and is offered only where
+         * the whole session and its turnaround fit inside darkness, the hours the
+         * observatory is available, and clear of held bookings.
+         *
+         */
+        durationMinutes?: number;
     };
     url: '/slots';
 };

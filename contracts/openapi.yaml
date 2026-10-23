@@ -1125,6 +1125,21 @@ paths:
           schema:
             type: string
             format: date
+        - name: durationMinutes
+          in: query
+          required: false
+          description: |
+            Clients ADR-072. How long the session runs: any quarter hour from 15
+            minutes to 4 hours, 30 when omitted. Every slot returned is that long, is
+            priced at the per-minute rate times its length, and is offered only where
+            the whole session and its turnaround fit inside darkness, the hours the
+            observatory is available, and clear of held bookings.
+          schema:
+            type: integer
+            minimum: 15
+            maximum: 240
+            multipleOf: 15
+            default: 30
       responses:
         "200":
           description: Slots for the requested date.
@@ -4785,7 +4800,10 @@ components:
           format: date-time
         durationMinutes:
           type: integer
-          exclusiveMinimum: 0
+          minimum: 15
+          maximum: 240
+          multipleOf: 15
+          description: Clients ADR-072. The length of the session waited for.
 
     SlotList:
       type: object
@@ -4993,7 +5011,13 @@ components:
             session would come within the turnaround of another held booking is 409.
         durationMinutes:
           type: integer
-          exclusiveMinimum: 0
+          minimum: 15
+          maximum: 240
+          multipleOf: 15
+          description: |
+            Clients ADR-072. The session's length, a `durationMinutes` `GET /slots`
+            was asked for: any quarter hour from 15 minutes to 4 hours. A gift
+            voucher or a free-slot prize pays only for the length it was issued for.
         locale:
           $ref: "#/components/schemas/Locale"
         voucherCode:
