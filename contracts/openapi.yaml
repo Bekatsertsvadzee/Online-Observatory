@@ -4255,11 +4255,23 @@ components:
     ObservatoryHorizon:
       type: object
       additionalProperties: false
-      required: [observatoryId, minAltitudeDegrees, mask]
+      required: [observatoryId, latitudeDegrees, longitudeDegrees, minAltitudeDegrees, mask]
       properties:
         observatoryId:
           type: string
           format: uuid
+        latitudeDegrees:
+          type: number
+          minimum: -90
+          maximum: 90
+          description: |
+            Rounded to 0.1°, about ten kilometres: enough to place the stars, and no
+            closer than that. A partner's site is somebody's property.
+        longitudeDegrees:
+          type: number
+          minimum: -180
+          maximum: 180
+          description: Rounded to 0.1°, as `latitudeDegrees`.
         minAltitudeDegrees:
           type: [number, "null"]
           minimum: 0

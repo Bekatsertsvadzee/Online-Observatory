@@ -808,6 +808,8 @@ class ObservatoryHorizon(BaseModel):
         extra='forbid',
     )
     observatory_id: UUID = Field(..., alias='observatoryId')
+    latitude_degrees: float = Field(..., alias='latitudeDegrees', description="Rounded to 0.1°, about ten kilometres: enough to place the stars, and no\ncloser than that. A partner's site is somebody's property.\n", ge=-90.0, le=90.0)
+    longitude_degrees: float = Field(..., alias='longitudeDegrees', description='Rounded to 0.1°, as `latitudeDegrees`.', ge=-180.0, le=180.0)
     min_altitude_degrees: float | None = Field(..., alias='minAltitudeDegrees', ge=0.0, le=90.0)
     mask: list[HorizonMaskEntry] = Field(..., description='Surveyed bearings in order of azimuth.')
 

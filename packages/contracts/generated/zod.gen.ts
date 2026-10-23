@@ -666,6 +666,8 @@ export const zHorizonMaskEntry = z.strictObject({
 
 export const zObservatoryHorizon = z.strictObject({
     observatoryId: z.uuid(),
+    latitudeDegrees: z.number().gte(-90).lte(90),
+    longitudeDegrees: z.number().gte(-180).lte(180),
     minAltitudeDegrees: z.number().gte(0).lte(90).nullable(),
     mask: z.array(zHorizonMaskEntry)
 });

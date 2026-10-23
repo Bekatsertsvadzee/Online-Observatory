@@ -994,6 +994,16 @@ export type HorizonMaskEntry = {
 
 export type ObservatoryHorizon = {
     observatoryId: string;
+    /**
+     * Rounded to 0.1°, about ten kilometres: enough to place the stars, and no
+     * closer than that. A partner's site is somebody's property.
+     *
+     */
+    latitudeDegrees: number;
+    /**
+     * Rounded to 0.1°, as `latitudeDegrees`.
+     */
+    longitudeDegrees: number;
     minAltitudeDegrees: number | null;
     /**
      * Surveyed bearings in order of azimuth.

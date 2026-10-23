@@ -153,6 +153,9 @@ describe("the horizon for the sky chart", () => {
     expect(zObservatoryHorizon.parse(horizon)).toEqual(horizon);
     expect(horizon).toEqual({
       observatoryId,
+      // 41.7151, 44.8271, to a tenth of a degree.
+      latitudeDegrees: 41.7,
+      longitudeDegrees: 44.8,
       minAltitudeDegrees: 20,
       mask: [
         { azimuthDegrees: 0, minAltitudeDegrees: 25 },
@@ -167,6 +170,8 @@ describe("the horizon for the sky chart", () => {
 
     expect(await readObservatoryHorizon(observatoryId)).toEqual({
       observatoryId,
+      latitudeDegrees: 41.7,
+      longitudeDegrees: 44.8,
       minAltitudeDegrees: null,
       mask: [],
     });

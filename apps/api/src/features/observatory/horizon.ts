@@ -5,6 +5,8 @@ import type { ObservatoryHorizon } from "@darkview/contracts";
 import { findBookableObservatory } from "@/features/booking/observatories";
 import { getDatabase } from "@/lib/db/client";
 
+const tenth = (value: number) => Math.round(value * 10) / 10;
+
 /**
  * The horizon an observatory's telescope cannot see below (Phase 6.2), for the live
  * room's sky chart. Drawn only: the envelope is enforced by the cloud and the agent.
@@ -30,6 +32,8 @@ export async function readObservatoryHorizon(
 
   return {
     observatoryId: observatory.id,
+    latitudeDegrees: tenth(observatory.latitude),
+    longitudeDegrees: tenth(observatory.longitude),
     minAltitudeDegrees: envelope?.minAltitudeDegrees ?? null,
     mask: envelope?.horizonMask ?? [],
   };
