@@ -9,6 +9,41 @@ import type { LiveFrame } from "@/stream/frames";
 import type { LiveStream } from "@/stream/live-stream";
 
 const STREAM_PATH = /^\/stream\/mission\/([0-9a-fA-F-]{36})$/;
+const SPECTATE_PATH = /^\/stream\/mission\/([0-9a-fA-F-]{36})\/spectate$/;
+
+/** Clients ADR-066 §3 and §4: one frame every four seconds, twenty at once. */
+export const SPECTATOR_FRAME_INTERVAL_MS = 4000;
+export const SPECTATOR_CAPACITY = 20;
+/** How often a running spectator stream asks whether the session is still open to it. */
+export const SPECTATOR_RECHECK_MS = 15_000;
+/** A spectator stream's outer bound; the recheck ends it long before, normally. */
+const SPECTATOR_MAX_MS = 2 * 60 * 60_000;
+
+/** Spectators watching each mission now, held in memory and nowhere else (ADR-066). */
+export class SpectatorGate {
+  private readonly counts = new Map<string, number>();
+
+  constructor(private readonly capacity = SPECTATOR_CAPACITY) {}
+
+  tryAdmit(missionId: string): boolean {
+    const count = this.counts.get(missionId) ?? 0;
+    if (count >= this.capacity) return false;
+    this.counts.set(missionId, count + 1);
+    return true;
+  }
+
+  release(missionId: string): void {
+    const count = (this.counts.get(missionId) ?? 1) - 1;
+    if (count <= 0) this.counts.delete(missionId);
+    else this.counts.set(missionId, count);
+  }
+
+  watching(missionId: string): number {
+    return this.counts.get(missionId) ?? 0;
+  }
+}
+
+const defaultGate = new SpectatorGate();
 
 const CONTENT_TYPE_FOR: Record<LiveFrameEncoding, string> = {
   JPEG: "image/jpeg",
@@ -18,6 +53,7 @@ export type StreamDependencies = {
   store: MissionChannelStore;
   stream: LiveStream;
   now?: () => Date;
+  spectators?: SpectatorGate;
 };
 
 /**
@@ -43,6 +79,11 @@ export async function handleStreamRequest(
   response: ServerResponse,
 ): Promise<boolean> {
   const url = new URL(request.url ?? "/", "http://localhost");
+  const spectate = SPECTATE_PATH.exec(url.pathname);
+  if (spectate) {
+    await spectateMission(dependencies, request, response, spectate[1]);
+    return true;
+  }
   const path = STREAM_PATH.exec(url.pathname);
   if (!path) return false;
 
@@ -102,6 +143,53 @@ async function authorise(
 }
 
 /**
+ * Clients ADR-066: the view of a session its owner opened to Tonight, live. No sign-in
+ * and no token -- the owner's open flag is the grant, asked now and every
+ * SPECTATOR_RECHECK_MS while it runs. Not open, not live or no frame yet is the same
+ * 404 the signed stream gives; a full house is 503, so the page can say so and offer
+ * a booking instead.
+ */
+async function spectateMission(
+  {
+    store,
+    stream: live,
+    now = () => new Date(),
+    spectators = defaultGate,
+  }: StreamDependencies,
+  request: IncomingMessage,
+  response: ServerResponse,
+  missionId: string,
+): Promise<void> {
+  const frame =
+    request.method === "GET" && (await store.isOnTonight(missionId))
+      ? live.latest(missionId)
+      : null;
+  if (!frame) {
+    response.writeHead(404, { "cache-control": "no-store" }).end();
+    return;
+  }
+  if (!spectators.tryAdmit(missionId)) {
+    response.writeHead(503, { "cache-control": "no-store", "retry-after": "30" }).end();
+    return;
+  }
+
+  const at = now();
+  stream(live, response, frame, new Date(at.getTime() + SPECTATOR_MAX_MS), at, {
+    minIntervalMs: SPECTATOR_FRAME_INTERVAL_MS,
+    stillAllowed: () => store.isOnTonight(missionId),
+    onFinish: () => spectators.release(missionId),
+  });
+}
+
+type StreamOptions = {
+  /** Write no faster than this: a spectator's lower rate (ADR-066 §3). */
+  minIntervalMs?: number;
+  /** Asked every SPECTATOR_RECHECK_MS; the stream ends the first time it says no. */
+  stillAllowed?: () => Promise<boolean>;
+  onFinish?: () => void;
+};
+
+/**
  * Write frames until the mission stops, the client leaves, or the grant lapses.
  *
  * Latest-frame-wins under backpressure: if the socket has not drained, the frame
@@ -115,6 +203,7 @@ function stream(
   first: LiveFrame,
   expiresAt: Date,
   now: Date,
+  options: StreamOptions = {},
 ): void {
   const boundary = `darkview-${randomUUID()}`;
   let writable = true;
@@ -130,8 +219,12 @@ function stream(
     connection: "close",
   });
 
+  let lastWrittenAt = 0;
   const write = (frame: LiveFrame) => {
     if (!writable || finished) return;
+    const at = Date.now();
+    if (options.minIntervalMs && at - lastWrittenAt < options.minIntervalMs) return;
+    lastWrittenAt = at;
     writable = response.write(part(boundary, frame));
   };
 
@@ -152,12 +245,25 @@ function stream(
     Math.max(0, expiresAt.getTime() - now.getTime()),
   );
 
+  const recheck = options.stillAllowed
+    ? setInterval(() => {
+        void options.stillAllowed?.().then(
+          (allowed) => {
+            if (!allowed) finish();
+          },
+          () => finish(),
+        );
+      }, SPECTATOR_RECHECK_MS)
+    : null;
+
   function finish() {
     if (finished) return;
     finished = true;
     clearTimeout(deadline);
+    if (recheck) clearInterval(recheck);
     stop();
     response.end();
+    options.onFinish?.();
   }
 
   // Fires whether the client navigated away or the socket died. Without it every

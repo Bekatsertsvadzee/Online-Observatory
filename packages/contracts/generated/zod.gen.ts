@@ -1147,6 +1147,7 @@ export const zMission = z.strictObject({
     endedAt: z.iso.datetime().nullish(),
     captureIds: z.array(z.uuid()).optional(),
     observable: z.boolean().optional().default(false),
+    broadcast: z.boolean().optional().default(false),
     observerCapacity: z.int().gte(0).lte(10).optional().default(10),
     observerCount: z.int().gte(0).optional()
 });
@@ -1220,6 +1221,30 @@ export const zObserverPack = z.strictObject({
 export const zObserverPackWithPaymentIntent = z.strictObject({
     observerPack: zObserverPack,
     paymentIntent: zPaymentIntent.nullable()
+});
+
+export const zMissionBroadcastSettings = z.strictObject({
+    broadcast: z.boolean()
+});
+
+export const zTonightSession = z.strictObject({
+    missionId: z.uuid(),
+    observatoryId: z.uuid(),
+    target: z.strictObject({
+        slug: z.string(),
+        nameEn: z.string(),
+        nameKa: z.string(),
+        type: zTargetType
+    }),
+    state: zMissionState,
+    mode: zObservatoryMode,
+    endsAt: z.iso.datetime().nullable(),
+    spectatorCapacity: z.int().gte(1),
+    streamPath: z.string()
+});
+
+export const zTonight = z.strictObject({
+    live: zTonightSession.nullable()
 });
 
 /**
@@ -2796,6 +2821,22 @@ export const zSubmitMissionCommandPath = z.object({
  * Accepted and relayed to the observatory.
  */
 export const zSubmitMissionCommandResponse = zMissionCommandAccepted;
+
+export const zSetMissionBroadcastBody = zMissionBroadcastSettings;
+
+export const zSetMissionBroadcastPath = z.object({
+    missionId: z.uuid()
+});
+
+/**
+ * The mission.
+ */
+export const zSetMissionBroadcastResponse = zMission;
+
+/**
+ * Tonight.
+ */
+export const zGetTonightResponse = zTonight;
 
 export const zSetMissionObservationBody = zMissionObservationSettings;
 

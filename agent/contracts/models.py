@@ -1321,6 +1321,7 @@ class Mission(BaseModel):
     ended_at: AwareDatetime | None = Field(None, alias='endedAt')
     capture_ids: list[UUID] | None = Field(None, alias='captureIds')
     observable: bool | None = Field(False, description='Whether the controller has opted this session in to being observed. Sessions\nare PRIVATE by default (ADR-007). Only the session owner may change it.\n')
+    broadcast: bool | None = Field(False, description='Clients ADR-066. Whether the owner has opened this session to anyone on\nTonight, live (`GET /tonight`). Off by default; only the owner changes it,\nwith `PATCH /missions/{missionId}/broadcast`. Separate from `observable`,\nwhich is a paid seat for a signed-in customer.\n')
     observer_capacity: int | None = Field(10, alias='observerCapacity', description='Hard server-side cap on concurrent observers. Never exceeds 10 (ADR-007 as\namended by ADR-036).\n', ge=0, le=10)
     observer_count: int | None = Field(None, alias='observerCount', description='Observers currently attached. Never exceeds observerCapacity.', ge=0)
 
@@ -1412,6 +1413,37 @@ class ObserverPackWithPaymentIntent(BaseModel):
     )
     observer_pack: ObserverPack = Field(..., alias='observerPack')
     payment_intent: PaymentIntent | None = Field(..., alias='paymentIntent', description='Null when an observer-seat prize paid for the pack (ADR-060).')
+
+
+class MissionBroadcastSettings(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    broadcast: bool
+
+
+class Target1(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    slug: str
+    name_en: str = Field(..., alias='nameEn')
+    name_ka: str = Field(..., alias='nameKa')
+    type: TargetType
+
+
+class TonightSession(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    mission_id: UUID = Field(..., alias='missionId')
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    target: Target1
+    state: MissionState
+    mode: ObservatoryMode = Field(..., description="A SIMULATED session's view is badged Simulated wherever it is shown.")
+    ends_at: AwareDatetime | None = Field(..., alias='endsAt', description='When the booked slot ends; null for a session with no booking.')
+    spectator_capacity: int = Field(..., alias='spectatorCapacity', ge=1)
+    stream_path: str = Field(..., alias='streamPath', description="The spectator view's path on the realtime service, `/stream/mission/{missionId}/spectate`.")
 
 
 class MissionObservationSettings(BaseModel):
@@ -1770,16 +1802,6 @@ class CapturePage(BaseModel):
     )
     items: list[Capture]
     page: PageMeta
-
-
-class Target1(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    slug: str
-    name_en: str = Field(..., alias='nameEn')
-    name_ka: str = Field(..., alias='nameKa')
-    type: TargetType
 
 
 class Place(BaseModel):
@@ -2771,6 +2793,13 @@ class BookingPage(BaseModel):
     )
     items: list[Booking]
     page: PageMeta
+
+
+class Tonight(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    live: TonightSession | None
 
 
 class MissionWatchView(BaseModel):

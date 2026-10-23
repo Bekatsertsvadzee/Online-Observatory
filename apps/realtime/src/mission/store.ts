@@ -70,6 +70,13 @@ export interface MissionChannelStore {
    * whenever their token happens to lapse.
    */
   mayWatchMission(missionId: string, userId: string, now: Date): Promise<boolean>;
+
+  /**
+   * Clients ADR-066: whether the owner has opened this mission to Tonight, live, and it
+   * is live. Asked on every spectator request and while the stream runs, so closing it
+   * or the mission ending stops every spectator.
+   */
+  isOnTonight(missionId: string): Promise<boolean>;
 }
 
 export type ChannelUser = {

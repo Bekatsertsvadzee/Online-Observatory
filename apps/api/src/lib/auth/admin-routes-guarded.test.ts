@@ -120,12 +120,15 @@ describe("every admin route is behind the operator guard", () => {
     //   gallery  public by contract (security: []) -- a capture its owner shared
     //            (clients ADR-065): REAL and GALLERY only, never the owner, the
     //            mission or the price; everything else is one 404.
+    //   tonight  public by contract (security: []) -- the session its owner opened to
+    //            anyone (clients ADR-066): target, state and end, never a person.
     const publicRoutes = new Set([
       "health",
       "targets",
       "slots",
       "observatories",
       "gallery",
+      "tonight",
     ]);
     // One file, not a segment: GET /loyalty beside it needs a session.
     //   loyalty/scheme  public by contract (security: []) -- the club's published

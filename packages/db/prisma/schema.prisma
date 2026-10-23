@@ -811,6 +811,10 @@ model Mission {
   /// ADR-007: observers receive no captures, and CaptureAccess stays frozen. This
   /// must remain false for every mission Phase 1 creates.
   allowSharedCaptures Boolean              @default(false)
+  /// Contract: Mission.broadcast. Clients ADR-066: the owner opened this session to
+  /// anyone on Tonight, live. Off by default; separate from the paid observer seats
+  /// that joinPolicy governs.
+  broadcast           Boolean              @default(false)
   /// Contract: Mission.observerCapacity. Seats available to observers, over and
   /// above the one controller.
   ///

@@ -148,6 +148,7 @@ describe("authenticating a client", () => {
       loadMissionSnapshot: store.loadMissionSnapshot.bind(store),
       hasObserverSeat: store.hasObserverSeat.bind(store),
       mayWatchMission: store.mayWatchMission.bind(store),
+      isOnTonight: store.isOnTonight.bind(store),
     };
 
     await authenticateClient(spy, { cookie: `darkview_session=${TOKEN}` }, now);

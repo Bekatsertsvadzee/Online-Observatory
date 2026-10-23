@@ -400,6 +400,13 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     return this.hasObserverSeat(missionId, userId);
   }
 
+  /** Missions whose owner opened them to Tonight, live (ADR-066). */
+  readonly tonight = new Set<string>();
+
+  async isOnTonight(missionId: string): Promise<boolean> {
+    return this.tonight.has(missionId) && this.missions.has(missionId);
+  }
+
   async loadMissionSnapshot(missionId: string): Promise<MissionSnapshot | null> {
     const mission = this.missions.get(missionId);
     if (!mission) return null;

@@ -1813,6 +1813,59 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /missions/{missionId}/broadcast:
+    patch:
+      operationId: setMissionBroadcast
+      tags: [missions]
+      summary: The owner opens their session to Tonight, live, or closes it.
+      description: |
+        Clients ADR-066. Owner only: anyone else, operators included, gets 404, as for a
+        mission that does not exist. Refused with 409 MISSION_NOT_ACTIVE once the mission
+        has ended. Idempotent. Closing ends every spectator's stream on its next frame.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MissionBroadcastSettings"
+      responses:
+        "200":
+          description: The mission.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Mission"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /tonight:
+    get:
+      operationId: getTonight
+      tags: [missions]
+      summary: The session open to anyone right now, if there is one.
+      description: |
+        Clients ADR-066. Public. The one live session whose owner opened it to Tonight,
+        live -- the most recently started when more than one is -- or null. It names the
+        target, the state and when the session ends, never the owner. The view itself is
+        `GET /stream/mission/{missionId}/spectate` on the realtime service: one frame
+        every four seconds, at most `spectatorCapacity` viewers at once.
+      security: []
+      responses:
+        "200":
+          description: Tonight.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tonight"
+
   /missions/{missionId}/observation:
     patch:
       operationId: setMissionObservation
@@ -5357,6 +5410,14 @@ components:
           description: |
             Whether the controller has opted this session in to being observed. Sessions
             are PRIVATE by default (ADR-007). Only the session owner may change it.
+        broadcast:
+          type: boolean
+          default: false
+          description: |
+            Clients ADR-066. Whether the owner has opened this session to anyone on
+            Tonight, live (`GET /tonight`). Off by default; only the owner changes it,
+            with `PATCH /missions/{missionId}/broadcast`. Separate from `observable`,
+            which is a paid seat for a signed-in customer.
         observerCapacity:
           type: integer
           minimum: 0
@@ -5517,6 +5578,65 @@ components:
           oneOf:
             - $ref: "#/components/schemas/PaymentIntent"
             - type: "null"
+
+    MissionBroadcastSettings:
+      type: object
+      additionalProperties: false
+      required: [broadcast]
+      properties:
+        broadcast:
+          type: boolean
+
+    Tonight:
+      type: object
+      additionalProperties: false
+      required: [live]
+      properties:
+        live:
+          oneOf:
+            - $ref: "#/components/schemas/TonightSession"
+            - type: "null"
+
+    TonightSession:
+      type: object
+      additionalProperties: false
+      required:
+        [missionId, observatoryId, target, state, mode, endsAt, spectatorCapacity, streamPath]
+      properties:
+        missionId:
+          type: string
+          format: uuid
+        observatoryId:
+          type: string
+          format: uuid
+        target:
+          type: object
+          additionalProperties: false
+          required: [slug, nameEn, nameKa, type]
+          properties:
+            slug:
+              type: string
+            nameEn:
+              type: string
+            nameKa:
+              type: string
+            type:
+              $ref: "#/components/schemas/TargetType"
+        state:
+          $ref: "#/components/schemas/MissionState"
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+          description: A SIMULATED session's view is badged Simulated wherever it is shown.
+        endsAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the booked slot ends; null for a session with no booking.
+        spectatorCapacity:
+          type: integer
+          minimum: 1
+        streamPath:
+          type: string
+          description: The spectator view's path on the realtime service, `/stream/mission/{missionId}/spectate`.
 
     MissionObservationSettings:
       type: object

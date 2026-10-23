@@ -267,6 +267,19 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
       return heldObserverSeat(database, missionId, userId);
     },
 
+    async isOnTonight(missionId: string): Promise<boolean> {
+      // Live only: a scheduled session has nothing to show yet, and an ended one is over.
+      const mission = await database.mission.findFirst({
+        where: {
+          id: missionId,
+          broadcast: true,
+          state: { in: [...LIVE_MISSION_STATES] },
+        },
+        select: { id: true },
+      });
+      return mission !== null;
+    },
+
     async loadMissionSnapshot(missionId: string): Promise<MissionSnapshot | null> {
       const mission = await database.mission.findUnique({
         where: { id: missionId },
