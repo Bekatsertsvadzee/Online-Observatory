@@ -1,9 +1,11 @@
 import { createServer } from "node:http";
 
 import { PrismaPg } from "@prisma/adapter-pg";
+import * as Sentry from "@sentry/node";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { PrismaClient } from "@darkview/db";
+import { monitoringOptions } from "@darkview/monitoring/options";
 
 import { authenticateAgent } from "@/auth/device-token";
 import { authenticateClient, isAllowedOrigin } from "@/auth/user-session";
@@ -27,7 +29,11 @@ import { handleInternalRequest } from "@/internal/http";
 import { handleStreamRequest } from "@/stream/http";
 import { LiveStream } from "@/stream/live-stream";
 import { getEnvironment } from "@/env";
-import { refuseRealHardwareInDemo, sandboxMoneyAllowed, sweepSeconds } from "@/deployment";
+import {
+  refuseRealHardwareInDemo,
+  sandboxMoneyAllowed,
+  sweepSeconds,
+} from "@/deployment";
 import { dispatchPendingEmails, queueSlotReminders } from "@/notifications/email";
 import { evaluateEndedSlots, refundExpiredEntitlements } from "@/refunds/entitlements";
 import { createSandboxCharger, sweepSubscriptions } from "@/subscriptions/renewals";
@@ -166,10 +172,7 @@ export function createRealtimeServer(
       const path = new URL(request.url ?? "/", "http://localhost").pathname;
 
       if (path === AGENT_PATH) {
-        const observatory = await authenticateAgent(
-          store,
-          request.headers.authorization,
-        );
+        const observatory = await authenticateAgent(store, request.headers.authorization);
         if (!observatory) {
           // No detail: an unauthenticated caller learns nothing about which part
           // of the credential was wrong, or whether the observatory exists.
@@ -405,6 +408,17 @@ if (process.env.NODE_ENV !== "test") {
   const environment = getEnvironment();
   const deployment = environment.DARKVIEW_DEPLOYMENT;
 
+  // ADR-064. Every failure here is caught and written with console.error -- the
+  // sweeps, the listener, the channels -- so console.error is what is reported, with
+  // anything uncaught. Nothing is sent unless SENTRY_DSN is set.
+  const monitoring = monitoringOptions(process.env);
+  if (monitoring) {
+    Sentry.init({
+      ...monitoring,
+      integrations: [Sentry.captureConsoleIntegration({ levels: ["error"] })],
+    });
+  }
+
   // DV-064. Its own client, so the link's store interface stays as narrow as the
   // link needs. Reminders are queued whether or not delivery is configured; an
   // outbox that fills while the mail service is unset is delivered once it is set.
@@ -429,7 +443,11 @@ if (process.env.NODE_ENV !== "test") {
     {
       // No slower than a command's 30-second life, or the fallback finds only expired work.
       pendingSeconds: sweepSeconds(deployment, PENDING_SWEEP_INTERVAL_SECONDS, 30),
-      unstartedSeconds: sweepSeconds(deployment, UNSTARTED_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS),
+      unstartedSeconds: sweepSeconds(
+        deployment,
+        UNSTARTED_SWEEP_INTERVAL_SECONDS,
+        DEMO_SWEEP_SECONDS,
+      ),
     },
   );
   server.listen(environment.REALTIME_PORT);
@@ -444,45 +462,58 @@ if (process.env.NODE_ENV !== "test") {
   });
   void listener.start();
 
-  setInterval(() => {
-    void queueSlotReminders(notifications, new Date()).catch((error) => {
-      console.error("darkview realtime: slot reminders", error);
-    });
-  }, sweepSeconds(deployment, REMINDER_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS) * 1000);
+  setInterval(
+    () => {
+      void queueSlotReminders(notifications, new Date()).catch((error) => {
+        console.error("darkview realtime: slot reminders", error);
+      });
+    },
+    sweepSeconds(deployment, REMINDER_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS) * 1000,
+  );
 
   // DV-111, sharing the notifications client: both write to the email outbox.
-  setInterval(() => {
-    const now = new Date();
-    void evaluateEndedSlots(notifications, now)
-      .then(() => refundExpiredEntitlements(notifications, now))
-      .then(({ unrefundable }) => {
-        if (unrefundable > 0) {
-          console.error(
-            `darkview realtime: ${unrefundable} expired entitlement(s) are on a provider with no refund integration`,
-          );
-        }
-      })
-      .catch((error) => {
-        console.error("darkview realtime: entitlements", error);
-      });
-  }, sweepSeconds(deployment, ENTITLEMENT_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS) * 1000);
+  setInterval(
+    () => {
+      const now = new Date();
+      void evaluateEndedSlots(notifications, now)
+        .then(() => refundExpiredEntitlements(notifications, now))
+        .then(({ unrefundable }) => {
+          if (unrefundable > 0) {
+            console.error(
+              `darkview realtime: ${unrefundable} expired entitlement(s) are on a provider with no refund integration`,
+            );
+          }
+        })
+        .catch((error) => {
+          console.error("darkview realtime: entitlements", error);
+        });
+    },
+    sweepSeconds(deployment, ENTITLEMENT_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS) *
+      1000,
+  );
 
   // ADR-022 sections 8 and 9. The sandbox is never charged in production (ADR-022
   // section 11), so there the sweep still expires minutes and ends subscriptions
   // but opens no charge, until a real provider's charger exists. A demo deployment
   // (ADR-035) takes no real money and charges the sandbox.
   const charger = sandboxMoneyAllowed(environment) ? createSandboxCharger() : null;
-  setInterval(() => {
-    void sweepSubscriptions(notifications, { charger, now: new Date() })
-      .then(({ unsubmitted }) => {
-        if (unsubmitted > 0) {
-          console.error(`darkview realtime: ${unsubmitted} renewal charge(s) were not accepted`);
-        }
-      })
-      .catch((error) => {
-        console.error("darkview realtime: subscriptions", error);
-      });
-  }, sweepSeconds(deployment, SUBSCRIPTION_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS) * 1000);
+  setInterval(
+    () => {
+      void sweepSubscriptions(notifications, { charger, now: new Date() })
+        .then(({ unsubmitted }) => {
+          if (unsubmitted > 0) {
+            console.error(
+              `darkview realtime: ${unsubmitted} renewal charge(s) were not accepted`,
+            );
+          }
+        })
+        .catch((error) => {
+          console.error("darkview realtime: subscriptions", error);
+        });
+    },
+    sweepSeconds(deployment, SUBSCRIPTION_SWEEP_INTERVAL_SECONDS, DEMO_SWEEP_SECONDS) *
+      1000,
+  );
 
   // DV-110. Advisory only: this writes forecasts and never touches a weather hold.
   // meteoblue goes first in this list once a key and a verified adapter exist.
@@ -493,11 +524,17 @@ if (process.env.NODE_ENV !== "test") {
     );
   }
   const refreshConditions = () => {
-    void refreshViewingConditions(notifications, { sources: forecastSources, now: new Date() })
+    void refreshViewingConditions(notifications, {
+      sources: forecastSources,
+      now: new Date(),
+    })
       .then(({ unavailable, failures }) => {
-        for (const failure of failures) console.error(`darkview realtime: conditions ${failure}`);
+        for (const failure of failures)
+          console.error(`darkview realtime: conditions ${failure}`);
         if (unavailable > 0) {
-          console.error(`darkview realtime: no forecast for ${unavailable} observatory(ies)`);
+          console.error(
+            `darkview realtime: no forecast for ${unavailable} observatory(ies)`,
+          );
         }
       })
       .catch((error) => {
@@ -510,30 +547,42 @@ if (process.env.NODE_ENV !== "test") {
 
   const webhook =
     environment.NOTIFICATION_WEBHOOK_URL && environment.NOTIFICATION_WEBHOOK_SECRET
-      ? { url: environment.NOTIFICATION_WEBHOOK_URL, secret: environment.NOTIFICATION_WEBHOOK_SECRET }
+      ? {
+          url: environment.NOTIFICATION_WEBHOOK_URL,
+          secret: environment.NOTIFICATION_WEBHOOK_SECRET,
+        }
       : null;
   const resend =
     environment.RESEND_API_KEY && environment.EMAIL_FROM
-      ? { apiKey: environment.RESEND_API_KEY, from: environment.EMAIL_FROM, appUrl: environment.APP_URL }
+      ? {
+          apiKey: environment.RESEND_API_KEY,
+          from: environment.EMAIL_FROM,
+          appUrl: environment.APP_URL,
+        }
       : null;
   if (webhook || resend) {
-    setInterval(() => {
-      void dispatchPendingEmails({
-        database: notifications,
-        webhook: webhook ?? undefined,
-        resend: resend ?? undefined,
-        now: new Date(),
-        voucherCodeSecret: environment.VOUCHER_CODE_SECRET,
-      })
-        .then((summary) => {
-          if (summary.failed > 0) {
-            console.error(`darkview realtime: ${summary.failed} email(s) gave up after every retry`);
-          }
+    setInterval(
+      () => {
+        void dispatchPendingEmails({
+          database: notifications,
+          webhook: webhook ?? undefined,
+          resend: resend ?? undefined,
+          now: new Date(),
+          voucherCodeSecret: environment.VOUCHER_CODE_SECRET,
         })
-        .catch((error) => {
-          console.error("darkview realtime: email delivery", error);
-        });
-    }, sweepSeconds(deployment, EMAIL_DISPATCH_INTERVAL_SECONDS, 120) * 1000);
+          .then((summary) => {
+            if (summary.failed > 0) {
+              console.error(
+                `darkview realtime: ${summary.failed} email(s) gave up after every retry`,
+              );
+            }
+          })
+          .catch((error) => {
+            console.error("darkview realtime: email delivery", error);
+          });
+      },
+      sweepSeconds(deployment, EMAIL_DISPATCH_INTERVAL_SECONDS, 120) * 1000,
+    );
   } else {
     console.warn(
       "darkview realtime: neither RESEND_API_KEY nor NOTIFICATION_WEBHOOK_URL is set; emails are queued and not sent",

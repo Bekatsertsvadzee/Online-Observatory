@@ -12,6 +12,9 @@ dependencies = [
     # JPEG, and a codec is not something to hand-roll. A library, not a service --
     # nothing new listens and nothing new runs.
     "pillow>=11,<12",
+    # ADR-064: error reports, sent only when SENTRY_DSN is set. A library, not a
+    # service: it dials out over HTTPS like the link does, and listens on nothing.
+    "sentry-sdk==2.70.0",
 ]
 
 [project.optional-dependencies]

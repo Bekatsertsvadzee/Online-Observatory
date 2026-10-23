@@ -566,6 +566,28 @@ export const zViewingConditions = z.strictObject({
     items: z.array(zViewingConditionsHour)
 });
 
+export const zObservatoryUptimeDay = z.strictObject({
+    date: z.iso.date(),
+    measuredSeconds: z.int().gte(0).lte(90000),
+    onlineSeconds: z.int().gte(0).lte(90000),
+    uptimePercent: z.number().gte(0).lte(100).nullable()
+});
+
+export const zObservatoryUptimeIncident = z.strictObject({
+    lostAt: z.iso.datetime(),
+    restoredAt: z.iso.datetime().nullable()
+});
+
+export const zObservatoryUptime = z.strictObject({
+    observatoryId: z.uuid(),
+    timezone: z.string(),
+    from: z.iso.datetime(),
+    to: z.iso.datetime(),
+    uptimePercent: z.number().gte(0).lte(100).nullable(),
+    days: z.array(zObservatoryUptimeDay),
+    incidents: z.array(zObservatoryUptimeIncident).max(20)
+});
+
 export const zDeviceHealth = z.enum([
     'OK',
     'DEGRADED',
@@ -2415,6 +2437,15 @@ export const zGetObservatoryConditionsPath = z.object({
  * Tonight's viewing conditions.
  */
 export const zGetObservatoryConditionsResponse = zViewingConditions;
+
+export const zGetObservatoryUptimePath = z.object({
+    observatoryId: z.uuid()
+});
+
+/**
+ * Thirty days of link uptime.
+ */
+export const zGetObservatoryUptimeResponse = zObservatoryUptime;
 
 /**
  * Every bookable observatory.

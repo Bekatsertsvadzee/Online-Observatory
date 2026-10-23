@@ -43,6 +43,7 @@ from darkview_agent.config import (
 )
 from darkview_agent.link.session import LinkState, ProtocolVersionRefused
 from darkview_agent.link.websocket import build_connector
+from darkview_agent.monitoring import start_monitoring
 from darkview_agent.safety.envelope import SafetyEnvelope
 from darkview_agent.safety.watchdog import WatchdogThread
 from darkview_agent.state.store import StateStore
@@ -132,6 +133,8 @@ def main(arguments: list[str] | None = None) -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    # ADR-064. Off unless SENTRY_DSN is set; never touches the link or the devices.
+    start_monitoring(dict(os.environ))
 
     try:
         # The file `setup` writes, overridden by anything set in the process (DV-123).

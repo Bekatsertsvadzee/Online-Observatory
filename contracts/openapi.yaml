@@ -642,6 +642,37 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /observatories/{observatoryId}/uptime:
+    get:
+      operationId: getObservatoryUptime
+      tags: [observatory]
+      summary: How long the observatory's link was up over the last thirty days.
+      description: |
+        Phase 6.0. Read from the agent link's own audit trail (`AGENT_LINK_UP` and
+        `AGENT_LINK_LOST`); nothing new is recorded to answer it. Thirty local days, the
+        last of them today so far, oldest first.
+
+        A day's `measuredSeconds` is the part of it after the first link event the
+        platform ever recorded for this observatory; before that nothing is known, and an
+        unmeasured day reports `uptimePercent` null, never 100. Between a link-up and the
+        next event the link counts as up: the hosted demo's realtime service stops when
+        idle and wakes on the next request, and its link comes back with it.
+
+        ADR-019: answered for an observatory `GET /observatories` lists. An id that does
+        not exist and one that is not bookable are one 404.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/ObservatoryId"
+      responses:
+        "200":
+          description: Thirty days of link uptime.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObservatoryUptime"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /observatories:
     get:
       operationId: listBookableObservatories
@@ -3948,6 +3979,78 @@ components:
           description: Tonight's bookable hours in order. Empty when the night offers none.
           items:
             $ref: "#/components/schemas/ViewingConditionsHour"
+
+    ObservatoryUptime:
+      type: object
+      additionalProperties: false
+      required: [observatoryId, timezone, from, to, uptimePercent, days, incidents]
+      properties:
+        observatoryId:
+          type: string
+          format: uuid
+        timezone:
+          type: string
+          description: The IANA zone the days are cut in, the observatory's own.
+        from:
+          type: string
+          format: date-time
+          description: Local midnight at the start of the first day.
+        to:
+          type: string
+          format: date-time
+          description: When the answer was computed.
+        uptimePercent:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+          description: Online time over measured time across the window. Null when none of it was measured.
+        days:
+          type: array
+          description: Thirty local days, oldest first; the last is today so far.
+          items:
+            $ref: "#/components/schemas/ObservatoryUptimeDay"
+        incidents:
+          type: array
+          maxItems: 20
+          description: The latest link losses that overlap the window, newest first.
+          items:
+            $ref: "#/components/schemas/ObservatoryUptimeIncident"
+
+    ObservatoryUptimeDay:
+      type: object
+      additionalProperties: false
+      required: [date, measuredSeconds, onlineSeconds, uptimePercent]
+      properties:
+        date:
+          type: string
+          format: date
+          description: The observatory's local date.
+        measuredSeconds:
+          type: integer
+          minimum: 0
+          maximum: 90000
+        onlineSeconds:
+          type: integer
+          minimum: 0
+          maximum: 90000
+        uptimePercent:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+          description: Null when no second of the day was measured.
+
+    ObservatoryUptimeIncident:
+      type: object
+      additionalProperties: false
+      required: [lostAt, restoredAt]
+      properties:
+        lostAt:
+          type: string
+          format: date-time
+        restoredAt:
+          type: [string, "null"]
+          format: date-time
+          description: Null while the link is still down.
 
     DeviceHealth:
       type: string

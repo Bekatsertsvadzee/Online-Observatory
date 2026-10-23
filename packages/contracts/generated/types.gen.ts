@@ -836,6 +836,55 @@ export type ViewingConditions = {
     items: Array<ViewingConditionsHour>;
 };
 
+export type ObservatoryUptime = {
+    observatoryId: string;
+    /**
+     * The IANA zone the days are cut in, the observatory's own.
+     */
+    timezone: string;
+    /**
+     * Local midnight at the start of the first day.
+     */
+    from: string;
+    /**
+     * When the answer was computed.
+     */
+    to: string;
+    /**
+     * Online time over measured time across the window. Null when none of it was measured.
+     */
+    uptimePercent: number | null;
+    /**
+     * Thirty local days, oldest first; the last is today so far.
+     */
+    days: Array<ObservatoryUptimeDay>;
+    /**
+     * The latest link losses that overlap the window, newest first.
+     */
+    incidents: Array<ObservatoryUptimeIncident>;
+};
+
+export type ObservatoryUptimeDay = {
+    /**
+     * The observatory's local date.
+     */
+    date: string;
+    measuredSeconds: number;
+    onlineSeconds: number;
+    /**
+     * Null when no second of the day was measured.
+     */
+    uptimePercent: number | null;
+};
+
+export type ObservatoryUptimeIncident = {
+    lostAt: string;
+    /**
+     * Null while the link is still down.
+     */
+    restoredAt: string | null;
+};
+
 export const DeviceHealth = {
     OK: 'OK',
     DEGRADED: 'DEGRADED',
@@ -3841,6 +3890,36 @@ export type GetObservatoryConditionsResponses = {
 };
 
 export type GetObservatoryConditionsResponse = GetObservatoryConditionsResponses[keyof GetObservatoryConditionsResponses];
+
+export type GetObservatoryUptimeData = {
+    body?: never;
+    path: {
+        /**
+         * An `id` from `GET /observatories`, or for an operator any observatory.
+         */
+        observatoryId: string;
+    };
+    query?: never;
+    url: '/observatories/{observatoryId}/uptime';
+};
+
+export type GetObservatoryUptimeErrors = {
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+};
+
+export type GetObservatoryUptimeError = GetObservatoryUptimeErrors[keyof GetObservatoryUptimeErrors];
+
+export type GetObservatoryUptimeResponses = {
+    /**
+     * Thirty days of link uptime.
+     */
+    200: ObservatoryUptime;
+};
+
+export type GetObservatoryUptimeResponse = GetObservatoryUptimeResponses[keyof GetObservatoryUptimeResponses];
 
 export type ListBookableObservatoriesData = {
     body?: never;
