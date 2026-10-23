@@ -115,6 +115,18 @@ the eleventh registration anywhere would be refused for an hour, and one visitor
 failed sign-ins would lock out the rest. Zero meters by account instead. A front that
 can name the client to the API is a decision for the real domain.
 
+### Error reports (ADR-064)
+
+Optional. `SENTRY_DSN` on the API (Vercel), on realtime and on the agent (Fly, or the
+agent's own environment) sends unhandled errors, `console.error` in realtime and ERROR log
+records in the agent to Sentry, scrubbed: no user, cookie, body, query string, email,
+bearer value or token. `SENTRY_ENVIRONMENT` labels them; unset, the deployment name is
+used. Unset `SENTRY_DSN` and nothing is sent. The Sentry account and its projects are the
+maintainer's to create.
+
+To check the wiring without an account, point `SENTRY_DSN` at a local listener such as
+`http://public@127.0.0.1:8999/1` and force a failure; the event arrives there scrubbed.
+
 ### Seeding
 
 `npm run db:seed` refuses to run unless `NODE_ENV=development`. It writes demo users, two

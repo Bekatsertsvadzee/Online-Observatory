@@ -16,6 +16,14 @@ export async function register() {
   // where the storage signer does not run at all.
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
+  // ADR-064: errors go to Sentry only when SENTRY_DSN is set, scrubbed first.
+  const { monitoringOptions } = await import("@darkview/monitoring/options");
+  const monitoring = monitoringOptions(process.env);
+  if (monitoring) {
+    const Sentry = await import("@sentry/nextjs");
+    Sentry.init(monitoring);
+  }
+
   const { getStorageConfiguration } = await import("@darkview/storage/config");
 
   // Throws with the names of the missing variables and none of their values.
@@ -33,4 +41,16 @@ export async function register() {
       getDatabase().observatory.count({ where: { mode: "REAL" } }),
     );
   }
+}
+
+/**
+ * ADR-064: a request that threw. An answer the API chose -- a 4xx it returns on
+ * purpose -- is a response, not a throw, so it never arrives here.
+ */
+export async function onRequestError(
+  ...args: Parameters<typeof import("@sentry/nextjs").captureRequestError>
+) {
+  if (process.env.NEXT_RUNTIME !== "nodejs" || !process.env.SENTRY_DSN?.trim()) return;
+  const Sentry = await import("@sentry/nextjs");
+  Sentry.captureRequestError(...args);
 }
