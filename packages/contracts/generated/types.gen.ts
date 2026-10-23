@@ -2377,6 +2377,48 @@ export type CapturePage = {
     page: PageMeta;
 };
 
+export type GalleryCapture = {
+    id: string;
+    target: {
+        slug: string;
+        nameEn: string;
+        nameKa: string;
+        type: TargetType;
+    };
+    place: {
+        city: string;
+        countryCode: string;
+        /**
+         * The observatory's IANA zone, so the date is the date where the sky was.
+         */
+        timezone: string;
+    };
+    /**
+     * Aperture and focal length only; no maker or model name.
+     */
+    telescope: {
+        apertureMm: number;
+        focalLengthMm: number;
+    };
+    capturedAt: string;
+    imagingProfile: ImagingProfile;
+    exposureMilliseconds: number;
+    gain: number;
+    framesStacked: number;
+    integrationSeconds: number;
+    widthPx: number | null;
+    heightPx: number | null;
+    /**
+     * Signed, short-expiry GET for the display image.
+     */
+    imageUrl: string;
+    imageExpiresAt: string;
+    /**
+     * Always REAL; stated so a client never has to assume it.
+     */
+    mode: ObservatoryMode;
+};
+
 export type CaptureDownload = {
     kind: CaptureAssetKind;
     url: string;
@@ -5497,6 +5539,33 @@ export type SetCaptureVisibilityResponses = {
 };
 
 export type SetCaptureVisibilityResponse = SetCaptureVisibilityResponses[keyof SetCaptureVisibilityResponses];
+
+export type GetGalleryCaptureData = {
+    body?: never;
+    path: {
+        captureId: string;
+    };
+    query?: never;
+    url: '/gallery/{captureId}';
+};
+
+export type GetGalleryCaptureErrors = {
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+};
+
+export type GetGalleryCaptureError = GetGalleryCaptureErrors[keyof GetGalleryCaptureErrors];
+
+export type GetGalleryCaptureResponses = {
+    /**
+     * The public capture.
+     */
+    200: GalleryCapture;
+};
+
+export type GetGalleryCaptureResponse = GetGalleryCaptureResponses[keyof GetGalleryCaptureResponses];
 
 export type GetCaptureDownloadData = {
     body?: never;

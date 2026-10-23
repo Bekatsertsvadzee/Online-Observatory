@@ -114,8 +114,19 @@ describe("every admin route is behind the operator guard", () => {
     //            owner and no device identity; a test holds it to that. Its
     //            `{observatoryId}/state` is the status chip (ADR-019): mode, link,
     //            weather and whether a mission is running; no device, no address
-    //            and no telemetry.
-    const publicRoutes = new Set(["health", "targets", "slots", "observatories"]);
+    //            and no telemetry. Its `{observatoryId}/horizon` (Phase 6.2) gives the
+    //            site only to a tenth of a degree, about ten kilometres, for drawing
+    //            the sky -- the same coarseness forecasts leave with (coarseSite).
+    //   gallery  public by contract (security: []) -- a capture its owner shared
+    //            (clients ADR-065): REAL and GALLERY only, never the owner, the
+    //            mission or the price; everything else is one 404.
+    const publicRoutes = new Set([
+      "health",
+      "targets",
+      "slots",
+      "observatories",
+      "gallery",
+    ]);
     // One file, not a segment: GET /loyalty beside it needs a session.
     //   loyalty/scheme  public by contract (security: []) -- the club's published
     //            rates and tiers, the same terms a public page prints (DV-090).

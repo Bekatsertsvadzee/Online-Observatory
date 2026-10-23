@@ -2099,6 +2099,34 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /gallery/{captureId}:
+    get:
+      operationId: getGalleryCapture
+      tags: [captures]
+      summary: A capture its owner made public, for anyone with the link.
+      description: |
+        Phase 6.3, clients ADR-065. No sign-in. Answers a capture whose owner set it to
+        GALLERY, and only a REAL one: a SIMULATED capture is never presented as
+        telescope output. Everything else -- a private capture, a deleted one, an id that
+        never existed -- is one 404, so whether a private capture exists cannot be
+        learned by probing ids.
+
+        It names the target, the date, the place and the exposure, and never the owner,
+        the mission, the booking or the price. The image URL is signed and short-lived,
+        minted per request; nothing public is stored.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CaptureId"
+      responses:
+        "200":
+          description: The public capture.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GalleryCapture"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /captures/{captureId}/download:
     get:
       operationId: getCaptureDownload
@@ -6091,6 +6119,85 @@ components:
             $ref: "#/components/schemas/Capture"
         page:
           $ref: "#/components/schemas/PageMeta"
+
+    GalleryCapture:
+      type: object
+      additionalProperties: false
+      required:
+        [id, target, place, telescope, capturedAt, imagingProfile, exposureMilliseconds,
+         gain, framesStacked, integrationSeconds, widthPx, heightPx, imageUrl,
+         imageExpiresAt, mode]
+      properties:
+        id:
+          type: string
+        target:
+          type: object
+          additionalProperties: false
+          required: [slug, nameEn, nameKa, type]
+          properties:
+            slug:
+              type: string
+            nameEn:
+              type: string
+            nameKa:
+              type: string
+            type:
+              $ref: "#/components/schemas/TargetType"
+        place:
+          type: object
+          additionalProperties: false
+          required: [city, countryCode, timezone]
+          properties:
+            city:
+              type: string
+            countryCode:
+              type: string
+            timezone:
+              type: string
+              description: The observatory's IANA zone, so the date is the date where the sky was.
+        telescope:
+          type: object
+          additionalProperties: false
+          required: [apertureMm, focalLengthMm]
+          description: Aperture and focal length only; no maker or model name.
+          properties:
+            apertureMm:
+              type: integer
+              exclusiveMinimum: 0
+            focalLengthMm:
+              type: integer
+              exclusiveMinimum: 0
+        capturedAt:
+          type: string
+          format: date-time
+        imagingProfile:
+          $ref: "#/components/schemas/ImagingProfile"
+        exposureMilliseconds:
+          type: number
+          exclusiveMinimum: 0
+        gain:
+          type: integer
+          minimum: 0
+        framesStacked:
+          type: integer
+          exclusiveMinimum: 0
+        integrationSeconds:
+          type: number
+          minimum: 0
+        widthPx:
+          type: [integer, "null"]
+        heightPx:
+          type: [integer, "null"]
+        imageUrl:
+          type: string
+          format: uri
+          description: Signed, short-expiry GET for the display image.
+        imageExpiresAt:
+          type: string
+          format: date-time
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+          description: Always REAL; stated so a client never has to assume it.
 
     CaptureDownload:
       type: object

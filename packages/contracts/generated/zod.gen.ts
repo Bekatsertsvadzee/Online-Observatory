@@ -1541,6 +1541,36 @@ export const zCapturePage = z.strictObject({
     page: zPageMeta
 });
 
+export const zGalleryCapture = z.strictObject({
+    id: z.string(),
+    target: z.strictObject({
+        slug: z.string(),
+        nameEn: z.string(),
+        nameKa: z.string(),
+        type: zTargetType
+    }),
+    place: z.strictObject({
+        city: z.string(),
+        countryCode: z.string(),
+        timezone: z.string()
+    }),
+    telescope: z.strictObject({
+        apertureMm: z.int().gt(0),
+        focalLengthMm: z.int().gt(0)
+    }),
+    capturedAt: z.iso.datetime(),
+    imagingProfile: zImagingProfile,
+    exposureMilliseconds: z.number().gt(0),
+    gain: z.int().gte(0),
+    framesStacked: z.int().gt(0),
+    integrationSeconds: z.number().gte(0),
+    widthPx: z.int().nullable(),
+    heightPx: z.int().nullable(),
+    imageUrl: z.url(),
+    imageExpiresAt: z.iso.datetime(),
+    mode: zObservatoryMode
+});
+
 export const zCaptureDownload = z.strictObject({
     kind: zCaptureAssetKind,
     url: z.url(),
@@ -2868,6 +2898,15 @@ export const zSetCaptureVisibilityPath = z.object({
  * The capture.
  */
 export const zSetCaptureVisibilityResponse = zCapture;
+
+export const zGetGalleryCapturePath = z.object({
+    captureId: z.uuid()
+});
+
+/**
+ * The public capture.
+ */
+export const zGetGalleryCaptureResponse = zGalleryCapture;
 
 export const zGetCaptureDownloadPath = z.object({
     captureId: z.uuid()

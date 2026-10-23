@@ -1772,6 +1772,57 @@ class CapturePage(BaseModel):
     page: PageMeta
 
 
+class Target1(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    slug: str
+    name_en: str = Field(..., alias='nameEn')
+    name_ka: str = Field(..., alias='nameKa')
+    type: TargetType
+
+
+class Place(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    city: str
+    country_code: str = Field(..., alias='countryCode')
+    timezone: str = Field(..., description="The observatory's IANA zone, so the date is the date where the sky was.")
+
+
+class Telescope(BaseModel):
+    """
+    Aperture and focal length only; no maker or model name.
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    aperture_mm: int = Field(..., alias='apertureMm', gt=0)
+    focal_length_mm: int = Field(..., alias='focalLengthMm', gt=0)
+
+
+class GalleryCapture(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: str
+    target: Target1
+    place: Place
+    telescope: Telescope = Field(..., description='Aperture and focal length only; no maker or model name.')
+    captured_at: AwareDatetime = Field(..., alias='capturedAt')
+    imaging_profile: ImagingProfile = Field(..., alias='imagingProfile')
+    exposure_milliseconds: float = Field(..., alias='exposureMilliseconds', gt=0.0)
+    gain: int = Field(..., ge=0)
+    frames_stacked: int = Field(..., alias='framesStacked', gt=0)
+    integration_seconds: float = Field(..., alias='integrationSeconds', ge=0.0)
+    width_px: int | None = Field(..., alias='widthPx')
+    height_px: int | None = Field(..., alias='heightPx')
+    image_url: AnyUrl = Field(..., alias='imageUrl', description='Signed, short-expiry GET for the display image.')
+    image_expires_at: AwareDatetime = Field(..., alias='imageExpiresAt')
+    mode: ObservatoryMode = Field(..., description='Always REAL; stated so a client never has to assume it.')
+
+
 class CaptureDownload(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
