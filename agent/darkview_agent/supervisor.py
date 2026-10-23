@@ -921,6 +921,7 @@ class Supervisor:
             if refusal is None:
                 # Back on the booked target, so the drift this measured is gone.
                 self._validator.reset_nudge_offset()
+                self._runner.pointing_changed()
             return refusal
 
         if payload.recenter:
@@ -1069,6 +1070,8 @@ class Supervisor:
             azimuth = normalise_azimuth(azimuth + signed)
 
         self._devices.mount.slew_to(altitude, azimuth)
+        # The live stack belongs to the field before the step (#199).
+        self._runner.pointing_changed()
         return None
 
     def _execute_abort(self, envelope: CommandEnvelope, at_time: datetime) -> Refusal | None:

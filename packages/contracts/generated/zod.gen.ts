@@ -2214,6 +2214,26 @@ export const zMissionStreamInfo = z.strictObject({
     expiresAt: z.iso.datetime()
 });
 
+/**
+ * What the live-view frame now at the stream URL is (#199): its exposure, gain and
+ * how many sub-exposures the live stack holds. Sent with each frame the cloud
+ * relays, at most as often as the agent's live view sends one. The pixels travel
+ * only over the stream URL.
+ *
+ */
+export const zMissionFrameInfo = z.strictObject({
+    type: z.enum(['MISSION_FRAME']),
+    messageId: z.uuid(),
+    sentAt: z.iso.datetime(),
+    missionId: z.uuid(),
+    sequence: z.int().gte(0),
+    capturedAt: z.iso.datetime(),
+    exposureMilliseconds: z.number().gt(0),
+    gain: z.int().gte(0),
+    stackedFrames: z.int().gt(0).nullable(),
+    mode: zObservatoryMode
+});
+
 export const zMissionCaptureReady = z.strictObject({
     type: z.enum(['MISSION_CAPTURE_READY']),
     messageId: z.uuid(),
@@ -2250,6 +2270,7 @@ export const zMissionChannelMessage = z.discriminatedUnion('type', [
     zMissionStateUpdate.extend({ type: z.literal('MISSION_STATE') }),
     zMissionTelemetryUpdate.extend({ type: z.literal('MISSION_TELEMETRY') }),
     zMissionStreamInfo.extend({ type: z.literal('MISSION_STREAM') }),
+    zMissionFrameInfo.extend({ type: z.literal('MISSION_FRAME') }),
     zMissionCaptureReady.extend({ type: z.literal('MISSION_CAPTURE_READY') }),
     zMissionCommandResult.extend({ type: z.literal('MISSION_COMMAND_RESULT') }),
     zMissionChannelError.extend({ type: z.literal('MISSION_ERROR') })

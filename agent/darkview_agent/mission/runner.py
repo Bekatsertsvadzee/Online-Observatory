@@ -179,6 +179,12 @@ class _Progress:
     focus: Autofocus | FocusMove | None = None
     frames_captured: int = 0
     exposure_started: bool = False
+    #: A live-view exposure is running while OBSERVING (#199). Kept apart from
+    #: `exposure_started`, which belongs to the capture run.
+    live_exposure_started: bool = False
+    #: The pointing moved while a live exposure was running, so its frame shows the
+    #: sky in between and is dropped rather than stacked.
+    live_exposure_stale: bool = False
     #: The watchdog has aborted the exposure and the link is not yet back. No
     #: exposure is started while this holds; the one that was running is gone.
     capture_suspended: bool = False
@@ -637,14 +643,71 @@ class MissionRunner:
         )
         return None
 
+    def pointing_changed(self) -> None:
+        """The mount was moved under a running mission: a nudge or a recentre.
+
+        The stack so far is of the old field, and averaging it with the new one is a
+        picture of nothing, so it starts again; a live exposure already running is
+        of the sky in between and is dropped when it finishes.
+        """
+        progress = self._progress
+        if progress is None or self._state is not MissionState.observing:
+            return
+        self._stack.reset()
+        progress.stacked = None
+        if progress.live_exposure_started:
+            progress.live_exposure_stale = True
+
+    def _pump_live_view(self) -> bool:
+        """Finish the live exposure that is running. Returns whether one still is.
+
+        The camera does one thing at a time, so a focus run or a capture run waits
+        for this exposure rather than starting over it.
+        """
+        progress = self._require_progress()
+        if not progress.live_exposure_started:
+            return False
+        if not self._devices.camera.exposure_complete():
+            return True
+
+        frame = self._devices.camera.read_frame()
+        progress.live_exposure_started = False
+        stale = progress.live_exposure_stale or self._devices.mount.status().slewing
+        progress.live_exposure_stale = False
+        # A frame taken for a view nobody will see any more, or of a moving field,
+        # is not stacked: a focus or capture run starts from a reset stack anyway.
+        if stale or progress.focus is not None or progress.capture_command_id is not None:
+            return False
+
+        stacked = self._stack.add(frame)
+        self._show(stacked.frame)
+        progress.stacked = stacked.frame
+        return False
+
+    def _start_live_exposure(self) -> None:
+        progress = self._require_progress()
+        if progress.capture_suspended or self._devices.mount.status().slewing:
+            return
+        self._devices.camera.expose(
+            progress.request.exposure_milliseconds, progress.request.gain
+        )
+        progress.live_exposure_started = True
+
     def _do_observing(self, at_time: datetime) -> None:
         """Hold on the target with the live view running, until Capture or timeout.
 
         The one state in the machine that waits for a person. Everything before
         it is the observatory getting ready and everything after it is the
         observatory finishing; this is the part the customer is here for.
+
+        The live view runs throughout (#199): one exposure at the mission's exposure
+        and gain after another, stacked, each stack shown. Before this the camera
+        sat idle here and the customer saw the last plate-solve frame, or nothing.
         """
         progress = self._require_progress()
+
+        if self._pump_live_view():
+            return
 
         # A capture requested mid-focus waits for it; so does the timeout.
         if progress.focus is not None:
@@ -669,6 +732,9 @@ class MissionRunner:
                 self._observing_seconds,
             )
             self._transition(MissionState.capturing, at_time)
+            return
+
+        self._start_live_exposure()
 
     def _do_capturing(self, at_time: datetime) -> None:
         progress = self._require_progress()

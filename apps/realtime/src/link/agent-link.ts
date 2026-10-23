@@ -301,7 +301,13 @@ export class AgentLink {
       receivedAt: this.now(),
     };
 
-    this.broadcast.liveFrameArrived(frame);
+    this.broadcast.liveFrameArrived(frame, {
+      sequence: header.sequence,
+      capturedAt: header.capturedAt,
+      exposureMilliseconds: header.exposureMilliseconds,
+      gain: header.gain,
+      stackedFrames: header.stackedFrames ?? null,
+    });
   }
 
   /**

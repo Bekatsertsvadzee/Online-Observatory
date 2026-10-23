@@ -975,3 +975,28 @@ def test_the_correction_is_bounded():
         seconds=MAX_CLOCK_CORRECTION_SECONDS
     )
     agent.close()
+
+
+def test_the_live_view_runs_while_observing_and_a_nudge_restarts_its_stack():
+    """#199. Frames reach the link for the whole of OBSERVING, a stack that climbs, and
+    a nudge starts it again rather than averaging two fields into one picture."""
+    agent = build_agent(max_altitude_degrees=70.0, observing_seconds=120.0)
+    agent.own()
+    agent.command(agent.goto())
+    run_to(agent, MissionState.observing)
+    before = len(agent.sent("AGENT_LIVE_FRAME"))
+
+    agent.advance(20.0, steps=40)
+    observing = agent.sent("AGENT_LIVE_FRAME")[before:]
+    stacked = [frame["stackedFrames"] for frame in observing]
+    assert len(observing) >= 5
+    assert stacked == sorted(stacked) and stacked[-1] >= 5
+    assert all(frame["exposureMilliseconds"] > 0 for frame in observing)
+
+    assert agent.command(agent.nudge())["status"] == "ACCEPTED"
+    after_nudge = len(agent.sent("AGENT_LIVE_FRAME"))
+    agent.advance(20.0, steps=40)
+
+    restarted = [frame["stackedFrames"] for frame in agent.sent("AGENT_LIVE_FRAME")[after_nudge:]]
+    assert restarted and restarted[0] <= 2
+    assert agent.supervisor.runner.state is MissionState.observing

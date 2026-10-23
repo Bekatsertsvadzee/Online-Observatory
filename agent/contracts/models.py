@@ -2437,6 +2437,29 @@ class MissionStreamInfo(BaseModel):
     expires_at: AwareDatetime = Field(..., alias='expiresAt')
 
 
+class MissionFrameInfo(BaseModel):
+    """
+    What the live-view frame now at the stream URL is (#199): its exposure, gain and
+    how many sub-exposures the live stack holds. Sent with each frame the cloud
+    relays, at most as often as the agent's live view sends one. The pixels travel
+    only over the stream URL.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    type: Literal['MISSION_FRAME']
+    message_id: UUID = Field(..., alias='messageId')
+    sent_at: AwareDatetime = Field(..., alias='sentAt')
+    mission_id: UUID = Field(..., alias='missionId')
+    sequence: int = Field(..., ge=0)
+    captured_at: AwareDatetime = Field(..., alias='capturedAt')
+    exposure_milliseconds: float = Field(..., alias='exposureMilliseconds', description="One sub-exposure's length, not the stack's total.", gt=0.0)
+    gain: int = Field(..., ge=0)
+    stacked_frames: int | None = Field(..., alias='stackedFrames', description='Null when the frame is a single sub-exposure rather than a live stack.', gt=0)
+    mode: ObservatoryMode
+
+
 class MissionCaptureReady(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -2475,8 +2498,8 @@ class MissionChannelError(BaseModel):
     message: str
 
 
-class MissionChannelMessage(RootModel[MissionStateUpdate | MissionTelemetryUpdate | MissionStreamInfo | MissionCaptureReady | MissionCommandResult | MissionChannelError]):
-    root: MissionStateUpdate | MissionTelemetryUpdate | MissionStreamInfo | MissionCaptureReady | MissionCommandResult | MissionChannelError = Field(..., description='Everything the cloud pushes to a subscribed live-mission client.', discriminator='type')
+class MissionChannelMessage(RootModel[MissionStateUpdate | MissionTelemetryUpdate | MissionStreamInfo | MissionFrameInfo | MissionCaptureReady | MissionCommandResult | MissionChannelError]):
+    root: MissionStateUpdate | MissionTelemetryUpdate | MissionStreamInfo | MissionFrameInfo | MissionCaptureReady | MissionCommandResult | MissionChannelError = Field(..., description='Everything the cloud pushes to a subscribed live-mission client.', discriminator='type')
 
 
 class MissionClientSubscribe(BaseModel):
