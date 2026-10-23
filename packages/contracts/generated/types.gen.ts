@@ -1793,6 +1793,14 @@ export type Mission = {
      */
     observable?: boolean;
     /**
+     * Clients ADR-066. Whether the owner has opened this session to anyone on
+     * Tonight, live (`GET /tonight`). Off by default; only the owner changes it,
+     * with `PATCH /missions/{missionId}/broadcast`. Separate from `observable`,
+     * which is a paid seat for a signed-in customer.
+     *
+     */
+    broadcast?: boolean;
+    /**
      * Hard server-side cap on concurrent observers. Never exceeds 10 (ADR-007 as
      * amended by ADR-036).
      *
@@ -1926,6 +1934,39 @@ export type ObserverPackWithPaymentIntent = {
      * Null when an observer-seat prize paid for the pack (ADR-060).
      */
     paymentIntent: PaymentIntent | null;
+};
+
+export type MissionBroadcastSettings = {
+    broadcast: boolean;
+};
+
+export type Tonight = {
+    live: TonightSession | null;
+};
+
+export type TonightSession = {
+    missionId: string;
+    observatoryId: string;
+    target: {
+        slug: string;
+        nameEn: string;
+        nameKa: string;
+        type: TargetType;
+    };
+    state: MissionState;
+    /**
+     * A SIMULATED session's view is badged Simulated wherever it is shown.
+     */
+    mode: ObservatoryMode;
+    /**
+     * When the booked slot ends; null for a session with no booking.
+     */
+    endsAt: string | null;
+    spectatorCapacity: number;
+    /**
+     * The spectator view's path on the realtime service, `/stream/mission/{missionId}/spectate`.
+     */
+    streamPath: string;
 };
 
 /**
@@ -5183,6 +5224,61 @@ export type SubmitMissionCommandResponses = {
 };
 
 export type SubmitMissionCommandResponse = SubmitMissionCommandResponses[keyof SubmitMissionCommandResponses];
+
+export type SetMissionBroadcastData = {
+    body: MissionBroadcastSettings;
+    path: {
+        missionId: string;
+    };
+    query?: never;
+    url: '/missions/{missionId}/broadcast';
+};
+
+export type SetMissionBroadcastErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type SetMissionBroadcastError = SetMissionBroadcastErrors[keyof SetMissionBroadcastErrors];
+
+export type SetMissionBroadcastResponses = {
+    /**
+     * The mission.
+     */
+    200: Mission;
+};
+
+export type SetMissionBroadcastResponse = SetMissionBroadcastResponses[keyof SetMissionBroadcastResponses];
+
+export type GetTonightData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tonight';
+};
+
+export type GetTonightResponses = {
+    /**
+     * Tonight.
+     */
+    200: Tonight;
+};
+
+export type GetTonightResponse = GetTonightResponses[keyof GetTonightResponses];
 
 export type SetMissionObservationData = {
     body: MissionObservationSettings;

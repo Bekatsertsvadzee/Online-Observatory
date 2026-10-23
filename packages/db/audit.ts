@@ -138,6 +138,9 @@ export type AuditAction =
   | "OBSERVER_SEAT_RELEASED"
   | "MISSION_OPENED_TO_OBSERVERS"
   | "MISSION_CLOSED_TO_OBSERVERS"
+  // Clients ADR-066: the owner opens or closes a session to Tonight, live.
+  | "MISSION_OPENED_TO_TONIGHT"
+  | "MISSION_CLOSED_TO_TONIGHT"
   | "CAPTURE_RECORDED"
   // #144: the owner published a capture to the gallery or took it back. Written
   // on change only; setting the visibility a capture already has writes nothing.

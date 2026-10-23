@@ -72,6 +72,7 @@ export async function listAllMissions(input: {
         endedAt: row.completedAt?.toISOString() ?? null,
         captureIds: row.captures.map((capture) => capture.id),
         observable: row.joinPolicy === "OPEN",
+        broadcast: row.broadcast,
         observerCapacity: row.observerCapacity,
         observerCount: row.participants.length,
       }),
