@@ -706,6 +706,24 @@ class ViewingConditions(BaseModel):
     items: list[ViewingConditionsHour] = Field(..., description="Tonight's bookable hours in order. Empty when the night offers none.")
 
 
+class ObservatoryUptimeDay(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    date: date_aliased = Field(..., description="The observatory's local date.")
+    measured_seconds: int = Field(..., alias='measuredSeconds', ge=0, le=90000)
+    online_seconds: int = Field(..., alias='onlineSeconds', ge=0, le=90000)
+    uptime_percent: float | None = Field(..., alias='uptimePercent', description='Null when no second of the day was measured.', ge=0.0, le=100.0)
+
+
+class ObservatoryUptimeIncident(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    lost_at: AwareDatetime = Field(..., alias='lostAt')
+    restored_at: AwareDatetime | None = Field(..., alias='restoredAt', description='Null while the link is still down.')
+
+
 class DeviceHealth(StrEnum):
     ok = 'OK'
     degraded = 'DEGRADED'
@@ -2516,6 +2534,19 @@ class AdminUpdateTargetRequest(BaseModel):
     preview_image_url: AnyUrl | None = Field(None, alias='previewImageUrl')
     description_en: str | None = Field(None, alias='descriptionEn')
     description_ka: str | None = Field(None, alias='descriptionKa')
+
+
+class ObservatoryUptime(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    timezone: str = Field(..., description="The IANA zone the days are cut in, the observatory's own.")
+    from_: AwareDatetime = Field(..., alias='from', description='Local midnight at the start of the first day.')
+    to: AwareDatetime = Field(..., description='When the answer was computed.')
+    uptime_percent: float | None = Field(..., alias='uptimePercent', description='Online time over measured time across the window. Null when none of it was measured.', ge=0.0, le=100.0)
+    days: list[ObservatoryUptimeDay] = Field(..., description='Thirty local days, oldest first; the last is today so far.')
+    incidents: list[ObservatoryUptimeIncident] = Field(..., description='The latest link losses that overlap the window, newest first.', max_length=20)
 
 
 class ObservatoryTelemetrySnapshot(BaseModel):
