@@ -48,6 +48,16 @@ const serverEnvironmentSchema = z.object({
    */
   PAYMENT_SANDBOX_WEBHOOK_SECRET: z.string().min(32).optional(),
   /**
+   * ADR-073. Which provider a new payment is opened with. Unset, SANDBOX wherever
+   * the sandbox is allowed and BOG_IPAY everywhere else, so a production
+   * deployment never opens a payment it cannot take. BOG_CLIENT_ID and
+   * BOG_SECRET_KEY are the merchant's keys from manager.bog.ge; unset, a BOG
+   * checkout answers 503 and no order is opened.
+   */
+  PAYMENT_PROVIDER: z.enum(["SANDBOX", "BOG_IPAY"]).optional(),
+  BOG_CLIENT_ID: z.string().min(1).optional(),
+  BOG_SECRET_KEY: z.string().min(1).optional(),
+  /**
    * Where the API reads live operator telemetry from the realtime service, and the
    * secret it presents there (ADR-017). An origin, not a path. Optional: unset,
    * `GET /admin/observatories/{observatoryId}/state` answers 503 and nothing else is affected.

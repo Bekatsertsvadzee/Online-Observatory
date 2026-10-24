@@ -79,6 +79,12 @@ disagree, `docs/ENGINEERING.md`'s order of precedence decides.
    with, the amount the intent was for — and only a callback that fits confirms a booking
    or funds a subscription. A refused callback leaves an audit row.
 
+   Bank of Georgia (ADR-073) calls `POST /payments/bog/callback` instead, with no
+   signature this API checks. Its body is never believed: it only names an order, and the
+   payment is settled from the receipt this API reads back from the bank over an
+   authenticated call (`BOG_CLIENT_ID`/`BOG_SECRET_KEY`), then checked against the records
+   as above. A forged callback can at most make the API ask the bank about an order.
+
 ## Authentication
 
 Passwords are normalized only at the email boundary; passwords themselves are never trimmed or transformed. The accepted password length is 12–128 characters. Passwords are hashed with Node.js `scrypt` using a random 32-byte salt, cost `N=65536`, block size `r=8`, parallelization `p=1`, and a 64-byte derived key. Verification uses a constant-time comparison. Failed sign-in attempts use the same derivation path even when the email does not exist, reducing account-enumeration timing differences.

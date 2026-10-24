@@ -14,10 +14,8 @@ import { hashVoucherCode, normaliseVoucherCode } from "@darkview/db/vouchers";
 
 import { claimPrize, findSpendablePrize } from "@/features/cards/draw";
 import { LIVE_MISSION_STATES } from "@/features/missions/session";
-import { sandboxCheckoutUrl } from "@/features/payments/sandbox-checkout";
+import { paymentCheckout, paymentProvider } from "@/features/payments/bog-checkout";
 import { getDatabase } from "@/lib/db/client";
-import { sandboxMoneyAllowed } from "@/lib/deployment";
-import { getServerEnvironment } from "@/lib/validation/env";
 
 /**
  * The Observer Pack sale (ADR-007, DV-102).
@@ -65,16 +63,6 @@ export const PROVISIONAL_OBSERVER_PACK_PRICE_MINOR = 1500;
  * PAYMENT_HOLD_MINUTES.
  */
 export const OBSERVER_PACK_HOLD_MINUTES = 5;
-
-/**
- * Phase 1 has one payment provider in code and it is the sandbox -- the same
- * `PHASE_1_PROVIDER` reasoning as DV-055's reservation path. The contract is
- * explicit that SANDBOX "is never selectable in a production environment and a
- * production payment success is never simulated", so a production deployment that
- * reaches this refuses to sell rather than hold a seat against a payment that
- * cannot really be taken.
- */
-const PHASE_1_PROVIDER = "SANDBOX" as const;
 
 /** The pack statuses that occupy one of the mission's seats. */
 const SEAT_HOLDING_STATUSES = ["PENDING_PAYMENT", "PAID"] as const;
@@ -207,7 +195,7 @@ export async function purchaseObserverPack(input: {
     codeHash = hashVoucherCode(code);
   }
 
-  if (!sandboxMoneyAllowed(getServerEnvironment())) {
+  if (!paymentProvider()) {
     return {
       ok: false,
       status: 500,
@@ -366,8 +354,7 @@ async function purchaseInTransaction(
         id: paymentId,
         userId,
         purpose: "OBSERVER_PACK",
-        provider: PHASE_1_PROVIDER,
-        redirectUrl: sandboxCheckoutUrl(paymentId),
+        ...paymentCheckout(paymentId),
         status: "PENDING",
         amountMinor: PROVISIONAL_OBSERVER_PACK_PRICE_MINOR,
         currency: "GEL",

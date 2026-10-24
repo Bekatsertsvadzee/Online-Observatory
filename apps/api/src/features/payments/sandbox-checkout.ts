@@ -1,9 +1,9 @@
 import "server-only";
 
-import type { ErrorCode, SandboxCheckoutResult } from "@darkview/contracts";
+import type { ErrorCode, PaymentProvider, SandboxCheckoutResult } from "@darkview/contracts";
 
 import { TERMINAL_MISSION_STATES } from "@/features/missions/session";
-import { resolvePaymentProvider, type PaymentProviderAdapter } from "@/features/payments/provider";
+import { resolvePaymentProvider } from "@/features/payments/provider";
 import { settlePayment } from "@/features/payments/settle";
 import { getDatabase } from "@/lib/db/client";
 import { defaultLocale, isLocale } from "@/lib/locale";
@@ -118,11 +118,11 @@ type Hold = {
   deadline: boolean;
 };
 
-type Loaded =
+export type Loaded =
   | SandboxCheckoutFailure
   | {
       ok: true;
-      adapter: PaymentProviderAdapter;
+      locale: string;
       payment: {
         id: string;
         status: string;
@@ -140,17 +140,18 @@ type Loaded =
     };
 
 /**
- * The payment, if the checkout exists here and the payment is the caller's own
- * SANDBOX payment for a booking or an Observer Pack (#170).
+ * The payment, if it is the caller's own payment with `provider` for a booking, an
+ * Observer Pack (#170) or a gift (ADR-067). Shared by the sandbox checkout and the
+ * Bank of Georgia one (ADR-073).
  *
- * Unavailable and not-yours are the same 404, so the checkout says nothing about
- * payments belonging to anybody else, nor about whether this deployment could
- * have served one.
+ * Not-yours is a 404, so a checkout says nothing about payments belonging to
+ * anybody else.
  */
-async function loadCheckout(userId: string, paymentId: string): Promise<Loaded> {
-  const sandbox = resolvePaymentProvider("SANDBOX");
-  if (!sandbox.ok) return notFound;
-
+export async function loadOwnPayment(
+  userId: string,
+  paymentId: string,
+  provider: PaymentProvider,
+): Promise<Loaded> {
   const payment = await getDatabase().payment.findUnique({
     where: { id: paymentId },
     select: {
@@ -179,14 +180,19 @@ async function loadCheckout(userId: string, paymentId: string): Promise<Loaded> 
 
   if (!payment || payment.userId !== userId) return notFound;
 
-  if (payment.provider !== "SANDBOX") {
-    return conflict("This payment is not a sandbox payment.");
+  if (payment.provider !== provider) {
+    return conflict(
+      provider === "SANDBOX"
+        ? "This payment is not a sandbox payment."
+        : "This payment is not a Bank of Georgia payment.",
+    );
   }
+  const locale = payment.user.locale;
 
   if (payment.purpose === "BOOKING" && payment.booking) {
     return {
       ok: true,
-      adapter: sandbox.adapter,
+      locale,
       payment,
       purpose: "BOOKING",
       hold: { ...payment.booking, missionEnded: false, deadline: true },
@@ -198,7 +204,7 @@ async function loadCheckout(userId: string, paymentId: string): Promise<Loaded> 
     const pack = payment.observerPack;
     return {
       ok: true,
-      adapter: sandbox.adapter,
+      locale,
       payment,
       purpose: "OBSERVER_PACK",
       hold: {
@@ -214,7 +220,7 @@ async function loadCheckout(userId: string, paymentId: string): Promise<Loaded> 
   if (payment.purpose === "GIFT_VOUCHER" && payment.giftVoucher) {
     return {
       ok: true,
-      adapter: sandbox.adapter,
+      locale,
       payment,
       purpose: "GIFT_VOUCHER",
       hold: {
@@ -227,14 +233,14 @@ async function loadCheckout(userId: string, paymentId: string): Promise<Loaded> 
     };
   }
 
-  return conflict("This payment is not a sandbox booking, seat or gift payment.");
+  return conflict("This payment is not a booking, seat or gift payment.");
 }
 
 /**
  * Still held for the payer: awaiting payment, before its deadline, and -- for a seat
  * -- on a mission that has not ended. A gift has no deadline: awaiting payment is open.
  */
-function holdIsOpen(hold: Hold, now: Date): boolean {
+export function holdIsOpen(hold: Hold, now: Date): boolean {
   if (hold.status !== "PENDING_PAYMENT" || hold.missionEnded) return false;
   if (!hold.deadline) return true;
   return hold.holdExpiresAt !== null && hold.holdExpiresAt.getTime() > now.getTime();
@@ -245,7 +251,8 @@ export async function readSandboxCheckout(input: {
   paymentId: string;
   now: Date;
 }): Promise<SandboxCheckoutView | SandboxCheckoutFailure> {
-  const loaded = await loadCheckout(input.userId, input.paymentId);
+  if (!resolvePaymentProvider("SANDBOX").ok) return notFound;
+  const loaded = await loadOwnPayment(input.userId, input.paymentId, "SANDBOX");
   if (!loaded.ok) return loaded;
 
   return {
@@ -281,10 +288,13 @@ export async function confirmSandboxCheckout(input: {
   result: SandboxCheckoutResult;
   now: Date;
 }): Promise<SandboxCheckoutConfirmed | SandboxCheckoutFailure> {
-  const loaded = await loadCheckout(input.userId, input.paymentId);
+  const sandbox = resolvePaymentProvider("SANDBOX");
+  if (!sandbox.ok) return notFound;
+  const loaded = await loadOwnPayment(input.userId, input.paymentId, "SANDBOX");
   if (!loaded.ok) return loaded;
 
-  const { adapter, payment, hold, returnUrl } = loaded;
+  const adapter = sandbox.adapter;
+  const { payment, hold, returnUrl } = loaded;
 
   if (payment.status === "CAPTURED" || payment.status === "FAILED") {
     if (payment.status === input.result) return { ok: true, applied: false, returnUrl };

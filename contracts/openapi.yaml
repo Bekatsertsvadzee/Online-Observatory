@@ -1803,6 +1803,75 @@ paths:
         "429":
           $ref: "#/components/responses/TooManyRequests"
 
+  /payments/{paymentId}/checkout:
+    get:
+      operationId: getPaymentCheckout
+      tags: [booking]
+      summary: Where a BOG_IPAY payment's payer goes next (ADR-073).
+      description: |
+        The `PaymentIntent.redirectUrl` of a payment opened with BOG_IPAY. On the first
+        visit the cloud opens the order at Bank of Georgia, keyed by the payment id, and
+        answers 303 to the bank's hosted payment page; a later visit is sent to the same
+        page. Once the payment is no longer awaiting payment, or its hold has lapsed,
+        the 303 is to the purchase's own page on the web client instead. Every redirect
+        target is the bank's page or one the cloud builds from its own configured
+        origin, never one read from the request. 404 for a payment that is not the
+        signed-in user's own; 409 for a payment that is not a BOG_IPAY booking, seat or
+        gift payment; 503 when the bank cannot be reached or card payments are not
+        configured.
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      responses:
+        "303":
+          description: "`Location` is the bank's payment page, or the purchase's own page."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          description: The bank could not be reached, or card payments are not configured here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /payments/bog/callback:
+    post:
+      operationId: receiveBogCallback
+      tags: [booking]
+      summary: Bank of Georgia's payment callback (ADR-073).
+      description: |
+        Bank of Georgia's server-to-server callback, in the bank's own body. The body is
+        never trusted: only the order id is read from it, and the payment is settled
+        from the receipt the cloud reads back from the bank over an authenticated
+        call, through the same settlement a verified `receivePaymentWebhook` reaches.
+        200 for every callback the bank should stop repeating, including one for an
+        order the cloud does not know and one whose order is still in progress; 502
+        when the receipt could not be read, so the bank calls again.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: The bank's callback body, opaque to this contract.
+      responses:
+        "200":
+          description: Received.
+        "400":
+          description: The body is not JSON or names no order.
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "502":
+          description: The receipt could not be read from the bank; the bank will call again.
+        "503":
+          description: Card payments are not configured here.
+
   /missions:
     get:
       operationId: listMissions
