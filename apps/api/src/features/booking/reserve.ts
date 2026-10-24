@@ -29,14 +29,12 @@ import {
   type BookableObservatory,
 } from "@/features/booking/observatories";
 import { claimPrize, findSpendablePrize } from "@/features/cards/draw";
-import { sandboxCheckoutUrl } from "@/features/payments/sandbox-checkout";
+import { paymentCheckout, paymentProvider } from "@/features/payments/bog-checkout";
 import { bestTargetForSlot, slotVisibilityForBooking } from "@/features/targets/slot";
 import { getDatabase } from "@/lib/db/client";
-import { sandboxMoneyAllowed } from "@/lib/deployment";
 import { openIntervals } from "@/lib/slots/availability";
 import { nightWindow } from "@/lib/slots/darkness";
 import { generateSlots, isSessionLength, SLOT_DURATION_MINUTES } from "@/lib/slots/generate";
-import { getServerEnvironment } from "@/lib/validation/env";
 
 /**
  * PROVISIONAL. How long a reserved slot is held while payment is outstanding.
@@ -51,19 +49,6 @@ import { getServerEnvironment } from "@/lib/validation/env";
  * provider's real redirect behaviour once that exists.
  */
 export const PAYMENT_HOLD_MINUTES = 15;
-
-/**
- * Phase 1 has one payment provider in code and it is the sandbox. DV-056 built
- * the path that settles it -- `features/payments` -- and the real provider joins
- * as a second adapter there once merchant onboarding delivers its documentation;
- * nothing here invents an API for it.
- *
- * The contract is explicit that SANDBOX "is never selectable in a production
- * environment and a production payment success is never simulated", so a
- * production deployment that reaches this refuses to reserve at all. Selling a
- * slot against a payment that cannot really be taken is worse than an outage.
- */
-const PHASE_1_PROVIDER = "SANDBOX" as const;
 
 /**
  * How many times a reservation is attempted in total when PostgreSQL aborts it to
@@ -343,7 +328,7 @@ export async function reserveSlot(input: {
   const database = getDatabase();
   const { userId, request, idempotencyKey, now } = input;
 
-  if (!sandboxMoneyAllowed(getServerEnvironment())) {
+  if (!paymentProvider()) {
     return {
       ok: false,
       status: 500,
@@ -636,8 +621,7 @@ export async function reserveSlot(input: {
           data: {
             id: paymentId,
             userId,
-            provider: PHASE_1_PROVIDER,
-            redirectUrl: sandboxCheckoutUrl(paymentId),
+            ...paymentCheckout(paymentId),
             status: "PENDING",
             amountMinor,
             currency: slot.currency,

@@ -5284,6 +5284,80 @@ export type ConfirmSandboxCheckoutErrors = {
 
 export type ConfirmSandboxCheckoutError = ConfirmSandboxCheckoutErrors[keyof ConfirmSandboxCheckoutErrors];
 
+export type GetPaymentCheckoutData = {
+    body?: never;
+    path: {
+        paymentId: string;
+    };
+    query?: never;
+    url: '/payments/{paymentId}/checkout';
+};
+
+export type GetPaymentCheckoutErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Rate limited. The body does not say how much budget remains or when it returns.
+     */
+    429: ApiError;
+    /**
+     * The bank could not be reached, or card payments are not configured here.
+     */
+    503: ApiError;
+};
+
+export type GetPaymentCheckoutError = GetPaymentCheckoutErrors[keyof GetPaymentCheckoutErrors];
+
+export type ReceiveBogCallbackData = {
+    /**
+     * The bank's callback body, opaque to this contract.
+     */
+    body: {
+        [key: string]: unknown;
+    };
+    path?: never;
+    query?: never;
+    url: '/payments/bog/callback';
+};
+
+export type ReceiveBogCallbackErrors = {
+    /**
+     * The body is not JSON or names no order.
+     */
+    400: unknown;
+    /**
+     * Rate limited. The body does not say how much budget remains or when it returns.
+     */
+    429: ApiError;
+    /**
+     * The receipt could not be read from the bank; the bank will call again.
+     */
+    502: unknown;
+    /**
+     * Card payments are not configured here.
+     */
+    503: unknown;
+};
+
+export type ReceiveBogCallbackError = ReceiveBogCallbackErrors[keyof ReceiveBogCallbackErrors];
+
+export type ReceiveBogCallbackResponses = {
+    /**
+     * Received.
+     */
+    200: unknown;
+};
+
 export type ListMissionsData = {
     body?: never;
     path?: never;

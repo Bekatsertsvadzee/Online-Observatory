@@ -2862,6 +2862,15 @@ export const zConfirmSandboxCheckoutPath = z.object({
     paymentId: z.uuid()
 });
 
+export const zGetPaymentCheckoutPath = z.object({
+    paymentId: z.uuid()
+});
+
+/**
+ * The bank's callback body, opaque to this contract.
+ */
+export const zReceiveBogCallbackBody = z.record(z.string(), z.unknown());
+
 export const zListMissionsQuery = z.object({
     cursor: z.string().optional(),
     limit: z.int().gte(1).lte(100).optional().default(20)

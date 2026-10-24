@@ -139,7 +139,7 @@ describe("POST /payments/webhook", () => {
     expect(settlePayment).not.toHaveBeenCalled();
   });
 
-  it("refuses a BOG_IPAY callback because nothing can verify it yet", async () => {
+  it("refuses a BOG_IPAY envelope: the bank calls its own route (ADR-073)", async () => {
     const response = await POST(request({ body: { provider: "BOG_IPAY", payload } }));
 
     expect(response.status).toBe(401);
