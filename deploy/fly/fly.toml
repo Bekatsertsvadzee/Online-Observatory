@@ -15,15 +15,12 @@ primary_region = "fra"
 [http_service]
   internal_port = 8080
   force_https = true
-  # Free-tier start (2026-10-08): the machine sleeps when no visitor holds a
-  # connection through Fly's proxy and wakes on the next request. The agents' link is
-  # loopback, so it does not keep the machine up; while it sleeps the observatories
-  # read offline and realtime's sweeps do not run. The agents still live in a
-  # long-lived process, not a serverless function. For an always-on demo set
-  # auto_stop_machines = "off" and min_machines_running = 1.
-  auto_stop_machines = "stop"
+  # Always on (2026-10-25): a sleeping machine made the first visit after a quiet spell
+  # wait seconds for a cold boot, and every web page waits on this API. One
+  # shared-cpu-1x machine stays up; the agents and realtime's sweeps keep running.
+  auto_stop_machines = "off"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [http_service.concurrency]
     type = "connections"
