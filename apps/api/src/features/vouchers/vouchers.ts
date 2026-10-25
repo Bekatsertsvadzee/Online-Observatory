@@ -21,9 +21,8 @@ import {
 } from "@darkview/db/vouchers";
 
 import type { PaymentOutcome } from "@/features/payments/provider";
-import { sandboxCheckoutUrl } from "@/features/payments/sandbox-checkout";
+import { paymentCheckout, paymentProvider } from "@/features/payments/bog-checkout";
 import { getDatabase } from "@/lib/db/client";
-import { sandboxMoneyAllowed } from "@/lib/deployment";
 import {
   PROVISIONAL_SLOT_PRICE_MINOR,
   SLOT_DURATION_MINUTES,
@@ -35,13 +34,10 @@ import { getServerEnvironment } from "@/lib/validation/env";
  * observation of a given length, valid for twelve months from payment, and a booking
  * uses at most one price reduction.
  *
- * Sold on the sandbox provider, like every other sale in Phase 1, and priced at
+ * Sold on the deployment's payment provider (ADR-073), and priced at
  * the PROVISIONAL slot price for its length. Redemption is in `reserveSlot`, where it
  * shares the reservation's transaction.
  */
-
-/** As on bookings and packs: the sandbox is never sold against in production. */
-const PHASE_1_PROVIDER = "SANDBOX" as const;
 
 type Refusal = { ok: false; status: 422 | 500 | 503; code: ErrorCode; message: string };
 
@@ -99,7 +95,7 @@ export async function purchaseGiftVoucher(input: {
   const { userId, request, now } = input;
   const environment = getServerEnvironment();
 
-  if (!sandboxMoneyAllowed(environment)) {
+  if (!paymentProvider()) {
     return {
       ok: false,
       status: 500,
@@ -138,8 +134,7 @@ export async function purchaseGiftVoucher(input: {
         id: paymentId,
         userId,
         purpose: "GIFT_VOUCHER",
-        provider: PHASE_1_PROVIDER,
-        redirectUrl: sandboxCheckoutUrl(paymentId),
+        ...paymentCheckout(paymentId),
         status: "PENDING",
         amountMinor: priceMinor,
       },

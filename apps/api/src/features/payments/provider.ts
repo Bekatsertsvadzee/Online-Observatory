@@ -139,11 +139,10 @@ export function createSandboxProvider(secret: string): PaymentProviderAdapter {
  * A demo deployment (ADR-035) is not a production environment in that sense: it
  * takes no real money, and the sandbox is the only provider it has.
  *
- * BOG_IPAY has no adapter. Its webhook shape, header and signing algorithm are
- * provider configuration that "must be confirmed against the provider's own
- * documentation before implementation" (contract, `paymentWebhookSignature`),
- * and merchant onboarding has not delivered that documentation. A callback
- * claiming to be from it is unverifiable, so it is a 401 and not a guess.
+ * BOG_IPAY is not taken here. The bank calls its own route,
+ * `/payments/bog/callback` (ADR-073), whose body is never trusted: the payment is
+ * settled from the receipt read back from the bank. An envelope here claiming to
+ * be the bank's is a 401.
  */
 export function resolvePaymentProvider(provider: PaymentProvider): ProviderResolution {
   const environment = getServerEnvironment();
@@ -173,7 +172,7 @@ export function resolvePaymentProvider(provider: PaymentProvider): ProviderResol
       return {
         ok: false,
         status: 401,
-        message: "No adapter is configured for BOG_IPAY.",
+        message: "Bank of Georgia calls /payments/bog/callback.",
       };
   }
 }

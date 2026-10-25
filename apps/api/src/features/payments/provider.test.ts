@@ -106,7 +106,7 @@ describe("resolving a provider", () => {
     environment.PAYMENT_SANDBOX_WEBHOOK_SECRET = secret;
   });
 
-  it("has no adapter for BOG_IPAY until its documentation exists", () => {
+  it("refuses a BOG_IPAY envelope: the bank calls its own route (ADR-073)", () => {
     expect(resolvePaymentProvider("BOG_IPAY")).toMatchObject({ ok: false, status: 401 });
   });
 });
