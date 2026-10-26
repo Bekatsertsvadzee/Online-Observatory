@@ -21,7 +21,12 @@ from darkview_agent.devices.base import (
     NotConnectedError,
 )
 from darkview_agent.devices.simulated import SimCamera, SimFocuser, SimMount
-from tests.fake_alpaca import FakeAlpacaTelescope, alpaca_mount
+from tests.fake_alpaca import (
+    FakeAlpacaFocuser,
+    FakeAlpacaTelescope,
+    alpaca_focuser,
+    alpaca_mount,
+)
 from tests.fake_asi import zwo_camera
 
 
@@ -42,7 +47,10 @@ def camera_implementations():
 
 
 def focuser_implementations():
-    return [("SimFocuser", lambda clock: SimFocuser(clock=clock))]
+    return [
+        ("SimFocuser", lambda clock: SimFocuser(clock=clock)),
+        ("AlpacaFocuser", lambda clock: alpaca_focuser(FakeAlpacaFocuser(clock))),
+    ]
 
 
 def _ids(implementations):

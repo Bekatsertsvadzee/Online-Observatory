@@ -8,15 +8,24 @@ Real drivers are unreachable without both an explicit setting and attended mode;
 from __future__ import annotations
 
 import functools
+import importlib.util
 import logging
+import math
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
-from contracts.models import MissionFailureReason
+from contracts.models import MissionFailureReason, OpticalConfig
 from darkview_agent.config import AgentConfig, ConfigurationError, DriverMode
+from darkview_agent.devices.alpaca import AlpacaMount
+from darkview_agent.devices.alpaca_focuser import AlpacaFocuser
 from darkview_agent.devices.base import CameraDriver, FocuserDriver, MountDriver
 from darkview_agent.devices.simulated import SimCamera, SimFocuser, SimMount
+from darkview_agent.devices.zwo import ZwoCamera
+from darkview_agent.devices.zwoasi_binding import ZwoasiCamera
+from darkview_agent.mission.solver import PlateSolver, SimSolver
 from darkview_agent.safety.envelope import SafetyEnvelope
+from darkview_agent.solve.astap import DEFAULT_TIMEOUT_SECONDS, AstapSolver
 
 logger = logging.getLogger("darkview.agent")
 
@@ -99,23 +108,96 @@ class Devices:
         self.focuser: FocuserDriver = _Attributed(focuser, DeviceKind.FOCUSER)
 
 
+#: Focal length of each optical train, as the contract's OpticalConfig states them.
+FOCAL_LENGTH_MM = {
+    OpticalConfig.f20_barlow: 4064.0,
+    OpticalConfig.f10_native: 2032.0,
+    OpticalConfig.f6_3_reducer: 1280.0,
+}
+
+#: The ASI585MC's short side: 2160 pixels of 2.9 um, from ZWO's published
+#: specification. A plate-solve hint, not a safety value: ASTAP is told roughly
+#: how tall the field is so it matches at the right scale. First light confirms it.
+ASI585MC_SENSOR_HEIGHT_MM = 2160 * 0.0029
+
+HARDWARE_EXTRA_HINT = (
+    "Install it with `pip install \"darkview-agent[hardware]\"` (or `pip install -e "
+    "\".[hardware]\"` from agent/) into the agent's virtual environment."
+)
+
+
+def field_height_degrees(optical_config: OpticalConfig) -> float:
+    return math.degrees(ASI585MC_SENSOR_HEIGHT_MM / FOCAL_LENGTH_MM[optical_config])
+
+
+def _required_file(path: Path | None, name: str, what: str) -> Path:
+    if path is None:
+        raise ConfigurationError(f"REAL mode needs {name}: {what}.")
+    if not path.is_file():
+        raise ConfigurationError(f"{name}={path} does not exist or is not a file ({what}).")
+    return path
+
+
+def zwo_camera(config: AgentConfig) -> ZwoCamera:
+    """The ASI585MC through zwoasi, refused clearly when either is missing."""
+    sdk = _required_file(
+        config.zwo_sdk_path,
+        "DARKVIEW_AGENT_ZWO_SDK_PATH",
+        "the ZWO ASI SDK library, e.g. C:\\...\\ASICamera2.dll",
+    )
+    # Looked up, not imported: the binding loads the SDK only when a camera opens.
+    if importlib.util.find_spec("zwoasi") is None:
+        raise ConfigurationError(f"The zwoasi binding is not installed. {HARDWARE_EXTRA_HINT}")
+    return ZwoCamera(ZwoasiCamera(str(sdk), index=config.zwo_camera_index))
+
+
+def astap_solver(
+    config: AgentConfig, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+) -> AstapSolver:
+    executable = _required_file(
+        config.astap_path, "DARKVIEW_AGENT_ASTAP_PATH", "the ASTAP command-line executable"
+    )
+    database = config.astap_database_dir
+    if database is not None and not database.is_dir():
+        raise ConfigurationError(
+            f"DARKVIEW_AGENT_ASTAP_DATABASE_DIR={database} is not a folder."
+        )
+    return AstapSolver(
+        executable,
+        field_height_degrees(config.optical_config),
+        timeout_seconds=timeout_seconds,
+        database_dir=database,
+    )
+
+
 def build_devices(config: AgentConfig) -> Devices:
     """Return the device set the configuration selects.
 
-    DV-028 added `AlpacaMount` and DV-029 `ZwoCamera`; the real focuser driver is
-    still missing, and real devices beside a simulated one are not a real observatory.
-    Until they exist, REAL mode raises rather than silently falling back to the
-    simulator — a silent fallback would let an operator believe hardware is under
-    test when it is not.
+    REAL is the mount and focuser over the loopback Alpaca bridge and the camera
+    through the ZWO SDK. `load_config` has already refused REAL without the
+    attended flag. Anything REAL needs and does not have raises here; there is no
+    fallback to the simulator, because an operator in attended mode must never be
+    shown simulated output as if it were hardware.
     """
     if config.driver_mode is DriverMode.SIMULATED:
         return Devices(mount=SimMount(), camera=SimCamera(), focuser=SimFocuser())
 
-    raise ConfigurationError(
-        "Real device drivers are not all implemented yet (the focuser has no real "
-        "driver). Refusing to fall back to the simulator, because an operator "
-        "in attended mode must never be shown simulated output as if it were hardware."
+    if not config.attended:
+        raise ConfigurationError("REAL devices are only ever built for an attended operator.")
+    return Devices(
+        mount=AlpacaMount(config.alpaca_host, config.alpaca_port, config.mount_device_number),
+        camera=zwo_camera(config),
+        focuser=AlpacaFocuser(
+            config.alpaca_host, config.alpaca_port, config.focuser_device_number
+        ),
     )
+
+
+def build_solver(config: AgentConfig) -> PlateSolver:
+    """ASTAP for real frames; the simulator's solver only for the simulator's."""
+    if config.driver_mode is DriverMode.SIMULATED:
+        return SimSolver()
+    return astap_solver(config)
 
 
 def start(config: AgentConfig, envelope: SafetyEnvelope | None = None) -> Devices:

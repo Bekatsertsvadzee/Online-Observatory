@@ -17,6 +17,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from contracts.models import OpticalConfig
+from darkview_agent.devices.alpaca import require_loopback
 from darkview_agent.safety.sun import SiteLocation
 
 
@@ -43,6 +44,10 @@ DEFAULT_ENV_FILE = Path.home() / ".darkview" / "agent.env"
 #: act, taken in the process they are standing beside; a file outlives the person
 #: who wrote it, and one left on disk would put the next unattended start on REAL.
 FILE_FORBIDDEN_SETTINGS = ("DARKVIEW_AGENT_DRIVER_MODE", "DARKVIEW_AGENT_ATTENDED")
+
+#: ASCOM Remote's own defaults. The host is loopback and can only ever be loopback.
+DEFAULT_ALPACA_HOST = "127.0.0.1"
+DEFAULT_ALPACA_PORT = 11111
 
 
 def _env_flag(environment: dict[str, str], name: str) -> bool:
@@ -83,6 +88,24 @@ class AgentConfig:
     a capture's focal length rather than letting a telescope hit something --
     which is why it has a default at all.
     """
+
+    alpaca_host: str = DEFAULT_ALPACA_HOST
+    """The ASCOM Remote / Alpaca bridge. A literal loopback address, checked at load."""
+
+    alpaca_port: int = DEFAULT_ALPACA_PORT
+    mount_device_number: int = 0
+    focuser_device_number: int = 0
+    zwo_sdk_path: Path | None = None
+    """The ZWO ASI SDK library (`ASICamera2.dll` on Windows). Required in REAL mode."""
+
+    zwo_camera_index: int | None = None
+    """Which camera the SDK opens. None: the one camera whose name says ASI585MC."""
+
+    astap_path: Path | None = None
+    """The ASTAP command-line executable. Required in REAL mode."""
+
+    astap_database_dir: Path | None = None
+    """Where ASTAP's star database is, when not in ASTAP's own folder."""
 
     @property
     def is_simulated(self) -> bool:
@@ -172,7 +195,51 @@ def load_config(environment: dict[str, str] | None = None) -> AgentConfig:
         site=_site(env),
         state_path=_state_path(env),
         optical_config=_optical_config(env),
+        alpaca_host=_alpaca_host(env),
+        alpaca_port=_whole_number(env, "DARKVIEW_AGENT_ALPACA_PORT", DEFAULT_ALPACA_PORT, 1, 65535),
+        mount_device_number=_whole_number(env, "DARKVIEW_AGENT_ALPACA_MOUNT_DEVICE", 0),
+        focuser_device_number=_whole_number(env, "DARKVIEW_AGENT_ALPACA_FOCUSER_DEVICE", 0),
+        zwo_sdk_path=_optional_path(env, "DARKVIEW_AGENT_ZWO_SDK_PATH"),
+        zwo_camera_index=_optional_whole_number(env, "DARKVIEW_AGENT_ZWO_CAMERA_INDEX"),
+        astap_path=_optional_path(env, "DARKVIEW_AGENT_ASTAP_PATH"),
+        astap_database_dir=_optional_path(env, "DARKVIEW_AGENT_ASTAP_DATABASE_DIR"),
     )
+
+
+def _alpaca_host(environment: dict[str, str]) -> str:
+    host = environment.get("DARKVIEW_AGENT_ALPACA_HOST", "").strip() or DEFAULT_ALPACA_HOST
+    try:
+        require_loopback(host)
+    except ValueError as error:
+        raise ConfigurationError(f"DARKVIEW_AGENT_ALPACA_HOST: {error}") from None
+    return host
+
+
+def _optional_whole_number(environment: dict[str, str], name: str) -> int | None:
+    raw = environment.get(name, "").strip()
+    if raw == "":
+        return None
+    return _whole_number(environment, name, 0)
+
+
+def _whole_number(
+    environment: dict[str, str], name: str, default: int, low: int = 0, high: int = 2**31 - 1
+) -> int:
+    raw = environment.get(name, "").strip()
+    if raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ConfigurationError(f"{name}={raw!r} is not a whole number.") from None
+    if not low <= value <= high:
+        raise ConfigurationError(f"{name}={value} is outside {low}..{high}.")
+    return value
+
+
+def _optional_path(environment: dict[str, str], name: str) -> Path | None:
+    raw = environment.get(name, "").strip()
+    return Path(raw).expanduser() if raw else None
 
 
 def _optical_config(environment: dict[str, str]) -> OpticalConfig:

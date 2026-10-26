@@ -201,6 +201,25 @@ def test_without_a_hint_no_position_is_invented(astap):
     assert "-ra" not in arguments() and "-spd" not in arguments()
 
 
+def test_a_database_folder_is_passed_as_d(astap, tmp_path):
+    executable, configure, arguments = astap
+    configure(ini=SOLVED_INI, exit=0)
+
+    AstapSolver(executable, field_height_degrees=0.24, database_dir=tmp_path / "d50").solve(
+        _frame()
+    )
+
+    options = dict(zip(arguments()[0::2], arguments()[1::2], strict=True))
+    assert options["-d"] == str(tmp_path / "d50")
+
+
+def test_without_a_database_folder_astap_uses_its_own(astap):
+    executable, configure, arguments = astap
+    configure(ini=SOLVED_INI, exit=0)
+    AstapSolver(executable, field_height_degrees=0.24).solve(_frame())
+    assert "-d" not in arguments()
+
+
 def test_a_failed_solve_is_none(astap):
     executable, configure, _ = astap
     configure(ini="PLTSOLVD=F\n", exit=1)

@@ -120,6 +120,7 @@ class AstapSolver(PlateSolver):
         *,
         search_radius_degrees: float = DEFAULT_SEARCH_RADIUS_DEGREES,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        database_dir: Path | None = None,
     ) -> None:
         if field_height_degrees <= 0:
             raise ValueError("field_height_degrees must be greater than zero")
@@ -127,6 +128,7 @@ class AstapSolver(PlateSolver):
         self._field_height = field_height_degrees
         self._search_radius = search_radius_degrees
         self._timeout = timeout_seconds
+        self._database_dir = database_dir
         self._hint: tuple[float, float] | None = None
 
     def set_commanded_position(self, ra_hours: float, dec_degrees: float) -> None:
@@ -141,6 +143,9 @@ class AstapSolver(PlateSolver):
             "-fov",
             f"{self._field_height:.4f}",
         ]
+        if self._database_dir is not None:
+            # ASTAP's `-d`: the star database's folder, when it is not ASTAP's own.
+            arguments += ["-d", str(self._database_dir)]
         if self._hint is not None:
             ra_hours, dec_degrees = self._hint
             arguments += [

@@ -120,11 +120,19 @@ def http_transport(host: str, port: int) -> Transport:
     return send
 
 
-class AlpacaMount(MountDriver):
+class AlpacaClient:
+    """One Alpaca device: `/api/v1/{device_type}/{n}/{member}`, with ASCOM's error rules.
+
+    Shared by every Alpaca driver here, and used directly by the read-only
+    `check-devices` bring-up, which needs the raw answers rather than a driver's
+    interpretation of them.
+    """
+
     def __init__(
         self,
         host: str,
         port: int,
+        device_type: str,
         device_number: int = 0,
         *,
         transport: Transport | None = None,
@@ -132,23 +140,11 @@ class AlpacaMount(MountDriver):
     ) -> None:
         require_loopback(host)
         self._transport = transport or http_transport(host, port)
-        self._base = f"/api/v1/telescope/{device_number}"
+        self._base = f"/api/v1/{device_type}/{device_number}"
         self._client_id = str(client_id)
         self._transaction_ids = itertools.count(1)
-        self._connected = False
-        self._resume_tracking = False
-        self._last_altitude = 0.0
-        self._last_azimuth = 0.0
 
-    @property
-    def mode(self) -> ObservatoryMode:
-        return ObservatoryMode.real
-
-    # ------------------------------------------------------------------
-    # Alpaca
-    # ------------------------------------------------------------------
-
-    def _call(
+    def call(
         self,
         method: str,
         member: str,
@@ -177,8 +173,46 @@ class AlpacaMount(MountDriver):
             raise NotConnectedError(message)
         raise DeviceError(message)
 
+    def get(self, member: str) -> Any:
+        return self.call("GET", member)
+
+    def put(
+        self,
+        member: str,
+        params: dict[str, str] | None = None,
+        timeout: float = REQUEST_TIMEOUT_SECONDS,
+    ) -> None:
+        self.call("PUT", member, params, timeout)
+
+
+class AlpacaMount(MountDriver):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        device_number: int = 0,
+        *,
+        transport: Transport | None = None,
+        client_id: int = 1,
+    ) -> None:
+        self._alpaca = AlpacaClient(
+            host, port, "telescope", device_number, transport=transport, client_id=client_id
+        )
+        self._connected = False
+        self._resume_tracking = False
+        self._last_altitude = 0.0
+        self._last_azimuth = 0.0
+
+    @property
+    def mode(self) -> ObservatoryMode:
+        return ObservatoryMode.real
+
+    # ------------------------------------------------------------------
+    # Alpaca
+    # ------------------------------------------------------------------
+
     def _get(self, member: str) -> Any:
-        return self._call("GET", member)
+        return self._alpaca.get(member)
 
     def _put(
         self,
@@ -186,7 +220,7 @@ class AlpacaMount(MountDriver):
         params: dict[str, str] | None = None,
         timeout: float = REQUEST_TIMEOUT_SECONDS,
     ) -> None:
-        self._call("PUT", member, params, timeout)
+        self._alpaca.put(member, params, timeout)
 
     def _require_connection(self) -> None:
         if not self._connected:
