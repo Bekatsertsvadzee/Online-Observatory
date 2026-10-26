@@ -16,16 +16,19 @@ export function sandboxMoneyAllowed(environment: DeploymentEnvironment) {
 }
 
 /**
- * A demo never commands hardware. Run once at startup: a demo deployment whose
- * database holds an observatory in REAL mode does not come up.
+ * A demo never commands hardware. Run once at startup: a demo deployment whose database
+ * holds an observatory in REAL mode does not come up, unless that observatory is the
+ * hardware test one (DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID, ADR-074).
+ * The caller counts the REAL observatories other than the one it is given.
  */
 export async function refuseRealHardwareInDemo(
   deployment: "production" | "demo" | undefined,
-  countRealObservatories: () => Promise<number>,
+  countRealObservatoriesExcept: (hardwareTestObservatoryId: string | undefined) => Promise<number>,
+  hardwareTestObservatoryId?: string,
 ) {
   if (deployment !== "demo") return;
 
-  const real = await countRealObservatories();
+  const real = await countRealObservatoriesExcept(hardwareTestObservatoryId);
   if (real > 0) {
     throw new Error(
       `DARKVIEW_DEPLOYMENT is demo, but ${real} observatory(ies) are in REAL mode. ` +

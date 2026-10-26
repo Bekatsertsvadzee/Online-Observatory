@@ -1151,6 +1151,31 @@ export type BookableTelescope = {
     focalLengthMm: number;
 };
 
+export type AdminObservatoryList = {
+    items: Array<AdminObservatory>;
+};
+
+export type AdminObservatory = {
+    id: string;
+    slug: string;
+    nameEn: string;
+    nameKa: string;
+    mode: ObservatoryMode;
+    isDemo: boolean;
+    /**
+     * The one observatory a demo deployment may switch to REAL (ADR-074).
+     */
+    hardwareTest: boolean;
+    /**
+     * The network node's kind; null for an observatory with no node.
+     */
+    kind: NetworkNodeKind | null;
+    /**
+     * The network node's approval; null for an observatory with no node.
+     */
+    approvalStatus: NetworkNodeApprovalStatus | null;
+};
+
 export type BookableObservatoryList = {
     items: Array<BookableObservatory>;
 };
@@ -5968,6 +5993,31 @@ export type GetCaptureDownloadResponses = {
 };
 
 export type GetCaptureDownloadResponse = GetCaptureDownloadResponses[keyof GetCaptureDownloadResponses];
+
+export type AdminListObservatoriesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/admin/observatories';
+};
+
+export type AdminListObservatoriesErrors = {
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+};
+
+export type AdminListObservatoriesError = AdminListObservatoriesErrors[keyof AdminListObservatoriesErrors];
+
+export type AdminListObservatoriesResponses = {
+    /**
+     * Every observatory.
+     */
+    200: AdminObservatoryList;
+};
+
+export type AdminListObservatoriesResponse = AdminListObservatoriesResponses[keyof AdminListObservatoriesResponses];
 
 export type AdminGetObservatoryStateData = {
     body?: never;

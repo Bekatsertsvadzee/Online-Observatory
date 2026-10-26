@@ -39,6 +39,14 @@ describe("refuseRealHardwareInDemo (ADR-035)", () => {
       /demo.*2 observatory\(ies\) are in REAL mode/,
     );
   });
+
+  it("passes the hardware test observatory to the count, so it is left out (ADR-074)", async () => {
+    const count = vi.fn(async () => 0);
+    await expect(
+      refuseRealHardwareInDemo("demo", count, "3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e09"),
+    ).resolves.toBeUndefined();
+    expect(count).toHaveBeenCalledWith("3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e09");
+  });
 });
 
 describe("sweepSeconds", () => {

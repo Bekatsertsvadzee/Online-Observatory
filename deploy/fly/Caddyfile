@@ -20,8 +20,11 @@
 		reverse_proxy 127.0.0.1:4001
 	}
 
-	# The mission channel's WebSocket and the MJPEG stream (ADR-011).
-	@realtime path /ws/mission/* /stream/mission/*
+	# The mission channel's WebSocket and the MJPEG stream (ADR-011), and the
+	# observatory agent's own link (ADR-074): a real agent dials in from the
+	# observatory's mini-PC, not from inside this machine. It authenticates with its
+	# device token before anything else is accepted.
+	@realtime path /ws/mission/* /stream/mission/* /ws/agent
 	handle @realtime {
 		reverse_proxy 127.0.0.1:4001
 	}

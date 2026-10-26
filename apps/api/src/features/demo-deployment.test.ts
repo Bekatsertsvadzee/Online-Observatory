@@ -12,6 +12,7 @@ const { environment } = vi.hoisted(() => ({
   environment: {
     NODE_ENV: "production" as string,
     DARKVIEW_DEPLOYMENT: "production" as "production" | "demo",
+    DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID: undefined as string | undefined,
     APP_URL: "https://stellar.test",
     VOUCHER_CODE_SECRET: undefined as string | undefined,
   },
@@ -65,6 +66,7 @@ const guarded = {
 afterEach(() => {
   environment.NODE_ENV = "production";
   environment.DARKVIEW_DEPLOYMENT = "production";
+  environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = undefined;
 });
 
 describe.each(Object.entries(guarded))("%s", (_name, call) => {
@@ -107,6 +109,21 @@ describe("setObservatoryMode on a demo", () => {
   it("still allows going back to SIMULATED", async () => {
     environment.DARKVIEW_DEPLOYMENT = "demo";
     await expect(setObservatoryMode(request("SIMULATED"))).rejects.toThrow(REACHED_DATABASE);
+  });
+
+  it("lets the named hardware test observatory past the demo refusal (ADR-074)", async () => {
+    environment.DARKVIEW_DEPLOYMENT = "demo";
+    environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = OBSERVATORY_ID;
+    await expect(setObservatoryMode(request("REAL"))).rejects.toThrow(REACHED_DATABASE);
+  });
+
+  it("still refuses REAL for any other observatory when one is named", async () => {
+    environment.DARKVIEW_DEPLOYMENT = "demo";
+    environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = "3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e09";
+    await expect(setObservatoryMode(request("REAL"))).resolves.toMatchObject({
+      ok: false,
+      status: 403,
+    });
   });
 
   it("is not a demo refusal in production", async () => {

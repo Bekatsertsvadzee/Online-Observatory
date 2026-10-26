@@ -79,7 +79,8 @@ deliberate — a permissive fallback silently disables the check it stands for.
 | `EMAIL_VERIFICATION_WEBHOOK_URL` / `_SECRET` | api | Where the verification email is delivered, signed in `x-darkview-signature`. Registration is refused unless this pair or the Resend pair below is set. |
 | `RESEND_API_KEY` / `EMAIL_FROM` | api | The verification email sent through Resend's HTTP API (ADR-035), in the customer's locale. Optional, both or neither; when set it is used instead of the webhook, and either path is enough for registration. Neither, on `DARKVIEW_DEPLOYMENT=demo`, is ADR-049: a new address is verified at once and signed in; neither anywhere else is a 503. `EMAIL_FROM` is `address@domain` or `Name <address@domain>` on a domain Resend has verified. The same pair on realtime sends the notification emails (ADR-062). |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | api | Sign in with Google (ADR-048). A "Web application" OAuth client in Google Cloud whose authorised redirect URI is `APP_URL/api/auth/google/callback` (the demo: `https://stellar.astroman.ge/api/auth/google/callback`; development: `http://localhost:3000/api/auth/google/callback`). Optional, both or neither; unset, the Google button sends the visitor back to sign-in with `error=google`. The code is exchanged on the API; no Google script runs in the browser. |
-| `DARKVIEW_DEPLOYMENT` | both | `production` (default) or `demo` (ADR-035). `demo` is a hosted build that takes no real money and commands no hardware: the sandbox payment provider and the sandbox renewal charger work although `NODE_ENV` is production, `POST /admin/observatories/{observatoryId}/mode` refuses REAL, and both services refuse to start while any observatory is in REAL mode. Cookies and every other production check are unchanged. **Unset it, or set `production`, for the real launch.** |
+| `DARKVIEW_DEPLOYMENT` | both | `production` (default) or `demo` (ADR-035). `demo` is a hosted build that takes no real money and commands no hardware: the sandbox payment provider and the sandbox renewal charger work although `NODE_ENV` is production, `POST /admin/observatories/{observatoryId}/mode` refuses REAL, and both services refuse to start while any observatory is in REAL mode, except the one named by `DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID` (ADR-074). Cookies and every other production check are unchanged. **Unset it, or set `production`, for the real launch.** |
+| `DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID` | both | ADR-074. On a `demo` deployment, the one observatory that may be switched to REAL, so the real telescope is brought up beside the demo. Never bookable. Unset, a demo commands no hardware. Remove it with `DARKVIEW_DEPLOYMENT=demo` at the real launch. |
 | `RESEND_API_KEY` / `EMAIL_FROM` | realtime | The notification emails sent through Resend's HTTP API, with the wording in `notifications/templates.ts`, in the customer's locale (ADR-062). Optional, both or neither; when set it is used instead of `NOTIFICATION_WEBHOOK_URL`. Neither: emails wait in the outbox. |
 | `NOTIFICATION_WEBHOOK_URL` / `_SECRET` | realtime | Where customer emails are delivered, signed with HMAC-SHA256 in `x-darkview-signature` and deduplicated by `idempotency-key` (DV-064). Optional, both or neither: unset, emails are queued in `EmailNotification` and nothing is sent until they are set. |
 | `VOUCHER_CODE_SECRET` | realtime (required), api | Derives gift voucher codes from voucher ids (DV-112). ≥ 32 characters, **the same value in both services**. Codes are never stored, so the realtime service writes each one into its email from this secret. On the API it is optional: unset, `POST /vouchers` answers 503. **Never rotate it while vouchers are unsent or unspent**: every outstanding code would stop matching, and an email under a different secret is retried and then fails rather than sent wrong. |
@@ -209,6 +210,26 @@ the source can connect an agent or sign in as the operator.
 
 `REALTIME_INTERNAL_URL` is unset on the demo: the API cannot reach `/internal/*` through
 the front, by design, so operator telemetry answers 503 there.
+
+### The hardware test observatory (ADR-074)
+
+The real telescope is brought up on its own observatory, beside the demo, which keeps
+running on the simulator. Once, against the hosted database:
+
+```sh
+cd packages/db
+DATABASE_URL=<hosted> npx tsx prisma/hardware-test-observatory.ts \
+  --latitude <site, deg N> --longitude <site, deg E> --token-file <private path>
+```
+
+It prints the new observatory's id and writes `DARKVIEW_AGENT_DEVICE_TOKEN=...` to the
+token file (mode 600); the token is never printed and only its hash is stored. Then set
+`DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID` to that id on the Vercel API project and as a Fly
+secret, and redeploy both. The agent on the observatory's mini-PC dials
+`wss://<front>/ws/agent` with that observatory id and token.
+
+Run the script again with corrected `--latitude`/`--longitude` once the rooftop has been
+surveyed; it changes nothing else. With `--token-file` it also replaces the token.
 
 ## 3. Bringing the observatory up
 

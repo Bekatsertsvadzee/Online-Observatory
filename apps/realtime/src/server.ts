@@ -436,8 +436,13 @@ if (process.env.NODE_ENV !== "test") {
 
   // ADR-035. A demo never commands hardware, so it does not come up over a
   // database with an observatory in REAL mode. Before a socket is accepted.
-  await refuseRealHardwareInDemo(environment.DARKVIEW_DEPLOYMENT, () =>
-    notifications.observatory.count({ where: { mode: "REAL" } }),
+  await refuseRealHardwareInDemo(
+    environment.DARKVIEW_DEPLOYMENT,
+    (except) =>
+      notifications.observatory.count({
+        where: { mode: "REAL", ...(except ? { id: { not: except } } : {}) },
+      }),
+    environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID,
   );
 
   const server = createRealtimeServer(

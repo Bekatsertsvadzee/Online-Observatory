@@ -2362,6 +2362,29 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /admin/observatories:
+    get:
+      operationId: adminListObservatories
+      tags: [admin]
+      summary: Every observatory, bookable or not, for the operator console.
+      description: |
+        ADR-074. The operator console works on one observatory at a time and has to be
+        able to reach those no customer can book: the demo's hardware test observatory,
+        and a partner node under review (ADR-019). Ordered by creation, so the
+        first-party observatory comes first. `hardwareTest` marks the one a demo
+        deployment may switch to REAL (DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID).
+      security:
+        - userSession: [operator]
+      responses:
+        "200":
+          description: Every observatory.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminObservatoryList"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /admin/observatories/{observatoryId}/state:
     get:
       operationId: adminGetObservatoryState
@@ -4723,6 +4746,48 @@ components:
         focalLengthMm:
           type: number
           exclusiveMinimum: 0
+
+    AdminObservatoryList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminObservatory"
+
+    AdminObservatory:
+      type: object
+      additionalProperties: false
+      required: [id, slug, nameEn, nameKa, mode, isDemo, hardwareTest, kind, approvalStatus]
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        nameEn:
+          type: string
+        nameKa:
+          type: string
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
+        isDemo:
+          type: boolean
+        hardwareTest:
+          type: boolean
+          description: The one observatory a demo deployment may switch to REAL (ADR-074).
+        kind:
+          description: The network node's kind; null for an observatory with no node.
+          oneOf:
+            - $ref: "#/components/schemas/NetworkNodeKind"
+            - type: "null"
+        approvalStatus:
+          description: The network node's approval; null for an observatory with no node.
+          oneOf:
+            - $ref: "#/components/schemas/NetworkNodeApprovalStatus"
+            - type: "null"
 
     BookableObservatoryList:
       type: object

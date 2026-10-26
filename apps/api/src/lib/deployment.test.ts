@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { refuseRealHardwareInDemo, sandboxMoneyAllowed } from "./deployment";
+import {
+  realHardwareAllowedInDemo,
+  refuseRealHardwareInDemo,
+  sandboxMoneyAllowed,
+} from "./deployment";
 
 describe("sandboxMoneyAllowed (ADR-035)", () => {
   it("allows the sandbox outside production, whatever the deployment", () => {
@@ -38,5 +42,26 @@ describe("refuseRealHardwareInDemo (ADR-035)", () => {
     await expect(refuseRealHardwareInDemo("demo", async () => 2)).rejects.toThrow(
       /demo.*2 observatory\(ies\) are in REAL mode/,
     );
+  });
+
+  it("passes the hardware test observatory to the count, so it is left out (ADR-074)", async () => {
+    const count = vi.fn(async () => 0);
+    await expect(
+      refuseRealHardwareInDemo("demo", count, "3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e09"),
+    ).resolves.toBeUndefined();
+    expect(count).toHaveBeenCalledWith("3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e09");
+  });
+});
+
+describe("realHardwareAllowedInDemo (ADR-074)", () => {
+  const TEST_ID = "3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e09";
+
+  it("allows only the observatory named as the hardware test", () => {
+    expect(realHardwareAllowedInDemo(TEST_ID, TEST_ID)).toBe(true);
+    expect(realHardwareAllowedInDemo("3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e02", TEST_ID)).toBe(false);
+  });
+
+  it("allows none when no hardware test observatory is named", () => {
+    expect(realHardwareAllowedInDemo(TEST_ID, undefined)).toBe(false);
   });
 });

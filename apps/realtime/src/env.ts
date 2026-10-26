@@ -8,6 +8,12 @@ const schema = z.object({
    * same variable. Turned off for the real launch.
    */
   DARKVIEW_DEPLOYMENT: z.enum(["production", "demo"]).default("production"),
+  /**
+   * ADR-074. The one observatory a demo deployment may switch to REAL: an attended
+   * hardware test of the real telescope beside the demo. No customer can book it.
+   * Unset, a demo commands no hardware at all.
+   */
+  DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID: z.uuid().optional(),
   // Both schemes are libpq's; Prisma Postgres hands out postgres://.
   DATABASE_URL: z.url().regex(/^postgres(ql)?:\/\//),
   REALTIME_PORT: z.coerce.number().int().positive().default(4001),
