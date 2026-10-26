@@ -2781,6 +2781,21 @@ class BookableObservatory(BaseModel):
     telescope: BookableTelescope
 
 
+class AdminObservatory(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: UUID
+    slug: str
+    name_en: str = Field(..., alias='nameEn')
+    name_ka: str = Field(..., alias='nameKa')
+    mode: ObservatoryMode
+    is_demo: bool = Field(..., alias='isDemo')
+    hardware_test: bool = Field(..., alias='hardwareTest', description='The one observatory a demo deployment may switch to REAL (ADR-074).')
+    kind: NetworkNodeKind | None = Field(..., description="The network node's kind; null for an observatory with no node.")
+    approval_status: NetworkNodeApprovalStatus | None = Field(..., alias='approvalStatus', description="The network node's approval; null for an observatory with no node.")
+
+
 class BookableObservatoryList(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -2944,6 +2959,13 @@ class RegisterNetworkNodeRequest(BaseModel):
     longitude: float = Field(..., ge=-180.0, le=180.0)
     timezone: str = Field(..., min_length=1)
     telescope: RegisterNetworkTelescope
+
+
+class AdminObservatoryList(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    items: list[AdminObservatory]
 
 
 class NetworkNodeReview(BaseModel):

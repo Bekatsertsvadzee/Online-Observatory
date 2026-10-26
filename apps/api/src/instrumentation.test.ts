@@ -34,6 +34,16 @@ describe("API startup (ADR-035)", () => {
     expect(count).toHaveBeenCalledWith({ where: { mode: "REAL" } });
   });
 
+  it("leaves the hardware test observatory out of the count (ADR-074)", async () => {
+    vi.stubEnv("DARKVIEW_DEPLOYMENT", "demo");
+    vi.stubEnv("DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID", "3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e09");
+    count.mockResolvedValueOnce(0);
+    await expect(register()).resolves.toBeUndefined();
+    expect(count).toHaveBeenCalledWith({
+      where: { mode: "REAL", id: { not: "3f1f5b8e-1a2b-4c3d-8e4f-5a6b7c8d9e09" } },
+    });
+  });
+
   it("refuses to start a demo with an observatory in REAL mode", async () => {
     vi.stubEnv("DARKVIEW_DEPLOYMENT", "demo");
     count.mockResolvedValueOnce(1);

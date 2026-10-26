@@ -17,6 +17,7 @@ import { randomUUID } from "node:crypto";
 /** How far ahead a weather hold reaches when deciding whom to email (DV-064). */
 const WEATHER_HOLD_NOTICE_HOURS = 24;
 
+import { realHardwareAllowedInDemo } from "@/lib/deployment";
 import { getDatabase } from "@/lib/db/client";
 import { getServerEnvironment } from "@/lib/validation/env";
 import { COMMAND_TTL_SECONDS } from "@/features/missions/command";
@@ -62,8 +63,14 @@ export async function setObservatoryMode(input: {
 }): Promise<ModeResult> {
   const { observatoryId, request, actorUserId } = input;
 
-  // ADR-035. A demo never commands hardware, whoever is standing at the telescope.
-  if (request.mode === "REAL" && getServerEnvironment().DARKVIEW_DEPLOYMENT === "demo") {
+  // ADR-035. A demo never commands hardware, whoever is standing at the telescope --
+  // except the one hardware test observatory it names (ADR-074).
+  const environment = getServerEnvironment();
+  if (
+    request.mode === "REAL" &&
+    environment.DARKVIEW_DEPLOYMENT === "demo" &&
+    !realHardwareAllowedInDemo(observatoryId, environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID)
+  ) {
     return {
       ok: false,
       status: 403,
@@ -93,6 +100,7 @@ export async function setObservatoryMode(input: {
     select: {
       id: true,
       mode: true,
+      networkNode: { select: { approvalStatus: true } },
       safetyEnvelope: {
         select: { maxAltitudeDegrees: true, maxAltitudeMeasuredBy: true },
       },
@@ -100,6 +108,23 @@ export async function setObservatoryMode(input: {
   });
   if (!observatory) {
     return { ok: false, status: 404, code: "NOT_FOUND", message: "No such observatory." };
+  }
+
+  // ADR-074. The demo's hardware test observatory stays out of customers' reach: if
+  // it was ever approved for booking, it no longer qualifies.
+  if (
+    request.mode === "REAL" &&
+    environment.DARKVIEW_DEPLOYMENT === "demo" &&
+    observatory.networkNode?.approvalStatus === "APPROVED"
+  ) {
+    return {
+      ok: false,
+      status: 403,
+      code: "FORBIDDEN",
+      message:
+        "This observatory can be booked, and a demo deployment never puts a bookable " +
+        "observatory on real hardware. REAL mode is refused.",
+    };
   }
 
   // ADR-032. An observatory still carrying the simulator's stand-in altitude limit

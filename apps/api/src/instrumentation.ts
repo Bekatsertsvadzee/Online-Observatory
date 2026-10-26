@@ -37,8 +37,15 @@ export async function register() {
   if (process.env.DARKVIEW_DEPLOYMENT === "demo") {
     const { refuseRealHardwareInDemo } = await import("@/lib/deployment");
     const { getDatabase } = await import("@/lib/db/client");
-    await refuseRealHardwareInDemo("demo", () =>
-      getDatabase().observatory.count({ where: { mode: "REAL" } }),
+    // ADR-074: the hardware test observatory, if one is named, is the exception.
+    const hardwareTest = process.env.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID || undefined;
+    await refuseRealHardwareInDemo(
+      "demo",
+      (except) =>
+        getDatabase().observatory.count({
+          where: { mode: "REAL", ...(except ? { id: { not: except } } : {}) },
+        }),
+      hardwareTest,
     );
   }
 }
