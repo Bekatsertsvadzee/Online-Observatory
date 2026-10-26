@@ -3,8 +3,9 @@
 Written against zwoasi's published interface (python-zwoasi, `zwoasi/__init__.py`)
 and the ZWO ASI SDK it wraps, and run against neither. `zwoasi` is imported when a
 camera is opened, not when this module is, so nothing in the agent needs the
-binding or the SDK library until real hardware is selected. It is not a
-dependency in `pyproject.toml` until DV-035 confirms it on the camera.
+binding or the SDK library until real hardware is selected. It is the optional
+`hardware` extra in `pyproject.toml`, still unconfirmed until DV-035 runs it on the
+camera.
 """
 
 from __future__ import annotations
@@ -30,11 +31,18 @@ _EXPOSURE_STATES = (
 
 
 class ZwoasiCamera:
-    """The one camera whose name contains `name`."""
+    """The one camera whose name contains `name`, or the one at `index` if given.
 
-    def __init__(self, library_path: str, name: str = "ASI585MC") -> None:
+    An index still has to name the expected camera: a guide camera plugged in
+    first must not be opened as the imaging camera because it took index 0.
+    """
+
+    def __init__(
+        self, library_path: str, name: str = "ASI585MC", index: int | None = None
+    ) -> None:
         self._library_path = library_path
         self._name = name
+        self._index = index
         self._asi: Any = None
         self._camera: Any = None
 
@@ -49,9 +57,16 @@ class ZwoasiCamera:
             # init raises if called twice in one process; a reconnect is not an error.
             if not getattr(zwoasi, "zwolib", None):
                 zwoasi.init(self._library_path)
-            matches = [
-                index for index, name in enumerate(zwoasi.list_cameras()) if self._name in name
-            ]
+            names = list(zwoasi.list_cameras())
+            if self._index is not None:
+                if not 0 <= self._index < len(names) or self._name not in names[self._index]:
+                    raise DeviceError(
+                        f"camera index {self._index} is not a {self._name}; "
+                        f"the SDK lists {names}"
+                    )
+                matches = [self._index]
+            else:
+                matches = [index for index, name in enumerate(names) if self._name in name]
             if len(matches) != 1:
                 raise DeviceError(
                     f"expected exactly one camera named {self._name}, found {len(matches)}"

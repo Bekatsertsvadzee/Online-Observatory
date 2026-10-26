@@ -34,7 +34,7 @@ import sys
 import threading
 from types import FrameType
 
-from darkview_agent import arming, runtime, setup
+from darkview_agent import arming, check_devices, runtime, setup
 from darkview_agent.config import (
     AgentConfig,
     ConfigurationError,
@@ -55,6 +55,8 @@ logger = logging.getLogger("darkview.agent")
 def run(config: AgentConfig, stop: threading.Event) -> None:
     """Turn the main loop until `stop` is set, then park."""
     envelope = SafetyEnvelope(site=config.site)
+    # Before the devices: everything REAL needs is checked before anything connects.
+    solver = runtime.build_solver(config)
     devices = runtime.start(config, envelope)
 
     if config.site is None:
@@ -74,6 +76,7 @@ def run(config: AgentConfig, stop: threading.Event) -> None:
         devices=devices,
         connect=build_connector(config.cloud_url, config.device_token),
         envelope=envelope,
+        solver=solver,
         store=store,
     )
     supervisor.recover()
@@ -127,6 +130,8 @@ def main(arguments: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if arguments is None else arguments
     if arguments[:1] == ["setup"]:
         return setup.main(arguments[1:])
+    if arguments[:1] == [check_devices.COMMAND]:
+        return check_devices.main(arguments[1:])
     if arguments[:1] in ([arming.ARM], [arming.DISARM]):
         return arming.main(arguments[0], arguments[1:])
 
@@ -160,7 +165,11 @@ def main(arguments: list[str] | None = None) -> int:
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
 
-    run(config, stop)
+    try:
+        run(config, stop)
+    except ConfigurationError as error:
+        logger.error("%s", error)
+        return 2
     return 0
 
 

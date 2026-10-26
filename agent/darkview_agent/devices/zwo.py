@@ -96,6 +96,11 @@ class ZwoCamera(CameraDriver):
     def mode(self) -> ObservatoryMode:
         return ObservatoryMode.real
 
+    @property
+    def sensor(self) -> SensorInfo | None:
+        """What the camera described when it was opened, or None while disconnected."""
+        return self._info
+
     def connect(self) -> None:
         if self._info is None:
             self._info = self._camera.open()

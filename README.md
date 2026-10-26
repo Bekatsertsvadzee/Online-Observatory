@@ -44,19 +44,19 @@ Never create a source path here that also exists there.
 
 Do not upgrade a major mid-phase.
 
-|                 | Version                        | Notes                                                        |
-| --------------- | ------------------------------ | ------------------------------------------------------------ |
-| Node            | **24 LTS** (`v24.14.1` in use) | `engines: >=20.19`                                           |
-| npm             | 11+                            | workspaces                                                   |
-| Next.js         | **16.3.2**                     | API route handlers only — no UI in this repository.          |
-| TypeScript      | **6.0.3**                      | strict                                                       |
-| Prisma          | **7.9.1**                      | `prisma-client` generator                                    |
-| PostgreSQL      | **16+**                        |                                                              |
-| Zod             | **4.4.3**                      | generated from the contract, never hand-written              |
-| Vitest          | 4.1.11                         |                                                              |
-| Python          | **3.12.14**                    | Observatory Agent (`agent/.venv`)                            |
-| Pillow          | **11.3.0**                     | JPEG encoding for the live view — DV-032                     |
-| ZWO ASI binding | **not yet pinned**             | chosen after testing against the physical ASI585MC — ADR-001 |
+|                 | Version                        | Notes                                                                                                                                         |
+| --------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Node            | **24 LTS** (`v24.14.1` in use) | `engines: >=20.19`                                                                                                                            |
+| npm             | 11+                            | workspaces                                                                                                                                    |
+| Next.js         | **16.3.2**                     | API route handlers only — no UI in this repository.                                                                                           |
+| TypeScript      | **6.0.3**                      | strict                                                                                                                                        |
+| Prisma          | **7.9.1**                      | `prisma-client` generator                                                                                                                     |
+| PostgreSQL      | **16+**                        |                                                                                                                                               |
+| Zod             | **4.4.3**                      | generated from the contract, never hand-written                                                                                               |
+| Vitest          | 4.1.11                         |                                                                                                                                               |
+| Python          | **3.12.14**                    | Observatory Agent (`agent/.venv`)                                                                                                             |
+| Pillow          | **11.3.0**                     | JPEG encoding for the live view — DV-032                                                                                                      |
+| ZWO ASI binding | **not yet pinned**             | `zwoasi==0.2.0` is the default candidate, in the agent's `hardware` extra; pinned here only once confirmed on the physical ASI585MC — ADR-001 |
 
 ## Layout
 
@@ -145,21 +145,31 @@ it. The file can never select real hardware: one containing `DARKVIEW_AGENT_DRIV
 `DARKVIEW_AGENT_ATTENDED` refuses to start. Setup collects a device token but cannot issue
 one — nothing does yet (#86).
 
-| Variable                        | Required | Meaning                                                                                                                                                                |
-| ------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DARKVIEW_AGENT_OBSERVATORY_ID` | yes      | Which observatory this is. Must match the record the device token belongs to.                                                                                          |
-| `DARKVIEW_AGENT_CLOUD_URL`      | yes      | `wss://…/ws/agent`.                                                                                                                                                    |
-| `DARKVIEW_AGENT_DEVICE_TOKEN`   | yes      | Presented as `Authorization: Bearer`. Never appears in a URL or a log.                                                                                                 |
-| `DARKVIEW_AGENT_SITE_LATITUDE`  | no       | Both coordinates or neither. Without them the Sun cannot be computed and every slew is refused.                                                                        |
-| `DARKVIEW_AGENT_SITE_LONGITUDE` | no       | As above.                                                                                                                                                              |
-| `DARKVIEW_AGENT_DRIVER_MODE`    | no       | `SIMULATED` (default) or `REAL`.                                                                                                                                       |
-| `DARKVIEW_AGENT_ATTENDED`       | no       | Set only when an operator is physically at the observatory. `REAL` without it refuses to start.                                                                        |
-| `DARKVIEW_AGENT_STATE_PATH`     | no       | The local state store. Defaults to `~/.darkview/agent-state.sqlite3`.                                                                                                  |
-| `DARKVIEW_AGENT_ENV_FILE`       | no       | The setup file. Defaults to `~/.darkview/agent.env`. Process environment only.                                                                                         |
-| `DARKVIEW_AGENT_OPTICAL_CONFIG` | no       | Which optical train is fitted, reported on every capture. `F10_NATIVE` (default), `F20_BARLOW` or `F6_3_REDUCER`. Set it when a barlow or reducer is on the telescope. |
+| Variable                               | Required | Meaning                                                                                                                                                                |
+| -------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DARKVIEW_AGENT_OBSERVATORY_ID`        | yes      | Which observatory this is. Must match the record the device token belongs to.                                                                                          |
+| `DARKVIEW_AGENT_CLOUD_URL`             | yes      | `wss://…/ws/agent`.                                                                                                                                                    |
+| `DARKVIEW_AGENT_DEVICE_TOKEN`          | yes      | Presented as `Authorization: Bearer`. Never appears in a URL or a log.                                                                                                 |
+| `DARKVIEW_AGENT_SITE_LATITUDE`         | no       | Both coordinates or neither. Without them the Sun cannot be computed and every slew is refused.                                                                        |
+| `DARKVIEW_AGENT_SITE_LONGITUDE`        | no       | As above.                                                                                                                                                              |
+| `DARKVIEW_AGENT_DRIVER_MODE`           | no       | `SIMULATED` (default) or `REAL`.                                                                                                                                       |
+| `DARKVIEW_AGENT_ATTENDED`              | no       | Set only when an operator is physically at the observatory. `REAL` without it refuses to start.                                                                        |
+| `DARKVIEW_AGENT_STATE_PATH`            | no       | The local state store. Defaults to `~/.darkview/agent-state.sqlite3`.                                                                                                  |
+| `DARKVIEW_AGENT_ENV_FILE`              | no       | The setup file. Defaults to `~/.darkview/agent.env`. Process environment only.                                                                                         |
+| `DARKVIEW_AGENT_OPTICAL_CONFIG`        | no       | Which optical train is fitted, reported on every capture. `F10_NATIVE` (default), `F20_BARLOW` or `F6_3_REDUCER`. Set it when a barlow or reducer is on the telescope. |
+| `DARKVIEW_AGENT_ALPACA_HOST`           | no       | The ASCOM Remote / Alpaca bridge. `127.0.0.1` (default) or `::1`; anything that is not a literal loopback address refuses to start.                                    |
+| `DARKVIEW_AGENT_ALPACA_PORT`           | no       | The bridge's port. Defaults to `11111`, ASCOM Remote's own default.                                                                                                    |
+| `DARKVIEW_AGENT_ALPACA_MOUNT_DEVICE`   | no       | The telescope's Alpaca device number. Defaults to `0`.                                                                                                                 |
+| `DARKVIEW_AGENT_ALPACA_FOCUSER_DEVICE` | no       | The focuser's Alpaca device number. Defaults to `0`. The focuser must be absolute.                                                                                     |
+| `DARKVIEW_AGENT_ZWO_SDK_PATH`          | in REAL  | The ZWO ASI SDK library, e.g. `C:\…\ASICamera2.dll`.                                                                                                                   |
+| `DARKVIEW_AGENT_ZWO_CAMERA_INDEX`      | no       | The SDK's camera index. Unset: the one camera named ASI585MC. Set: that index, which must still be an ASI585MC.                                                        |
+| `DARKVIEW_AGENT_ASTAP_PATH`            | in REAL  | The ASTAP executable (`astap_cli.exe`).                                                                                                                                |
+| `DARKVIEW_AGENT_ASTAP_DATABASE_DIR`    | no       | ASTAP's star database folder, when it is not ASTAP's own (passed as `-d`).                                                                                             |
 
 The agent refuses to start without the first three: one that cannot reach the cloud
-cannot be told to stop.
+cannot be told to stop. REAL mode also refuses without the SDK and ASTAP paths, or without
+the `zwoasi` binding (`pip install -e "agent[hardware]"`). The mini-PC setup and the
+read-only `python -m darkview_agent check-devices` bring-up are in `docs/RUNBOOK.md` §3.
 
 The state file holds what must survive a restart: decided command ids, the local
 audit log, session ownership and the measured safety envelope (ADR-010). It

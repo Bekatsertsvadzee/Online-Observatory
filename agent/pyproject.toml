@@ -18,6 +18,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Real hardware only (ADR-001). zwoasi is the default candidate for the ASI SDK
+# binding, NOT yet confirmed on the physical ASI585MC: DV-035 confirms it at first
+# light before the README pins it. The simulator and CI never install this.
+hardware = [
+    "zwoasi==0.2.0",
+]
 dev = [
     "pytest>=8.3,<9",
     "ruff>=0.7,<1",

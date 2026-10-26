@@ -125,7 +125,9 @@ def write_env_file(path: Path, values: dict[str, str]) -> None:
 
     descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".agent.env.")
     try:
-        os.fchmod(descriptor, 0o600)
+        # os.chmod by path: os.fchmod does not exist on Windows (Python 3.12),
+        # where the observatory mini-PC runs. mkstemp already makes it 0600 on POSIX.
+        os.chmod(temporary, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(body)
         os.replace(temporary, path)

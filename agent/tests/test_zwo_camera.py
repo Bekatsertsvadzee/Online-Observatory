@@ -281,6 +281,20 @@ def test_no_camera_or_two_of_them_is_refused(zwoasi, cameras):
         ZwoasiCamera("/lib.so").open()
 
 
+def test_a_configured_index_opens_that_camera(zwoasi):
+    zwoasi.cameras = ["ZWO ASI585MC", "ZWO ASI585MC"]
+    ZwoasiCamera("/lib.so", index=1).open()
+    assert zwoasi.opened[0].index == 1
+
+
+@pytest.mark.parametrize("index", [0, 2])
+def test_an_index_that_is_not_the_imaging_camera_is_refused(zwoasi, index):
+    """Index 0 is the guide camera here, and 2 does not exist."""
+    with pytest.raises(DeviceError, match=f"index {index} is not a ASI585MC"):
+        ZwoasiCamera("/lib.so", index=index).open()
+    assert zwoasi.opened == []
+
+
 def test_the_adapter_sets_exposure_in_microseconds_and_gain_before_starting(zwoasi):
     adapter = ZwoasiCamera("/lib.so")
     adapter.open()

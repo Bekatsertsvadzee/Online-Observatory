@@ -5,8 +5,10 @@ take it down, what to check, and what to do when something is wrong.
 
 **Read `docs/SAFETY.md` first.** This document assumes it.
 
-> **Status.** No hardware exists yet. Every procedure below has been exercised against
-> `SimMount`, `SimCamera` and `SimFocuser` only. Sections marked **[UNEXERCISED]** describe
+> **Status.** The hardware is on site and being assembled; nothing has been run against
+> it yet. Every procedure below has been exercised against `SimMount`, `SimCamera` and
+> `SimFocuser`, and the real drivers against fakes of the Alpaca bridge and the ZWO SDK,
+> only. Sections marked **[UNEXERCISED]** describe
 > what the code will do against real hardware and have never been performed on a
 > telescope. They are instructions, not evidence. DV-034 through DV-038 are what turn them
 > into evidence.
@@ -274,6 +276,91 @@ convenience and must never be set in a service unit, a container image, a CI job
 `.env` file that outlives the session.
 
 No autonomous, scheduled or background session may command real hardware.
+
+REAL builds `AlpacaMount` and `AlpacaFocuser` on the loopback Alpaca bridge, `ZwoCamera`
+through the ZWO SDK, and `AstapSolver` for plate solving. It refuses to start — and never
+falls back to the simulator — if the SDK path or the ASTAP path is unset or not a file,
+or if the `zwoasi` binding is not installed. Set up the mini-PC first (next section).
+
+### Observatory mini-PC setup (Windows) — **[UNEXERCISED]**
+
+Once per machine, in this order. Nothing here moves the telescope until the last step,
+and the last step is attended.
+
+1. **Python 3.12** (64-bit, from python.org; tick "Add python.exe to PATH"). Then the
+   agent and its hardware extra, from the repository checkout:
+
+   ```powershell
+   py -3.12 -m venv agent\.venv
+   agent\.venv\Scripts\pip install -e "agent[hardware]"
+   ```
+
+   The `hardware` extra is `zwoasi==0.2.0`, ADR-001's default candidate for the SDK
+   binding. It is **not yet confirmed** on the ASI585MC; DV-035 confirms it at first light
+   before the README pins it.
+
+2. **ASCOM Platform 7** (ascom-standards.org).
+
+3. **The mount's ASCOM driver.** ADR-001 and `docs/architecture.md` name **CPWI** and its
+   Celestron ASCOM driver (CPWI must be running and the mount aligned in it). The other
+   option is Celestron's older **Unified** ASCOM driver, which talks to the NexStar+ hand
+   controller directly. Which one is the maintainer's choice; record it here once made.
+   Either way `check-devices` reports whether the driver offers `CanSlewAltAzAsync`,
+   `CanPark`, `CanUnpark` and `CanSetTracking`. The agent needs all four.
+
+4. **The focuser's ASCOM driver**, from its maker (e.g. ZWO EAF, Celestron focus motor).
+   The focuser must be **absolute** — reporting a position. A relative-only focuser is
+   refused by the agent and by `check-devices`. The agent turns the focuser's own
+   temperature compensation off when it connects.
+
+5. **ASCOM Remote** (the Alpaca server, from the ASCOM Initiative), serving the telescope
+   as device 0 and the focuser as device 0 (or set the device numbers below). In its
+   settings: **IP address `127.0.0.1`**, **port `11111`**. Never `0.0.0.0`, never a LAN
+   address, no port forwarding, and Alpaca discovery off if offered. This bridge is the
+   only listener `docs/ENGINEERING.md` allows at the observatory. The agent refuses any
+   host that is not a literal loopback address.
+
+6. **ZWO camera driver** (the "ASI Cameras driver" from zwoastro.com), and the **ZWO ASI
+   SDK** for its library: `ASICamera2.dll` from the SDK's `lib\x64` folder. Its full path
+   is `DARKVIEW_AGENT_ZWO_SDK_PATH`.
+
+7. **ASTAP** (hnsky.org/astap.htm) and a star database. **D50** is the suggestion for an
+   ASI585MC at 2032 mm (a field about 0.3° × 0.18°); it is a suggestion, not a tested
+   choice. The executable (`astap_cli.exe` or `astap.exe`) is `DARKVIEW_AGENT_ASTAP_PATH`;
+   if the database is not in ASTAP's own folder, set `DARKVIEW_AGENT_ASTAP_DATABASE_DIR`.
+
+8. **The agent's settings.** Run `python -m darkview_agent setup` for the cloud
+   credentials, then add the hardware paths to `~\.darkview\agent.env` (they may live in
+   the file; `DRIVER_MODE` and `ATTENDED` never may):
+
+   ```
+   DARKVIEW_AGENT_ZWO_SDK_PATH=C:\…\ASICamera2.dll
+   DARKVIEW_AGENT_ASTAP_PATH=C:\Program Files\astap\astap_cli.exe
+   ```
+
+   Re-running `setup` rewrites the file; add these lines again afterwards.
+   The Alpaca host, port and device numbers default to `127.0.0.1`, `11111`, `0`, `0`.
+   See the README's table for every setting.
+
+9. **The order of first use.** Each step only after the one before it passes:
+
+   1. `check-devices`, attended, in a PowerShell the operator opened at the telescope:
+
+      ```powershell
+      $env:DARKVIEW_AGENT_DRIVER_MODE = "REAL"
+      $env:DARKVIEW_AGENT_ATTENDED = "1"
+      agent\.venv\Scripts\python -m darkview_agent check-devices            # 1 s frame
+      agent\.venv\Scripts\python -m darkview_agent check-devices --solve    # at night
+      ```
+
+      Read-only: it never moves the mount or the focuser and never contacts the cloud.
+      It prints PASS or FAIL per step — bridge, mount capabilities and state, focuser,
+      camera, one exposure (saved as FITS under `~\.darkview\device-check\`), and the
+      solve when asked — and exits non-zero if any step failed. Options:
+      `--exposure-seconds` (default 1, up to 60), `--gain` (default 0), `--solve`.
+   2. **§5, the `MAX_ALT_SAFE` measurement**, by hand, power off.
+   3. **The horizon mask and cable-wrap sectors** from the site compass survey.
+   4. **The first attended mission**, with the operator at the mount and able to cut power.
 
 ## 4. Bringing it down
 

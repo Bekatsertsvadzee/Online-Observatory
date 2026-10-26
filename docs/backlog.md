@@ -1145,8 +1145,8 @@ process with the commanded position as its hint, and the centre is read from the
 it writes. Every way a solve can fail -- no solution, a failing exit, a timeout, no
 binary -- returns None, which the runner already retries and bounds. It is tested
 against a stand-in executable; no ASTAP build or star database has solved a real frame
-through it. That is DV-035's, at first light. Nothing selects it yet: `REAL` mode still
-refuses to start until the camera exists.
+through it. That is DV-035's, at first light. `REAL` mode now selects it, with the field
+height taken from the optical configuration and the ASI585MC's published sensor size.
 
 **The solve blocks the supervisor's pass.** The timeout (10 s) sits under the 15 s
 heartbeat-loss fallback, so a stuck ASTAP cannot pass for a dead link, but a slow solve
@@ -1189,7 +1189,7 @@ performs tells the customer the telescope did something it did not do.
 | Command | Owed to | What is missing |
 | --- | --- | --- |
 | `CAPTURE` | DV-033, DV-061 | The live stack, the upload and somewhere to keep the result |
-| `FOCUS` | DV-031 | **Performed while OBSERVING**, on the simulator; the real focuser driver is still missing — no document names the focus motor |
+| `FOCUS` | DV-031 | **Performed while OBSERVING**, on the simulator; the real focuser is `AlpacaFocuser` (any absolute ASCOM focuser), tested against a fake only |
 | `SET_PROFILE` | DV-033 | The table mapping an imaging profile to exposure, gain and ROI |
 
 `CAPTURE` is a `ClientCommandType`. Until DV-033 lands, the Capture control has nothing
