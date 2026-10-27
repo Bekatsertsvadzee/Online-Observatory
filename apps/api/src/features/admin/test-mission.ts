@@ -90,6 +90,43 @@ export async function scheduleTestMission(input: {
 
   try {
     const testMission = await database.$transaction(async (tx) => {
+      // A new test mission replaces this operator's own that never started. A start
+      // refused (target low, MAX_ALT_SAFE unmeasured, agent offline) would otherwise
+      // hold the telescope for its whole length and refuse every retry with a 409.
+      const unstarted = await tx.booking.findMany({
+        where: {
+          observatoryId,
+          userId: actorUserId,
+          status: "CONFIRMED",
+          mission: { state: "SCHEDULED" },
+        },
+        select: { id: true, missionId: true },
+      });
+      for (const old of unstarted) {
+        await tx.booking.update({ where: { id: old.id }, data: { status: "CANCELLED" } });
+        if (!old.missionId) continue;
+        await tx.mission.update({
+          where: { id: old.missionId },
+          data: {
+            state: "CANCELLED",
+            failureReason: "OPERATOR_ABORT",
+            completedAt: input.now,
+          },
+        });
+        await tx.missionEvent.create({
+          data: {
+            missionId: old.missionId,
+            state: "CANCELLED",
+            failureReason: "OPERATOR_ABORT",
+            source: "OPERATOR",
+            message: "Replaced by the operator's next test mission before it started.",
+            occurredAt: input.now,
+            simulated,
+            isDemo: observatory.isDemo,
+          },
+        });
+      }
+
       const mission = await tx.mission.create({
         data: {
           userId: actorUserId,
@@ -141,6 +178,7 @@ export async function scheduleTestMission(input: {
             observatoryId,
             mode: observatory.mode,
             durationMinutes: request.durationMinutes,
+            replacedBookingIds: unstarted.map((old) => old.id),
           },
         },
         tx,
