@@ -20,6 +20,7 @@ vi.mock("@/lib/db/client", () => ({ getDatabase: () => testDatabase.current }));
 vi.mock("@/lib/validation/env", () => ({ getServerEnvironment: () => environment }));
 
 const { scheduleTestMission } = await import("@/features/admin/test-mission");
+const { startMissionSession } = await import("@/features/missions/session");
 const { zTestMission } = await import("@darkview/contracts/zod");
 
 /**
@@ -90,7 +91,9 @@ beforeEach(async () => {
   environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = undefined;
   // CASCADE: other files leave captures, bookings and missions behind, and a
   // deleteMany chain here would have to know every one of them.
-  await database.$executeRawUnsafe('TRUNCATE "AuditLog", "Observatory", "User", "Target" CASCADE');
+  await database.$executeRawUnsafe(
+    'TRUNCATE "AuditLog", "Observatory", "User", "Target" CASCADE',
+  );
 
   const operator = await database.user.create({
     data: {
@@ -193,11 +196,41 @@ describe("an operator's test mission (ADR-075)", () => {
     await expect(schedule(test.id)).resolves.toMatchObject({ ok: false, status: 422 });
   });
 
-  it("refuses time another booking already holds, and writes nothing", async () => {
+  it("replaces the operator's own test mission that never started", async () => {
     const test = await observatory("hardware-test");
     environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = test.id;
 
-    await expect(schedule(test.id, 60)).resolves.toMatchObject({ ok: true });
+    const first = await schedule(test.id, 60);
+    if (!first.ok) throw new Error(first.message);
+    const later = new Date(NOW.getTime() + 20 * 60_000);
+    const second = await schedule(test.id, 30, later);
+    if (!second.ok) throw new Error(second.message);
+
+    const old = await database.booking.findUniqueOrThrow({
+      where: { id: first.testMission.bookingId },
+      include: { mission: true },
+    });
+    expect(old.status).toBe("CANCELLED");
+    expect(old.mission).toMatchObject({
+      state: "CANCELLED",
+      failureReason: "OPERATOR_ABORT",
+    });
+    const kept = await database.booking.findUniqueOrThrow({
+      where: { id: second.testMission.bookingId },
+    });
+    expect(kept.status).toBe("CONFIRMED");
+  });
+
+  it("never replaces a test mission that has started, and writes nothing", async () => {
+    const test = await observatory("hardware-test");
+    environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = test.id;
+
+    const first = await schedule(test.id, 60);
+    if (!first.ok) throw new Error(first.message);
+    await database.mission.update({
+      where: { id: first.testMission.missionId },
+      data: { state: "OBSERVING" },
+    });
     const later = new Date(NOW.getTime() + 20 * 60_000);
     await expect(schedule(test.id, 30, later)).resolves.toMatchObject({
       ok: false,
@@ -206,5 +239,52 @@ describe("an operator's test mission (ADR-075)", () => {
     });
     expect(await database.booking.count()).toBe(1);
     expect(await database.mission.count()).toBe(1);
+  });
+
+  it("never replaces another operator's test mission", async () => {
+    const test = await observatory("hardware-test");
+    environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = test.id;
+
+    await expect(schedule(test.id, 60)).resolves.toMatchObject({ ok: true });
+    const other = await database.user.create({
+      data: {
+        email: `${randomUUID()}@example.test`,
+        name: "Second operator",
+        role: "OPERATOR",
+        emailVerifiedAt: NOW,
+      },
+    });
+    const later = new Date(NOW.getTime() + 20 * 60_000);
+    await expect(
+      scheduleTestMission({
+        observatoryId: test.id,
+        actorUserId: other.id,
+        request: { targetId, durationMinutes: 30 },
+        now: later,
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 409 });
+    expect(await database.booking.count()).toBe(1);
+  });
+
+  it("is started by the customer's start, which reaches the safety envelope", async () => {
+    const test = await observatory("hardware-test");
+    await database.observatory.update({
+      where: { id: test.id },
+      data: { status: "ONLINE" },
+    });
+    environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = test.id;
+
+    const result = await schedule(test.id);
+    if (!result.ok) throw new Error(result.message);
+
+    // Not NOT_FOUND, not SESSION_NOT_OWNER, not "no booking": the next refusal is the
+    // unmeasured altitude limit, as on the real observatory before RUNBOOK §5.
+    await expect(
+      startMissionSession({
+        missionId: result.testMission.missionId,
+        actor: { id: operatorId, role: "OPERATOR" },
+        now: new Date(NOW.getTime() + 60_000),
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "SAFETY_NOT_CONFIGURED" });
   });
 });

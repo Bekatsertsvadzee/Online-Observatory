@@ -2559,8 +2559,9 @@ paths:
 
         Only the observatory named by DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID, and only
         while no customer can book it: anything else answers 403. No payment, no
-        points, no email. 409 SLOT_UNAVAILABLE when another booking already holds the
-        time; 422 when the target is not one this observatory can observe.
+        points, no email. The calling operator's own test mission that has not started
+        is cancelled and replaced. 409 SLOT_UNAVAILABLE when another booking still holds
+        the time; 422 when the target is not one this observatory can observe.
       security:
         - userSession: [operator]
       parameters:

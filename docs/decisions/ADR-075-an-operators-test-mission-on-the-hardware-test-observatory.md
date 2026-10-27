@@ -27,7 +27,12 @@ end-to-end mission (DV-036) had no way in.
    time is sold through `POST /bookings`; an operator does not take it here.
 3. **Nothing else of a customer's booking.** No payment, no points, no email. The slot
    exclusion constraint still applies, so two test missions cannot overlap (409).
-4. **Starting is unchanged.** The operator starts the mission with
+4. **A new test mission replaces the operator's own unstarted one** (amended 2026-10-27).
+   Their CONFIRMED booking whose mission is still SCHEDULED is cancelled with its mission
+   (CANCELLED, `OPERATOR_ABORT`) in the same transaction, so a refused start does not hold
+   the telescope for its whole length. A started mission, or another operator's, is never
+   replaced: that time still answers 409.
+5. **Starting is unchanged.** The operator starts the mission with
    `POST /missions/{id}/start`, which applies the slot window, the safety envelope and the
    agent's checks exactly as for a customer. On a REAL observatory with MAX_ALT_SAFE
    unmeasured that refuses every slew, which is the intended state until RUNBOOK §5 is done.
