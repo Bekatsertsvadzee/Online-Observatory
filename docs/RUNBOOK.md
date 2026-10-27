@@ -233,6 +233,12 @@ secret, and redeploy both. The agent on the observatory's mini-PC dials
 Run the script again with corrected `--latitude`/`--longitude` once the rooftop has been
 surveyed; it changes nothing else. With `--token-file` it also replaces the token.
 
+No customer can book it, so a mission on it is the operator's own (ADR-075): in the
+operator console pick the test observatory, choose a target and a length under
+*Test mission*, and open the room it links to. That writes a free CONFIRMED booking
+starting now and its SCHEDULED mission; *Start* in the room is the customer's start, with
+every safety check. With MAX_ALT_SAFE unmeasured every slew is refused, as it should be.
+
 ## 3. Bringing the observatory up
 
 ### Simulated — the default, and the only mode used in normal work
