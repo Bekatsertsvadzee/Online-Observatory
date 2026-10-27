@@ -881,6 +881,27 @@ class BookableTelescope(BaseModel):
     focal_length_mm: float = Field(..., alias='focalLengthMm', gt=0.0)
 
 
+class ScheduleTestMissionRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    target_id: UUID = Field(..., alias='targetId')
+    duration_minutes: int = Field(..., alias='durationMinutes', description="Quarter hours, as a customer's session (clients ADR-072).", ge=15, le=240, multiple_of=15)
+
+
+class TestMission(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    booking_id: UUID = Field(..., alias='bookingId')
+    mission_id: UUID = Field(..., alias='missionId')
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    target_id: UUID = Field(..., alias='targetId')
+    slot_start_at: AwareDatetime = Field(..., alias='slotStartAt')
+    duration_minutes: int = Field(..., alias='durationMinutes')
+    mode: ObservatoryMode
+
+
 class SlotForecast(BaseModel):
     """
     Clients ADR-068. The forecast for the hours the slot touches: its cloud cover is

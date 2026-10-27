@@ -2543,6 +2543,50 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /admin/observatories/{observatoryId}/test-mission:
+    post:
+      operationId: adminScheduleTestMission
+      tags: [admin]
+      summary: Schedule an operator's own mission on the hardware test observatory, starting now.
+      description: |
+        ADR-075. The demo's hardware test observatory (ADR-074) cannot be booked, so the
+        first real end-to-end mission (DV-036) needs another way in. This writes what a
+        booking would: a CONFIRMED booking at no price for the calling operator, starting
+        now and lasting `durationMinutes`, and its SCHEDULED mission in the
+        observatory's current mode. The operator then starts it with
+        POST /missions/{missionId}/start like any customer, so the session, the safety
+        envelope and the agent's checks are the ones a customer gets.
+
+        Only the observatory named by DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID, and only
+        while no customer can book it: anything else answers 403. No payment, no
+        points, no email. 409 SLOT_UNAVAILABLE when another booking already holds the
+        time; 422 when the target is not one this observatory can observe.
+      security:
+        - userSession: [operator]
+      parameters:
+        - $ref: "#/components/parameters/ObservatoryId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScheduleTestMissionRequest"
+      responses:
+        "201":
+          description: The booking and its scheduled mission.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestMission"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
   /admin/override:
     post:
       operationId: adminOverrideCommand
@@ -4788,6 +4832,46 @@ components:
           oneOf:
             - $ref: "#/components/schemas/NetworkNodeApprovalStatus"
             - type: "null"
+
+    ScheduleTestMissionRequest:
+      type: object
+      additionalProperties: false
+      required: [targetId, durationMinutes]
+      properties:
+        targetId:
+          type: string
+          format: uuid
+        durationMinutes:
+          type: integer
+          minimum: 15
+          maximum: 240
+          multipleOf: 15
+          description: Quarter hours, as a customer's session (clients ADR-072).
+
+    TestMission:
+      type: object
+      additionalProperties: false
+      required: [bookingId, missionId, observatoryId, targetId, slotStartAt, durationMinutes, mode]
+      properties:
+        bookingId:
+          type: string
+          format: uuid
+        missionId:
+          type: string
+          format: uuid
+        observatoryId:
+          type: string
+          format: uuid
+        targetId:
+          type: string
+          format: uuid
+        slotStartAt:
+          type: string
+          format: date-time
+        durationMinutes:
+          type: integer
+        mode:
+          $ref: "#/components/schemas/ObservatoryMode"
 
     BookableObservatoryList:
       type: object

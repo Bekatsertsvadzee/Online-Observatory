@@ -738,6 +738,21 @@ export const zBookableTelescope = z.strictObject({
     focalLengthMm: z.number().gt(0)
 });
 
+export const zScheduleTestMissionRequest = z.strictObject({
+    targetId: z.uuid(),
+    durationMinutes: z.int().gte(15).lte(240)
+});
+
+export const zTestMission = z.strictObject({
+    bookingId: z.uuid(),
+    missionId: z.uuid(),
+    observatoryId: z.uuid(),
+    targetId: z.uuid(),
+    slotStartAt: z.iso.datetime(),
+    durationMinutes: z.int(),
+    mode: zObservatoryMode
+});
+
 /**
  * Clients ADR-068. The forecast for the hours the slot touches: its cloud cover is
  * the cloudiest of them, and it is UNKNOWN when any of them has no stored forecast or
@@ -3121,6 +3136,17 @@ export const zAdminSetWeatherHoldPath = z.object({
  * Weather state applied.
  */
 export const zAdminSetWeatherHoldResponse = zWeatherState;
+
+export const zAdminScheduleTestMissionBody = zScheduleTestMissionRequest;
+
+export const zAdminScheduleTestMissionPath = z.object({
+    observatoryId: z.uuid()
+});
+
+/**
+ * The booking and its scheduled mission.
+ */
+export const zAdminScheduleTestMissionResponse = zTestMission;
 
 export const zAdminOverrideCommandBody = zOperatorOverrideRequest;
 

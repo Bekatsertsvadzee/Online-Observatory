@@ -1176,6 +1176,24 @@ export type AdminObservatory = {
     approvalStatus: NetworkNodeApprovalStatus | null;
 };
 
+export type ScheduleTestMissionRequest = {
+    targetId: string;
+    /**
+     * Quarter hours, as a customer's session (clients ADR-072).
+     */
+    durationMinutes: number;
+};
+
+export type TestMission = {
+    bookingId: string;
+    missionId: string;
+    observatoryId: string;
+    targetId: string;
+    slotStartAt: string;
+    durationMinutes: number;
+    mode: ObservatoryMode;
+};
+
 export type BookableObservatoryList = {
     items: Array<BookableObservatory>;
 };
@@ -6204,6 +6222,48 @@ export type AdminSetWeatherHoldResponses = {
 };
 
 export type AdminSetWeatherHoldResponse = AdminSetWeatherHoldResponses[keyof AdminSetWeatherHoldResponses];
+
+export type AdminScheduleTestMissionData = {
+    body: ScheduleTestMissionRequest;
+    path: {
+        /**
+         * An `id` from `GET /observatories`, or for an operator any observatory.
+         */
+        observatoryId: string;
+    };
+    query?: never;
+    url: '/admin/observatories/{observatoryId}/test-mission';
+};
+
+export type AdminScheduleTestMissionErrors = {
+    /**
+     * Authenticated but not permitted.
+     */
+    403: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+    /**
+     * Well-formed but rejected by validation or by the safety envelope.
+     */
+    422: ApiError;
+};
+
+export type AdminScheduleTestMissionError = AdminScheduleTestMissionErrors[keyof AdminScheduleTestMissionErrors];
+
+export type AdminScheduleTestMissionResponses = {
+    /**
+     * The booking and its scheduled mission.
+     */
+    201: TestMission;
+};
+
+export type AdminScheduleTestMissionResponse = AdminScheduleTestMissionResponses[keyof AdminScheduleTestMissionResponses];
 
 export type AdminOverrideCommandData = {
     body: OperatorOverrideRequest;
