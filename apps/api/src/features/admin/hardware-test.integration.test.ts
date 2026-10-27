@@ -67,14 +67,9 @@ afterAll(async () => {
 beforeEach(async () => {
   environment.DARKVIEW_DEPLOYMENT = "demo";
   environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = undefined;
-  await database.auditLog.deleteMany();
-  await database.networkAvailabilityWindow.deleteMany();
-  await database.observatoryNetworkNode.deleteMany();
-  await database.safetyEnvelope.deleteMany();
-  await database.mission.deleteMany();
-  await database.telescope.deleteMany();
-  await database.observatory.deleteMany();
-  await database.user.deleteMany();
+  // CASCADE: other files leave captures, bookings and missions behind, and a
+  // deleteMany chain here would have to know every one of them.
+  await database.$executeRawUnsafe('TRUNCATE "AuditLog", "Observatory", "User" CASCADE');
 
   const operator = await database.user.create({
     data: {

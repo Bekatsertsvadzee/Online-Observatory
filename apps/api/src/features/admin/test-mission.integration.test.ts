@@ -82,29 +82,15 @@ beforeAll(async () => {
   testDatabase.current = database;
 });
 
-// Bookings and target links hold observatories and users; other files clean only those.
 afterAll(async () => {
-  await database.booking.deleteMany();
-  await database.missionEvent.deleteMany();
-  await database.mission.deleteMany();
-  await database.targetObservatory.deleteMany();
-  await database.target.deleteMany();
   await database.$disconnect();
 });
 
 beforeEach(async () => {
   environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = undefined;
-  await database.auditLog.deleteMany();
-  await database.booking.deleteMany();
-  await database.missionEvent.deleteMany();
-  await database.mission.deleteMany();
-  await database.targetObservatory.deleteMany();
-  await database.target.deleteMany();
-  await database.networkAvailabilityWindow.deleteMany();
-  await database.observatoryNetworkNode.deleteMany();
-  await database.telescope.deleteMany();
-  await database.observatory.deleteMany();
-  await database.user.deleteMany();
+  // CASCADE: other files leave captures, bookings and missions behind, and a
+  // deleteMany chain here would have to know every one of them.
+  await database.$executeRawUnsafe('TRUNCATE "AuditLog", "Observatory", "User", "Target" CASCADE');
 
   const operator = await database.user.create({
     data: {
