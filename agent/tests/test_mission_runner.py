@@ -11,7 +11,8 @@ from uuid import uuid4
 
 import pytest
 
-from contracts.models import MissionFailureReason, MissionState
+from contracts.models import ImagingProfile, MissionFailureReason, MissionState
+from darkview_agent.capture.profiles import Profile
 from darkview_agent.capture.stack import LiveStack
 from darkview_agent.clock import ManualClock, wire_timestamp
 from darkview_agent.devices.base import DeviceError
@@ -54,6 +55,7 @@ def build_runner(
     devices: Devices | None = None,
     show: list | None = None,
     stack=None,
+    max_observing_seconds: float = 30.0,
     **config,
 ) -> MissionRunner:
     envelope = SafetyEnvelope(
@@ -72,6 +74,7 @@ def build_runner(
         emit=(events.append if events is not None else None),
         show=(show.append if show is not None else None),
         stack=stack,
+        max_observing_seconds=max_observing_seconds,
     )
 
 
@@ -83,6 +86,16 @@ def request(**kwargs) -> MissionRequest:
         right_ascension_hours=kwargs.pop("ra_hours", TARGET_RA_HOURS),
         declination_degrees=kwargs.pop("dec_degrees", TARGET_DEC_DEGREES),
         **kwargs,
+    )
+
+
+def capture(runner: MissionRunner, frames: int) -> None:
+    """Ask for a capture run. Without one a mission observes and completes
+    without ever entering CAPTURING (ADR-079 §5)."""
+    assert runner.request_capture(
+        "capture-command",
+        ImagingProfile.globular_cluster,
+        Profile(exposure_milliseconds=2000.0, gain=200, frames=frames),
     )
 
 
@@ -131,7 +144,8 @@ def test_the_mission_visits_the_states_in_contract_order():
     events: list[MissionEvent] = []
     runner = build_runner(clock, events=events)
 
-    runner.offer(request(requested_frames=2), NIGHT)
+    runner.offer(request(), NIGHT)
+    capture(runner, frames=2)
     run_to_completion(runner, clock)
 
     visited = [event.state for event in events]
@@ -196,10 +210,26 @@ def test_frames_are_actually_captured():
     clock = ManualClock()
     runner = build_runner(clock)
 
-    runner.offer(request(requested_frames=4), NIGHT)
+    runner.offer(request(), NIGHT)
+    capture(runner, frames=4)
     run_to_completion(runner, clock)
 
     assert runner.frames_captured == 4
+
+
+def test_an_uncaptured_mission_observes_then_completes_without_capturing():
+    """ADR-079 §5: OBSERVING -> COMPLETE when the session ends with nothing in flight."""
+    clock = ManualClock()
+    events: list[MissionEvent] = []
+    runner = build_runner(clock, events=events)
+
+    runner.offer(request(), NIGHT)
+    run_to_completion(runner, clock)
+
+    visited = [event.state for event in events]
+    assert visited[-2:] == [MissionState.observing, MissionState.complete]
+    assert MissionState.capturing not in visited
+    assert runner.mount_parked
 
 
 # --------------------------------------------------------------------------
@@ -763,8 +793,16 @@ class TestLiveStackWiring:
 
     def _run(self, clock: ManualClock, shown: list, stack=None) -> MissionRunner:
         runner = build_runner(clock, show=shown, stack=stack)
-        runner.offer(request(requested_frames=4), NIGHT)
-        run_to_completion(runner, clock)
+        runner.offer(request(), NIGHT)
+        capture(runner, frames=4)
+        # Up to the capture's delivery: after it the slot runs on and the live
+        # view starts a stack of its own (ADR-079 §5).
+        for _ in range(400):
+            if runner.state is MissionState.processing:
+                break
+            runner.pump(NIGHT)
+            clock.advance(1.0)
+        assert runner.state is MissionState.processing
         assert runner.frames_captured == 4
         return runner
 

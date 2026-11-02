@@ -253,6 +253,39 @@ async function describeData(
     };
   }
 
+  if (kind === "SESSION_SUMMARY") {
+    // ADR-079 §6. Read now, so the email lists every capture the session kept --
+    // including one recorded after the summary was queued. Links, not images: a
+    // signed thumbnail URL would have expired by the time the email is opened.
+    const mission = await database.mission.findUnique({
+      where: { id: String(payload.missionId) },
+      select: {
+        id: true,
+        mode: true,
+        observatory: { select: { nameEn: true, nameKa: true, timezone: true } },
+        captures: {
+          orderBy: { capturedAt: "asc" },
+          select: {
+            id: true,
+            capturedAt: true,
+            target: { select: { nameEn: true, nameKa: true } },
+          },
+        },
+      },
+    });
+    if (!mission) return null;
+    return {
+      missionId: mission.id,
+      simulated: mission.mode === "SIMULATED",
+      observatory: mission.observatory,
+      captures: mission.captures.map((capture) => ({
+        captureId: capture.id,
+        capturedAt: capture.capturedAt.toISOString(),
+        target: capture.target,
+      })),
+    };
+  }
+
   if (kind === "OBSERVER_PACK_REFUNDED") {
     // ADR-036. Only a refund that was issued: refundedMinor is null for one that is
     // merely owed, and an owed refund is never told to anyone as paid.

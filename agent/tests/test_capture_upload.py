@@ -565,28 +565,29 @@ def test_a_capture_whose_thumbnail_failed_is_still_reported_without_one():
     agent.close()
 
 
-def test_the_observing_wait_lapses_at_the_production_default():
-    """The one test that pays for the real dwell, so the number is not fiction.
+def test_an_agent_never_told_the_slot_end_stops_at_the_four_hour_ceiling():
+    """The one test that pays for the real ceiling, so the number is not fiction.
 
-    Every other test shortens it -- see `build_agent`. This one holds the default
-    to its meaning: the wait ends on its own, and the mission goes on to finish.
+    Every other test shortens it -- see `build_agent`. With no `expiresAt` from the
+    cloud, observing still ends on its own at the longest slot that can be booked,
+    and the mission goes on to finish (ADR-079 §2).
     """
-    from darkview_agent.mission.runner import DEFAULT_OBSERVING_SECONDS
+    from darkview_agent.mission.runner import MAX_OBSERVING_SECONDS
 
     agent = build_agent(
         max_altitude_degrees=70.0,
         uploader=SyncUploader(),
-        observing_seconds=DEFAULT_OBSERVING_SECONDS,
+        max_observing_seconds=MAX_OBSERVING_SECONDS,
     )
     agent.own()
     agent.command(agent.goto())
     run_to(agent, MissionState.observing)
 
-    # Well short of the dwell: still waiting for somebody to press Capture.
-    agent.advance(DEFAULT_OBSERVING_SECONDS / 3, steps=2)
+    # Well short of the ceiling: still observing, waiting for somebody to press Capture.
+    agent.advance(MAX_OBSERVING_SECONDS / 3, steps=2)
     assert agent.supervisor.runner.state is MissionState.observing
 
-    agent.advance(DEFAULT_OBSERVING_SECONDS, steps=2)
+    agent.advance(MAX_OBSERVING_SECONDS, steps=2)
     assert agent.supervisor.runner.state is not MissionState.observing
     agent.close()
 

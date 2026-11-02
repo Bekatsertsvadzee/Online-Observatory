@@ -3,6 +3,13 @@
 PREPARING -> SLEWING -> VERIFYING -> CENTERING -> OBSERVING -> CAPTURING ->
 PROCESSING -> COMPLETE, with every failure and hold path ending at Park.
 
+A booked session observes for its whole slot (ADR-079): PROCESSING returns to
+OBSERVING while the slot runs, so the customer may capture again; a RETARGET goes
+OBSERVING -> SLEWING and acquires the new object the way the first was acquired;
+and the slot's end goes OBSERVING -> COMPLETE (or flushes a capture through
+PROCESSING) and parks. While OBSERVING the agent watches its own picture and
+recovers it (ADR-080, `mission/watch.py`).
+
 Three rules shape the whole file.
 
 **One mission at a time, enforced locally.** The cloud also enforces it. That is
@@ -23,20 +30,44 @@ State names come from `contracts/openapi.yaml` and nowhere else.
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from contracts.models import ImagingProfile, MissionFailureReason, MissionState
+from contracts.models import (
+    ImageHealthReason,
+    ImagingProfile,
+    MissionFailureReason,
+    MissionState,
+    OpticalConfig,
+)
+from darkview_agent.capture import profiles
 from darkview_agent.capture.profiles import Profile
+from darkview_agent.capture.scene import (
+    SCENE_FOR_PROFILE,
+    AutoExposure,
+    Disc,
+    disc_centroid,
+    drifted,
+    is_disc,
+    stats,
+)
 from darkview_agent.capture.stack import LiveStack, integration_seconds
 from darkview_agent.clock import Clock, SystemClock, wire_timestamp
 from darkview_agent.devices.base import DeviceError
 from darkview_agent.devices.frame import Frame
 from darkview_agent.focus.autofocus import Autofocus, FocusMove, FocusResult
 from darkview_agent.mission.solver import PlateSolver, SolveResult, separation_degrees
-from darkview_agent.runtime import Devices, fault_reason
+from darkview_agent.mission.watch import (
+    CLOUD_BACKGROUND_RATIO,
+    Baseline,
+    ImageWatch,
+    Need,
+    judge,
+)
+from darkview_agent.runtime import Devices, fault_reason, field_height_degrees
 from darkview_agent.safety.coordinates import equatorial_to_horizontal
 from darkview_agent.safety.envelope import SafetyEnvelope
 
@@ -58,21 +89,32 @@ DEFAULT_CAPTURE_FRAMES = 10
 # After COMPLETE, how long the mount waits for a following mission before parking.
 DEFAULT_IDLE_PARK_SECONDS = 120.0
 
-#: How long the mission holds at OBSERVING waiting for the customer to capture.
-#:
-#: This is the part of the slot the customer actually watches: the live view is
-#: running, the target is centred, and nothing is being kept yet. A capture
-#: request ends the wait immediately; this is only what happens when none comes.
-#:
-#: Bounded, and it proceeds to CAPTURING rather than to COMPLETE when it lapses.
-#: The mission state machine in docs/ENGINEERING.md is linear and every mission passes
-#: through CAPTURING -- what an uncaptured run produces is a stack nobody asked
-#: to keep, which PROCESSING then does not deliver.
-#:
-#: PROVISIONAL: the real figure is the observation slot's length, which the agent
-#: is not told. Ninety seconds is long enough to be a live view and short enough
-#: that a customer who walks away does not hold the telescope for their whole slot.
-DEFAULT_OBSERVING_SECONDS = 90.0
+#: The longest a mission observes when nobody has told the agent when its session
+#: ends. The observing deadline is the session's `expiresAt` (ADR-079 §2), which
+#: the cloud always sends; this is only the ceiling for an agent that was never
+#: told, so a telescope never tracks past the longest slot that can be booked
+#: (clients ADR-072: four hours).
+MAX_OBSERVING_SECONDS = 4 * 3600.0
+
+#: A RETARGET needs this much of the session left (ADR-079 §4).
+RETARGET_CLOSE_SECONDS = 300.0
+
+#: How long the mount stays on an object before the customer may switch (ADR-079 §4),
+#: and the clock skew the agent forgives the cloud on it.
+DWELL_SECONDS = 600.0
+DWELL_SKEW_TOLERANCE_SECONDS = 15.0
+
+#: Frames smaller than this on their short side carry too little sky for the
+#: statistics to mean anything (the star finder alone ignores 24 pixels of edge),
+#: so they are shown and stacked but neither judged nor auto-exposed.
+MIN_JUDGED_FRAME_PX = 128
+
+#: OFF_CENTRE for deep sky: the larger of two arcminutes and a tenth of the field's
+#: short side (ADR-080 §2). For a disc: a tenth of the short side, and VERIFYING
+#: settles at half that so a freshly centred disc is not called off-centre at once.
+OFF_CENTRE_MIN_DEGREES = 2.0 / 60.0
+OFF_CENTRE_FIELD_FRACTION = 0.10
+DISC_CENTRED_FIELD_FRACTION = 0.05
 
 TERMINAL_STATES = {
     MissionState.complete,
@@ -105,6 +147,11 @@ class MissionRequest:
     depend on -- could not happen at all. It never lifts the Sun exclusion; the
     envelope refuses that regardless of who asked.
     """
+    target_id: uuid.UUID | None = None
+    #: Sets the auto-exposure scene, and for LUNAR and PLANETARY the disc centroid
+    #: in place of a plate solve (ADR-080). None: a deep-sky field, no auto exposure.
+    imaging_profile: ImagingProfile | None = None
+    optical_config: OpticalConfig = OpticalConfig.f10_native
 
 
 @dataclass(frozen=True)
@@ -151,6 +198,8 @@ class FinishedCapture:
     exposure_milliseconds: float
     gain: int
     captured_at: datetime
+    #: The object the mount was on when the run was made (ADR-079 §3).
+    target_id: uuid.UUID | None = None
 
     @property
     def integration_seconds(self) -> float:
@@ -179,9 +228,32 @@ class _Progress:
     focus: Autofocus | FocusMove | None = None
     frames_captured: int = 0
     exposure_started: bool = False
-    #: A live-view exposure is running while OBSERVING (#199). Kept apart from
-    #: `exposure_started`, which belongs to the capture run.
-    live_exposure_started: bool = False
+    #: What the exposure running while OBSERVING is for: the live view (#199), an
+    #: auto-exposure try, or a solve. Kept apart from `exposure_started`, which
+    #: belongs to the acquisition and the capture run.
+    job: str | None = None
+    job_settings: tuple[float, int] | None = None
+    #: The live view's exposure and gain. The request's until auto exposure moves them.
+    live_exposure_milliseconds: float = DEFAULT_EXPOSURE_MILLISECONDS
+    live_gain: int = DEFAULT_GAIN
+    #: What the CAPTURE asked for; the live settings are left alone.
+    capture_settings: Profile | None = None
+    #: The mission reached OBSERVING once. From then on an image problem never
+    #: fails it (ADR-080 §3) and the slot's end completes it (ADR-079 §2).
+    acquired: bool = False
+    observing_since_monotonic: float | None = None
+    session_end: datetime | None = None
+    #: When the agent accepted the GOTO or RETARGET that put the mount here.
+    dwell_started_at: datetime | None = None
+    watch: ImageWatch | None = None
+    auto_exposure: AutoExposure | None = None
+    #: The auto-exposure scene the live settings were chosen for.
+    scene: str | None = None
+    baseline: Baseline | None = None
+    #: A corrective slew of the watch's is running.
+    correcting: bool = False
+    #: The disc measurement CENTERING (or a re-centre) corrects from.
+    disc: Disc | None = None
     #: The pointing moved while a live exposure was running, so its frame shows the
     #: sky in between and is dropped rather than stacked.
     live_exposure_stale: bool = False
@@ -214,7 +286,7 @@ class MissionRunner:
         clock: Clock | None = None,
         emit: Callable[[MissionEvent], None] | None = None,
         idle_park_seconds: float = DEFAULT_IDLE_PARK_SECONDS,
-        observing_seconds: float = DEFAULT_OBSERVING_SECONDS,
+        max_observing_seconds: float = MAX_OBSERVING_SECONDS,
         show: Callable[[Frame], None] | None = None,
         stack: LiveStack | None = None,
         on_capture: Callable[[FinishedCapture], None] | None = None,
@@ -225,7 +297,9 @@ class MissionRunner:
         self._clock = clock or SystemClock()
         self._emit = emit or (lambda event: None)
         self._idle_park_seconds = idle_park_seconds
-        self._observing_seconds = observing_seconds
+        self._max_observing_seconds = max_observing_seconds
+        # A fitted sky sensor reporting cloud (ADR-080 §2). None is fitted in Phase 1.
+        self._sky_cloudy = False
         # Every frame the camera returns is offered to the live view, whatever the
         # runner wanted it for. A customer watching during VERIFYING should see the
         # sky the plate solver is looking at, not a blank panel until CAPTURING --
@@ -281,6 +355,88 @@ class MissionRunner:
     def centering_iterations(self) -> int:
         return self._progress.centering_iterations if self._progress else 0
 
+    @property
+    def current_target_id(self) -> uuid.UUID | None:
+        """The object of the GOTO or RETARGET the agent last accepted."""
+        return self._progress.request.target_id if self._progress else None
+
+    @property
+    def capture_pending(self) -> bool:
+        """A CAPTURE has been accepted and not yet delivered."""
+        progress = self._progress
+        return progress is not None and (
+            progress.capture_command_id is not None
+            or self._state in {MissionState.capturing, MissionState.processing}
+        )
+
+    @property
+    def watch(self) -> ImageWatch | None:
+        return self._progress.watch if self._progress else None
+
+    def image_health(self) -> dict | None:
+        """The contract's ImageHealth while OBSERVING, else None (ADR-080 §2)."""
+        progress = self._progress
+        if progress is None or progress.watch is None or self._state is not MissionState.observing:
+            return None
+        return progress.watch.health()
+
+    def dwell_allowed_at(self) -> datetime | None:
+        """When the mount may leave the current object (ADR-079 §4)."""
+        progress = self._progress
+        if progress is None or progress.dwell_started_at is None:
+            return None
+        return progress.dwell_started_at + timedelta(seconds=DWELL_SECONDS)
+
+    def dwell_locked(self, at_time: datetime) -> bool:
+        """The agent's own dwell lock: 600 s less 15 s of skew, waived when the
+        picture is UNRECOVERED or the current object has left the envelope."""
+        allowed = self.dwell_allowed_at()
+        if allowed is None:
+            return False
+        if at_time >= allowed - timedelta(seconds=DWELL_SKEW_TOLERANCE_SECONDS):
+            return False
+        progress = self._require_progress()
+        if progress.watch is not None and progress.watch.unrecovered:
+            return False
+        return self._current_target_permitted(at_time)
+
+    def seconds_left(self, at_time: datetime) -> float | None:
+        """Until the observing deadline, or None if there is none yet."""
+        progress = self._progress
+        if progress is None:
+            return None
+        left: float | None = None
+        if progress.session_end is not None:
+            left = (progress.session_end - at_time).total_seconds()
+        if progress.observing_since_monotonic is not None:
+            ceiling = self._max_observing_seconds - (
+                self._clock.monotonic() - progress.observing_since_monotonic
+            )
+            left = ceiling if left is None else min(left, ceiling)
+        return left
+
+    def set_session_end(self, ends_at: datetime | None) -> None:
+        """The session's `expiresAt`: the observing deadline (ADR-079 §2).
+
+        Only ever brought forward or set. A null update is a revocation or a
+        rotation, not a new deadline, so it leaves the one already known standing.
+        """
+        progress = self._progress
+        if progress is None or ends_at is None:
+            return
+        progress.session_end = ends_at
+
+    def end_session(self, at_time: datetime) -> None:
+        """The cloud says the slot has ended (SLOT_ENDED): finish now."""
+        progress = self._progress
+        if progress is None or not self.is_active:
+            return
+        if progress.session_end is None or progress.session_end > at_time:
+            progress.session_end = at_time
+
+    def set_sky_cloudy(self, cloudy: bool) -> None:
+        self._sky_cloudy = cloudy
+
     # ------------------------------------------------------------------
     # Accepting work
     # ------------------------------------------------------------------
@@ -317,6 +473,9 @@ class MissionRunner:
             aim=(request.right_ascension_hours, request.declination_degrees),
             started_at=at_time,
             state_entered_monotonic=self._clock.monotonic(),
+            live_exposure_milliseconds=request.exposure_milliseconds,
+            live_gain=request.gain,
+            dwell_started_at=at_time,
         )
         self._failure_reason = None
         self._transition(MissionState.preparing, at_time)
@@ -341,6 +500,7 @@ class MissionRunner:
         if progress is None:
             return
         progress.exposure_started = False
+        progress.job = None
         progress.capture_suspended = True
 
     def resume_capture(self) -> None:
@@ -377,6 +537,8 @@ class MissionRunner:
             return
 
         try:
+            if self._past_deadline(at_time) and self._finish_session(at_time):
+                return
             handler(at_time)
         except DeviceError as error:
             self._fail(
@@ -469,9 +631,7 @@ class MissionRunner:
         if progress.capture_suspended:
             return
         if not progress.exposure_started:
-            self._devices.camera.expose(
-                progress.request.exposure_milliseconds, progress.request.gain
-            )
+            self._devices.camera.expose(*self._solve_settings())
             progress.exposure_started = True
             return
 
@@ -483,10 +643,13 @@ class MissionRunner:
         progress.exposure_started = False
         progress.solve_attempts += 1
 
-        solved = self._solver.solve(frame)
-        if solved is None:
+        offset = self._measure(frame)
+        if offset is None:
             # Criterion 4: bounded attempts, and never a fourth.
             if progress.solve_attempts >= MAX_SOLVE_ATTEMPTS:
+                if progress.acquired:
+                    self._enter_observing(at_time, gave_up=ImageHealthReason.off_centre)
+                    return
                 self._fail(
                     MissionState.failed,
                     MissionFailureReason.plate_solve_failed,
@@ -495,18 +658,24 @@ class MissionRunner:
                 )
             return
 
-        request = progress.request
-        offset = separation_degrees(
-            solved.right_ascension_hours,
-            solved.declination_degrees,
-            request.right_ascension_hours,
-            request.declination_degrees,
-        )
-        if offset <= CENTERING_TOLERANCE_DEGREES:
-            self._transition(MissionState.observing, at_time)
+        if offset <= self._centred_tolerance(frame):
+            self._enter_observing(at_time)
             return
 
-        progress.solved = solved
+        if progress.acquired:
+            # A retargeted object that cannot be centred is not a failed session
+            # (ADR-080 §3). Decided here, because CENTERING may only lead back to
+            # SLEWING, and OBSERVING is reached only from VERIFYING.
+            correction = (
+                "centring iterations are exhausted"
+                if progress.centering_iterations >= MAX_CENTERING_ITERATIONS
+                else self._correction(at_time)
+            )
+            if isinstance(correction, str):
+                logger.warning("retargeted object not centred: %s", correction)
+                self._enter_observing(at_time, gave_up=ImageHealthReason.off_centre)
+                return
+
         self._transition(MissionState.centering, at_time)
 
     def _do_centering(self, at_time: datetime) -> None:
@@ -524,61 +693,172 @@ class MissionRunner:
         progress.centering_iterations += 1
         progress.solve_attempts = 0
 
-        # The mount landed `solved` when sent to `aim`. Sending it to `aim` again
-        # lands it in the same wrong place; sending it as far the other way as it
-        # missed by lands it on the target.
-        request, solved = progress.request, progress.solved
-        assert solved is not None
-        aim_ra, aim_dec = progress.aim
-        corrected_ra = (
-            aim_ra + request.right_ascension_hours - solved.right_ascension_hours
-        ) % 24.0
-        corrected_dec = aim_dec + request.declination_degrees - solved.declination_degrees
-        if not -90.0 <= corrected_dec <= 90.0:
-            self._fail(
-                MissionState.failed,
-                MissionFailureReason.centering_iterations_exhausted,
-                at_time,
-                f"a correction to declination {corrected_dec:.2f} is past the pole; "
-                "the solve and the target disagree by more than centring can fix",
-            )
+        correction = self._correction(at_time)
+        if isinstance(correction, str):
+            if correction.startswith("a correction to declination"):
+                reason = MissionFailureReason.centering_iterations_exhausted
+            elif not self._envelope.is_measured:
+                reason = MissionFailureReason.safety_envelope_unmeasured
+            else:
+                reason = MissionFailureReason.safety_refused
+            self._fail(MissionState.failed, reason, at_time, correction)
             return
 
-        # A corrected position is a position nobody has checked. It is near the
-        # target, and near is not inside the envelope.
-        horizontal = equatorial_to_horizontal(
-            corrected_ra, corrected_dec, at_time, self._envelope.site
+        altitude, azimuth, aim = correction
+        progress.aim = aim
+        self._begin_slew(altitude, azimuth, at_time)
+
+    # ------------------------------------------------------------------
+    # Measuring where the object is
+    # ------------------------------------------------------------------
+
+    def _disc_profile(self) -> bool:
+        return is_disc(self._require_progress().request.imaging_profile)
+
+    def _solve_settings(self) -> tuple[float, int]:
+        """A plate solve at the request's exposure; a disc at the live view's.
+
+        The Moon at a two-second plate-solve exposure is a white rectangle with no
+        centroid worth measuring.
+        """
+        progress = self._require_progress()
+        if self._disc_profile():
+            return progress.live_exposure_milliseconds, progress.live_gain
+        return progress.request.exposure_milliseconds, progress.request.gain
+
+    def _degrees_per_pixel(self, frame: Frame) -> float:
+        optical = self._require_progress().request.optical_config
+        return field_height_degrees(optical) / frame.height_px
+
+    def _measure(self, frame: Frame) -> float | None:
+        """How far the object is from where it should be, in degrees, or None.
+
+        Deep sky: a plate solve against the target. Moon and planet: the bright
+        disc's centroid against the frame centre (ADR-080 §5) -- a frame with no
+        disc is None, which is OFF_CENTRE to the watch, not a solve failure.
+        """
+        progress = self._require_progress()
+        if self._disc_profile():
+            found = disc_centroid(frame)
+            progress.disc = found
+            if found is None:
+                return None
+            return math.hypot(found.dx_px, found.dy_px) * self._degrees_per_pixel(frame)
+
+        solved = self._solver.solve(frame)
+        progress.solved = solved
+        if solved is None:
+            return None
+        request = progress.request
+        return separation_degrees(
+            solved.right_ascension_hours,
+            solved.declination_degrees,
+            request.right_ascension_hours,
+            request.declination_degrees,
         )
+
+    def _centred_tolerance(self, frame: Frame) -> float:
+        if self._disc_profile():
+            return (
+                DISC_CENTRED_FIELD_FRACTION
+                * min(frame.height_px, frame.width_px)
+                * self._degrees_per_pixel(frame)
+            )
+        return CENTERING_TOLERANCE_DEGREES
+
+    def _off_centre_limit(self, frame: Frame) -> float:
+        if self._disc_profile():
+            return (
+                OFF_CENTRE_FIELD_FRACTION
+                * min(frame.height_px, frame.width_px)
+                * self._degrees_per_pixel(frame)
+            )
+        optical = self._require_progress().request.optical_config
+        return max(
+            OFF_CENTRE_MIN_DEGREES, OFF_CENTRE_FIELD_FRACTION * field_height_degrees(optical)
+        )
+
+    def _correction(
+        self, at_time: datetime
+    ) -> tuple[float, float, tuple[float, float]] | str:
+        """Where to send the mount to take out the measured offset, or why not.
+
+        Returns (altitude, azimuth, aim). A corrected position is a position
+        nobody has checked: it is near the target, and near is not inside the
+        envelope, so it is judged like any other slew.
+        """
+        progress = self._require_progress()
+        request = progress.request
+
+        if self._disc_profile():
+            # The disc's offset is in the camera's frame. The simulator's camera is
+            # square to the alt-az axes (up is +altitude); the real camera's
+            # rotation is a first-light measurement (DV-035).
+            found = progress.disc
+            assert found is not None
+            status = self._devices.mount.status()
+            scale = field_height_degrees(request.optical_config) / self._frame_height()
+            altitude = status.altitude_degrees - found.dy_px * scale
+            cos_alt = max(0.05, math.cos(math.radians(status.altitude_degrees)))
+            azimuth = (status.azimuth_degrees + found.dx_px * scale / cos_alt) % 360.0
+            aim = progress.aim
+        else:
+            # The mount landed `solved` when sent to `aim`. Sending it to `aim`
+            # again lands it in the same wrong place; sending it as far the other
+            # way as it missed by lands it on the target.
+            solved = progress.solved
+            assert solved is not None
+            aim_ra, aim_dec = progress.aim
+            corrected_ra = (
+                aim_ra + request.right_ascension_hours - solved.right_ascension_hours
+            ) % 24.0
+            corrected_dec = aim_dec + request.declination_degrees - solved.declination_degrees
+            if not -90.0 <= corrected_dec <= 90.0:
+                return (
+                    f"a correction to declination {corrected_dec:.2f} is past the pole; "
+                    "the solve and the target disagree by more than centring can fix"
+                )
+            horizontal = equatorial_to_horizontal(
+                corrected_ra, corrected_dec, at_time, self._envelope.site
+            )
+            altitude, azimuth = horizontal.altitude_degrees, horizontal.azimuth_degrees
+            aim = (corrected_ra, corrected_dec)
+
         verdict = self._envelope.evaluate_pointing(
+            at_time, altitude, azimuth, operator_override=request.operator_override
+        )
+        if not verdict.permitted:
+            return verdict.detail
+        return altitude, azimuth, aim
+
+    def _frame_height(self) -> int:
+        return self._devices.camera.status().height_px
+
+    def _current_target_permitted(self, at_time: datetime) -> bool:
+        request = self._require_progress().request
+        if self._envelope.site is None:
+            return False
+        horizontal = equatorial_to_horizontal(
+            request.right_ascension_hours, request.declination_degrees, at_time, self._envelope.site
+        )
+        return self._envelope.evaluate_pointing(
             at_time,
             horizontal.altitude_degrees,
             horizontal.azimuth_degrees,
             operator_override=request.operator_override,
-        )
-        if not verdict.permitted:
-            reason = (
-                MissionFailureReason.safety_envelope_unmeasured
-                if not self._envelope.is_measured
-                else MissionFailureReason.safety_refused
-            )
-            self._fail(MissionState.failed, reason, at_time, verdict.detail)
-            return
-
-        progress.aim = (corrected_ra, corrected_dec)
-        self._begin_slew(horizontal.altitude_degrees, horizontal.azimuth_degrees, at_time)
+        ).permitted
 
     def request_capture(
         self, command_id: str, profile: ImagingProfile, settings: Profile
     ) -> bool:
         """Keep the run that is about to happen. Returns whether it was accepted.
 
-        Phase 1's mission state machine is linear -- OBSERVING, CAPTURING,
-        PROCESSING, COMPLETE -- so every mission captures whether or not anybody
-        asked. What CAPTURE decides is what the run is made of, and whether the
-        result is kept: a mission with no capture request still stacks frames for
-        the live view and delivers nothing at PROCESSING.
+        A booked session may capture many times (ADR-079 §3): each CAPTURE takes
+        the mission OBSERVING -> CAPTURING -> PROCESSING and, while the slot runs,
+        back to OBSERVING. The capture runs at the profile's settings; the live
+        view's own exposure is left as auto exposure set it.
 
-        Refused once the run has started. Changing the exposure halfway through
+        Refused once a run has started. Changing the exposure halfway through
         would leave a stack averaged from two different exposures, which is not a
         capture of anything.
         """
@@ -590,18 +870,15 @@ class MissionRunner:
 
         progress.capture_command_id = command_id
         progress.imaging_profile = profile
-        progress.request = replace(
-            progress.request,
-            requested_frames=settings.frames,
-            exposure_milliseconds=settings.exposure_milliseconds,
-            gain=settings.gain,
-        )
+        progress.capture_settings = settings
         # A stack built from the frames the plate solver was looking at is a
         # stack of a different exposure at a different gain. The run starts here.
         self._stack.reset()
         progress.frames_captured = 0
         progress.exposure_started = False
         progress.stacked = None
+        # An auto-exposure run would be measuring a picture nobody is keeping.
+        progress.auto_exposure = None
         logger.info(
             "capture requested for mission %s: %s, %d x %.0fms at gain %d",
             progress.request.mission_id,
@@ -630,8 +907,8 @@ class MissionRunner:
             progress.focus = Autofocus(
                 self._devices.focuser,
                 self._devices.camera,
-                exposure_milliseconds=progress.request.exposure_milliseconds,
-                gain=progress.request.gain,
+                exposure_milliseconds=progress.live_exposure_milliseconds,
+                gain=progress.live_gain,
                 show=self._show,
             )
         else:
@@ -643,73 +920,169 @@ class MissionRunner:
         )
         return None
 
-    def pointing_changed(self) -> None:
+    def pointing_changed(self, *, nudged: bool = False) -> None:
         """The mount was moved under a running mission: a nudge or a recentre.
 
         The stack so far is of the old field, and averaging it with the new one is a
         picture of nothing, so it starts again; a live exposure already running is
         of the sky in between and is dropped when it finishes.
+
+        A nudge is the customer framing the object their way, so the watch stops
+        re-centring it until RECENTER or RETARGET puts the mount back on target.
         """
         progress = self._progress
         if progress is None or self._state is not MissionState.observing:
             return
         self._stack.reset()
         progress.stacked = None
-        if progress.live_exposure_started:
+        progress.baseline = None
+        if progress.job is not None:
             progress.live_exposure_stale = True
+        if nudged and progress.watch is not None:
+            progress.watch.customer_moved()
 
-    def _pump_live_view(self) -> bool:
-        """Finish the live exposure that is running. Returns whether one still is.
+    def returned_to_target(self, at_time: datetime) -> None:
+        """RECENTER put the mount back on the current object: re-arm the watch.
 
-        The camera does one thing at a time, so a focus run or a capture run waits
-        for this exposure rather than starting over it.
+        It does not restart the dwell lock (ADR-079 §4).
         """
-        progress = self._require_progress()
-        if not progress.live_exposure_started:
-            return False
-        if not self._devices.camera.exposure_complete():
-            return True
-
-        frame = self._devices.camera.read_frame()
-        progress.live_exposure_started = False
-        stale = progress.live_exposure_stale or self._devices.mount.status().slewing
-        progress.live_exposure_stale = False
-        # A frame taken for a view nobody will see any more, or of a moving field,
-        # is not stacked: a focus or capture run starts from a reset stack anyway.
-        if stale or progress.focus is not None or progress.capture_command_id is not None:
-            return False
-
-        stacked = self._stack.add(frame)
-        self._show(stacked.frame)
-        progress.stacked = stacked.frame
-        return False
-
-    def _start_live_exposure(self) -> None:
-        progress = self._require_progress()
-        if progress.capture_suspended or self._devices.mount.status().slewing:
+        progress = self._progress
+        if progress is None:
             return
-        self._devices.camera.expose(
-            progress.request.exposure_milliseconds, progress.request.gain
+        request = progress.request
+        progress.aim = (request.right_ascension_hours, request.declination_degrees)
+        if hasattr(self._solver, "set_commanded_position"):
+            self._solver.set_commanded_position(*progress.aim)
+        self.pointing_changed()
+        if progress.watch is not None:
+            progress.watch.reset(at_time, self._clock.monotonic())
+
+    def retarget(
+        self,
+        target_id: uuid.UUID,
+        right_ascension_hours: float,
+        declination_degrees: float,
+        profile: ImagingProfile,
+        optical_config: OpticalConfig,
+        at_time: datetime,
+    ) -> str | None:
+        """Move a live session to another object (ADR-079 §4). Returns why not, or None.
+
+        The supervisor has already checked what the cloud's refusal reasons name.
+        This checks only what the runner alone can: that it is OBSERVING with
+        nothing in hand, and that the new object is inside the envelope now.
+        """
+        progress = self._progress
+        if progress is None or self._state is not MissionState.observing:
+            return f"the mission is {self._state.value}, not observing"
+        if self.capture_pending or progress.focus is not None:
+            return "a capture or a focus change is in progress"
+        if self._devices.mount.status().slewing:
+            return "the mount is slewing"
+        if self._envelope.site is None:
+            return "observatory coordinates are not configured"
+
+        horizontal = equatorial_to_horizontal(
+            right_ascension_hours, declination_degrees, at_time, self._envelope.site
         )
-        progress.live_exposure_started = True
+        verdict = self._envelope.evaluate_pointing(
+            at_time,
+            horizontal.altitude_degrees,
+            horizontal.azimuth_degrees,
+            operator_override=progress.request.operator_override,
+        )
+        if not verdict.permitted:
+            return verdict.detail
+
+        # Nothing of the old object's survives: its exposure, its stack, its
+        # verdict, its offsets.
+        if progress.job is not None:
+            self._devices.camera.abort_exposure()
+            progress.job = None
+        settings = profiles.PROFILES[profile]
+        progress.request = replace(
+            progress.request,
+            target_id=target_id,
+            right_ascension_hours=right_ascension_hours,
+            declination_degrees=declination_degrees,
+            imaging_profile=profile,
+            optical_config=optical_config,
+            exposure_milliseconds=settings.exposure_milliseconds,
+            gain=settings.gain,
+        )
+        progress.live_exposure_milliseconds = settings.exposure_milliseconds
+        progress.live_gain = settings.gain
+        progress.aim = (right_ascension_hours, declination_degrees)
+        progress.centering_iterations = 0
+        progress.solve_attempts = 0
+        progress.solved = None
+        progress.disc = None
+        progress.auto_exposure = None
+        progress.correcting = False
+        progress.baseline = None
+        progress.scene = None
+        progress.stacked = None
+        progress.live_exposure_stale = False
+        progress.dwell_started_at = at_time
+        logger.info(
+            "retarget for mission %s to %s (%s)",
+            progress.request.mission_id,
+            target_id,
+            profile.value,
+        )
+        self._begin_slew(horizontal.altitude_degrees, horizontal.azimuth_degrees, at_time)
+        return None
+
+    def _enter_observing(
+        self, at_time: datetime, gave_up: ImageHealthReason | None = None
+    ) -> None:
+        """On the object: the live view runs, and the watch starts looking."""
+        progress = self._require_progress()
+        progress.acquired = True
+        progress.exposure_started = False
+        if progress.observing_since_monotonic is None:
+            progress.observing_since_monotonic = self._clock.monotonic()
+        self._transition(MissionState.observing, at_time)
+
+        mono = self._clock.monotonic()
+        disc = self._disc_profile()
+        if progress.watch is None:
+            progress.watch = ImageWatch(at_time, mono, disc=disc)
+        else:
+            progress.watch.reset(at_time, mono, disc=disc)
+        progress.baseline = None
+        progress.scene = None
+        if gave_up is not None:
+            progress.watch.give_up(gave_up, at_time, mono)
+            return
+        # Auto exposure after each acquisition (ADR-080 §1).
+        profile = progress.request.imaging_profile
+        if profile is not None:
+            progress.auto_exposure = AutoExposure(
+                profile, progress.live_exposure_milliseconds, progress.live_gain
+            )
 
     def _do_observing(self, at_time: datetime) -> None:
-        """Hold on the target with the live view running, until Capture or timeout.
+        """Hold on the object with the live view running, for the rest of the slot.
 
         The one state in the machine that waits for a person. Everything before
         it is the observatory getting ready and everything after it is the
         observatory finishing; this is the part the customer is here for.
 
-        The live view runs throughout (#199): one exposure at the mission's exposure
-        and gain after another, stacked, each stack shown. Before this the camera
-        sat idle here and the customer saw the last plate-solve frame, or nothing.
+        The camera does one thing at a time, and the order is fixed: the exposure
+        already running finishes; a focus run, then a capture request, go first;
+        a corrective slew is waited out; then the watch (ADR-080) may ask for an
+        auto-exposure try, a solve or a re-centre, and otherwise the next live
+        frame is taken.
         """
         progress = self._require_progress()
 
-        if self._pump_live_view():
-            return
+        if progress.job is not None:
+            if not self._devices.camera.exposure_complete():
+                return
+            self._finish_job(at_time)
 
-        # A capture requested mid-focus waits for it; so does the timeout.
+        # A capture requested mid-focus waits for it.
         if progress.focus is not None:
             outcome = progress.focus.pump()
             if not outcome:
@@ -720,31 +1093,218 @@ class MissionRunner:
             # The stack so far was built at the old focus.
             self._stack.reset()
             progress.stacked = None
+            progress.baseline = None
 
         if progress.capture_command_id is not None:
             self._transition(MissionState.capturing, at_time)
             return
 
-        elapsed = self._clock.monotonic() - progress.state_entered_monotonic
-        if elapsed >= self._observing_seconds:
-            logger.info(
-                "no capture was requested within %.0fs; finishing the mission",
-                self._observing_seconds,
-            )
-            self._transition(MissionState.capturing, at_time)
+        if progress.capture_suspended or self._devices.mount.status().slewing:
+            return
+        if progress.correcting:
+            progress.correcting = False
+            self._stack.reset()
+            progress.stacked = None
+            progress.baseline = None
+            if progress.watch is not None:
+                progress.watch.recentred()
+
+        self._next_job(at_time)
+
+    def _next_job(self, at_time: datetime) -> None:
+        progress = self._require_progress()
+        if progress.auto_exposure is not None:
+            self._start_job("ae", *progress.auto_exposure.settings)
             return
 
-        self._start_live_exposure()
+        need = progress.watch.due(at_time, self._clock.monotonic()) if progress.watch else None
+        if need is Need.AUTO_EXPOSE and progress.request.imaging_profile is not None:
+            progress.auto_exposure = AutoExposure(
+                progress.request.imaging_profile,
+                progress.live_exposure_milliseconds,
+                progress.live_gain,
+            )
+            self._start_job("ae", *progress.auto_exposure.settings)
+            return
+        if need is Need.AUTO_EXPOSE:
+            # No profile, so no scene to expose for: the step is done.
+            assert progress.watch is not None
+            progress.watch.auto_exposed()
+        elif need is Need.SOLVE:
+            self._start_job("solve", *self._solve_settings())
+            return
+        elif need is Need.RECENTRE:
+            self._recentre(at_time)
+            return
+
+        self._start_job("live", progress.live_exposure_milliseconds, progress.live_gain)
+
+    def _start_job(self, job: str, exposure_milliseconds: float, gain: int) -> None:
+        progress = self._require_progress()
+        self._devices.camera.expose(exposure_milliseconds, gain)
+        progress.job = job
+        progress.job_settings = (exposure_milliseconds, gain)
+
+    def _finish_job(self, at_time: datetime) -> None:
+        """Read the exposure that just finished and do with it what it was for."""
+        progress = self._require_progress()
+        frame = self._devices.camera.read_frame()
+        job, progress.job = progress.job, None
+        stale = progress.live_exposure_stale or self._devices.mount.status().slewing
+        progress.live_exposure_stale = False
+
+        if job == "live":
+            # A frame taken for a view nobody will see any more, or of a moving
+            # field, is not stacked: a focus or capture run starts from a reset
+            # stack anyway.
+            if stale or progress.focus is not None or progress.capture_command_id is not None:
+                return
+            stacked = self._stack.add(frame)
+            self._show(stacked.frame)
+            progress.stacked = stacked.frame
+            self._judge(frame, at_time)
+            return
+
+        self._show(frame)
+        if stale:
+            return
+        if job == "ae":
+            self._feed_auto_exposure(frame)
+        elif job == "solve":
+            self._finish_solve(frame, at_time)
+
+    def _judgeable(self, frame: Frame) -> bool:
+        return min(frame.height_px, frame.width_px) >= MIN_JUDGED_FRAME_PX
+
+    def _feed_auto_exposure(self, frame: Frame) -> None:
+        progress = self._require_progress()
+        run = progress.auto_exposure
+        if run is None:
+            return
+        if self._judgeable(frame) and not run.feed(stats(frame)):
+            return
+        progress.auto_exposure = None
+        if run.scene is not None:
+            progress.live_exposure_milliseconds, progress.live_gain = run.settings
+            progress.scene = run.scene
+        logger.info(
+            "auto exposure: %s, %.3gms at gain %d after %d tries",
+            run.scene,
+            progress.live_exposure_milliseconds,
+            progress.live_gain,
+            run.tries,
+        )
+        # The stack and the cloud baseline were of another exposure.
+        self._stack.reset()
+        progress.stacked = None
+        progress.baseline = None
+        if progress.watch is not None:
+            progress.watch.auto_exposed()
+
+    def _finish_solve(self, frame: Frame, at_time: datetime) -> None:
+        progress = self._require_progress()
+        watch = progress.watch
+        if watch is None:
+            return
+        offset = self._measure(frame)
+        raised = False
+        if offset is None and progress.baseline is not None and self._judgeable(frame):
+            raised = stats(frame).bg >= CLOUD_BACKGROUND_RATIO * progress.baseline.bg
+        watch.solved(
+            offset,
+            self._off_centre_limit(frame),
+            at_time,
+            self._clock.monotonic(),
+            background_raised=raised,
+        )
+
+    def _judge(self, frame: Frame, at_time: datetime) -> None:
+        """One live frame's health (ADR-080 §2), handed to the watch."""
+        progress = self._require_progress()
+        watch = progress.watch
+        if watch is None or not self._judgeable(frame):
+            return
+        measured = stats(frame)
+        disc = self._disc_profile()
+        off_centre = False
+        if disc and not watch.framing_held:
+            found = disc_centroid(frame)
+            off_centre = found is None or (
+                math.hypot(found.dx_px, found.dy_px)
+                > OFF_CENTRE_FIELD_FRACTION * min(frame.height_px, frame.width_px)
+            )
+        reason = judge(
+            measured,
+            disc=disc,
+            off_centre=off_centre,
+            baseline=progress.baseline,
+            exposure_milliseconds=progress.live_exposure_milliseconds,
+            gain=progress.live_gain,
+            sky_cloudy=self._sky_cloudy,
+        )
+        if reason is None and progress.baseline is None and not watch.recovering:
+            progress.baseline = Baseline(
+                stars=measured.stars,
+                bg=measured.bg,
+                peak=measured.peak,
+                exposure_milliseconds=progress.live_exposure_milliseconds,
+                gain=progress.live_gain,
+            )
+        profile = progress.request.imaging_profile
+        drift = (
+            reason is None
+            and profile is not None
+            and progress.scene is not None
+            and drifted(measured, progress.scene, SCENE_FOR_PROFILE[profile])
+        )
+        watch.frame(reason, at_time, self._clock.monotonic(), drift=drift)
+
+    def _recentre(self, at_time: datetime) -> None:
+        """A corrective slew of the measured offset (ADR-080 §3, RE_CENTRE).
+
+        Through the envelope like any slew, never over one already running, and
+        never without a measurement behind it: the watch asks for this only after
+        a solve or a centroid found the offset.
+        """
+        progress = self._require_progress()
+        watch = progress.watch
+        assert watch is not None
+        mono = self._clock.monotonic()
+        measured = progress.disc if self._disc_profile() else progress.solved
+        correction = (
+            "nothing has been measured to correct from"
+            if measured is None
+            else self._correction(at_time)
+        )
+        if isinstance(correction, str):
+            logger.warning("re-centre refused: %s", correction)
+            watch.recentre_refused(at_time, mono)
+            self._start_job("live", progress.live_exposure_milliseconds, progress.live_gain)
+            return
+
+        altitude, azimuth, aim = correction
+        progress.aim = aim
+        self._devices.mount.slew_to(altitude, azimuth)
+        if hasattr(self._solver, "set_commanded_position"):
+            self._solver.set_commanded_position(*aim)
+        progress.correcting = True
+        progress.solved = None
+        progress.disc = None
+        logger.info("re-centring mission %s", progress.request.mission_id)
 
     def _do_capturing(self, at_time: datetime) -> None:
         progress = self._require_progress()
 
         if progress.capture_suspended:
             return
+        settings = progress.capture_settings
+        exposure, gain = (
+            (settings.exposure_milliseconds, settings.gain)
+            if settings is not None
+            else (progress.live_exposure_milliseconds, progress.live_gain)
+        )
         if not progress.exposure_started:
-            self._devices.camera.expose(
-                progress.request.exposure_milliseconds, progress.request.gain
-            )
+            self._devices.camera.expose(exposure, gain)
             progress.exposure_started = True
             return
 
@@ -762,28 +1322,87 @@ class MissionRunner:
         progress.exposure_started = False
         progress.frames_captured += 1
 
-        if progress.frames_captured >= progress.request.requested_frames:
+        requested = settings.frames if settings is not None else progress.request.requested_frames
+        if progress.frames_captured >= requested:
             self._transition(MissionState.processing, at_time)
 
     def _do_processing(self, at_time: datetime) -> None:
-        """Hand over the finished stack, then finish the mission.
+        """Hand over the finished stack, then observe on, or finish at the slot's end.
 
-        The capture is offered before COMPLETE rather than after, so the mission
-        cannot reach a terminal state with an image still nobody's
-        responsibility. It is offered exactly once: `capture_command_id` is
-        cleared as it goes, and a second pass through PROCESSING -- which cannot
-        happen today and would be a bug if it did -- delivers nothing rather than
-        a duplicate.
+        The capture is offered before anything else, so the mission cannot reach
+        a terminal state with an image still nobody's responsibility. It is
+        offered exactly once: `capture_command_id` is cleared as it goes.
 
         A failure here does not fail the mission. The customer watched the sky
         for the length of their slot; losing the keepsake is bad, and telling
         them the observation itself failed would be worse and untrue.
         """
         self._deliver_capture()
+        progress = self._require_progress()
+        if self._past_deadline(at_time):
+            self._complete(at_time)
+            return
+        # The slot runs on (ADR-079 §5: PROCESSING -> OBSERVING).
+        self._stack.reset()
+        progress.stacked = None
+        progress.capture_settings = None
+        progress.imaging_profile = None
+        progress.exposure_started = False
+        progress.baseline = None
+        self._transition(MissionState.observing, at_time)
+
+    def _complete(self, at_time: datetime) -> None:
         self._transition(MissionState.complete, at_time)
         self._park("mission complete")
+        self._require_progress().completed_monotonic = self._clock.monotonic()
+
+    def _past_deadline(self, at_time: datetime) -> bool:
+        left = self.seconds_left(at_time)
+        return left is not None and left <= 0
+
+    def _finish_session(self, at_time: datetime) -> bool:
+        """The slot has ended (ADR-079 §2). Returns whether the pump is done.
+
+        An in-flight capture is flushed with the frames already stacked; with
+        nothing in flight OBSERVING goes straight to COMPLETE. Only the edges the
+        cloud's table allows are walked: a retarget still acquiring is brought
+        back to OBSERVING through VERIFYING, never sideways. A mission that never
+        reached its object did not observe, so it is cancelled, not completed.
+        """
         progress = self._require_progress()
-        progress.completed_monotonic = self._clock.monotonic()
+        state = self._state
+        if not progress.acquired:
+            self._fail(
+                MissionState.cancelled,
+                MissionFailureReason.session_expired,
+                at_time,
+                "the session ended before the object was acquired",
+            )
+            return True
+        if state is MissionState.processing or state is MissionState.centering:
+            return False  # PROCESSING delivers and completes; CENTERING's slew is aborted next
+        if state is MissionState.capturing:
+            logger.info(
+                "slot ended mid-capture; delivering %d frame(s)", self._stack.frames_stacked
+            )
+            self._devices.camera.abort_exposure()
+            progress.exposure_started = False
+            self._transition(MissionState.processing, at_time)
+            return True
+        if state is MissionState.slewing:
+            self._devices.mount.abort_slew()
+            self._transition(MissionState.verifying, at_time)
+            state = MissionState.verifying
+        if state is MissionState.verifying:
+            self._devices.camera.abort_exposure()
+            progress.exposure_started = False
+            self._transition(MissionState.observing, at_time)
+        if progress.job is not None:
+            self._devices.camera.abort_exposure()
+            progress.job = None
+        logger.info("slot ended; finishing mission %s", progress.request.mission_id)
+        self._complete(at_time)
+        return True
 
     def _deliver_capture(self) -> None:
         progress = self._require_progress()
@@ -803,6 +1422,7 @@ class MissionRunner:
             )
             return
 
+        settings = progress.capture_settings
         try:
             self._on_capture(
                 FinishedCapture(
@@ -811,9 +1431,14 @@ class MissionRunner:
                     imaging_profile=progress.imaging_profile,
                     frame=stacked,
                     frames_stacked=self._stack.frames_stacked,
-                    exposure_milliseconds=progress.request.exposure_milliseconds,
-                    gain=progress.request.gain,
+                    exposure_milliseconds=(
+                        settings.exposure_milliseconds
+                        if settings
+                        else progress.live_exposure_milliseconds
+                    ),
+                    gain=settings.gain if settings else progress.live_gain,
                     captured_at=stacked.captured_at,
+                    target_id=progress.request.target_id,
                 )
             )
         except Exception as error:  # noqa: BLE001 - see the docstring above
@@ -881,6 +1506,9 @@ class MissionRunner:
             except Exception as error:
                 logger.error("could not stop the focuser (%s): %s", why, error)
             progress.focus = None
+        progress.job = None
+        progress.auto_exposure = None
+        progress.correcting = False
         try:
             self._devices.camera.abort_exposure()
         except Exception as error:

@@ -14,6 +14,7 @@ import type {
   MissionCommandResult,
   MissionFailureReason,
   MissionFrameInfo,
+  MissionSessionEnded,
   MissionState,
   MissionStateUpdate,
   MissionStreamInfo,
@@ -23,6 +24,8 @@ import type {
 import { zMissionClientMessage } from "@darkview/contracts/zod";
 
 import { MAX_TEXT_BYTES } from "@/link/protocol";
+import type { SessionEndedRecord } from "@/link/store";
+import type { BookedSessionTelemetry } from "@/mission/booked-session";
 
 /**
  * How long a silent client stays subscribed.
@@ -104,10 +107,15 @@ export function missionStateUpdate(input: {
  * room's pointing dial. Where a telescope points follows from the target and the
  * time, both already public, and a tenth of a degree is a dial, not an instrument
  * readout. It is telemetry only -- nothing a client sends reaches the mount.
+ *
+ * ADR-079 and ADR-080 add the booked session's fields: the current object, when the
+ * next RETARGET and CAPTURE are accepted, how far the ending has got, and the agent's
+ * verdict on its own picture -- client-safe by the contract's definition of it.
  */
 export function missionTelemetryUpdate(
   missionId: string,
   delta: AgentStateDelta,
+  session: BookedSessionTelemetry,
 ): MissionTelemetryUpdate {
   return {
     type: "MISSION_TELEMETRY",
@@ -126,6 +134,7 @@ export function missionTelemetryUpdate(
     nudgeUsedDegrees: null,
     ambientTemperatureC: delta.telemetry.ambientTemperatureC ?? null,
     pointing: roundedPointing(delta.telemetry.pointingHorizontal ?? null),
+    ...session,
   };
 }
 
@@ -253,6 +262,26 @@ export function missionCaptureReady(capture: Capture): MissionCaptureReady {
     ...messageHeader(),
     missionId: capture.missionId,
     capture,
+  };
+}
+
+/**
+ * The session is over (ADR-079 §6): the mission ended and the mount parked, or the
+ * wait for that ran out. Sent once per mission, so the client can show the end
+ * screen with every capture rather than infer it from a state.
+ */
+export function missionSessionEnded(record: SessionEndedRecord): MissionSessionEnded {
+  return {
+    type: "MISSION_SESSION_ENDED",
+    ...messageHeader(),
+    missionId: record.missionId,
+    state: record.state,
+    failureReason: record.failureReason,
+    endReason: record.endReason,
+    endedAt: record.endedAt.toISOString(),
+    parked: record.parked,
+    captureIds: record.captureIds,
+    summaryEmailQueued: record.summaryEmailQueued,
   };
 }
 

@@ -51,7 +51,7 @@ from darkview_agent.safety.envelope import SafetyEnvelope, normalise_azimuth
 logger = logging.getLogger("darkview.agent.command")
 
 # Commands that move the telescope somewhere the sky can be wrong about.
-POINTING_COMMANDS = {"GOTO", "NUDGE"}
+POINTING_COMMANDS = {"GOTO", "NUDGE", "RETARGET"}
 
 # Commands that must remain available whatever the envelope says.
 RECOVERY_COMMANDS = {"PARK", "ABORT"}
@@ -426,7 +426,8 @@ class CommandValidator:
             return None
 
     def _check_pointing(self, envelope: CommandEnvelope, payload, at_time: datetime) -> Ack | None:
-        if payload.kind == "GOTO":
+        # A RETARGET names where it is going, exactly as a GOTO does (ADR-079 §4).
+        if payload.kind in ("GOTO", "RETARGET"):
             if self._envelope.site is None:
                 return self._reject(
                     envelope,

@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 
 import { PrismaPg } from "@prisma/adapter-pg";
 
-import { type Prisma, PrismaClient } from "@darkview/db";
+import { Prisma, PrismaClient } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { END_TELEMETRY_SECONDS, sessionEndReasonOf } from "@darkview/db/booked-session";
 import { CAPTURE_CONTRACT_COLUMNS, toContractCapture } from "@darkview/db/capture";
 import { queueEmail } from "@darkview/db/notifications";
 import { admitEnvelopeFor } from "@darkview/db/simulator-envelope";
@@ -18,6 +19,8 @@ import {
   COMMAND_STATUS_FOR,
   LIVE_MISSION_STATES,
   TERMINAL_COMMAND_STATUSES,
+  TERMINAL_MISSION_STATES,
+  dwellTargetOf,
   START_NOT_RUN_STATUSES,
   failureReasonForRefusedStart,
   isStartingGoto,
@@ -35,6 +38,7 @@ import {
   type ObservatoryRecord,
   type RelayableCommand,
   type ResumeOutcome,
+  type SessionEndedRecord,
 } from "@/link/store";
 import { AGENT_CHANNEL } from "@/link/command-listener";
 import type { ChannelUser, MissionChannelStore, MissionSnapshot } from "@/mission/store";
@@ -399,7 +403,13 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
             observatoryId: event.observatoryId,
             state: { in: legalPredecessorsOf(event.state) },
           },
-          data: { state: event.state, failureReason: event.failureReason },
+          data: {
+            state: event.state,
+            failureReason: event.failureReason,
+            // ADR-079: when the mission ended is when its session's end is measured
+            // from, and what MISSION_SESSION_ENDED reports as `endedAt`.
+            ...(isTerminalState(event.state) ? { completedAt: event.occurredAt } : {}),
+          },
         });
 
         return count === 1 ? "APPLIED" : "RECORDED";
@@ -414,9 +424,11 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
             observatoryId: true,
             telescopeId: true,
             targetId: true,
+            currentTargetId: true,
             userId: true,
             mode: true,
             isDemo: true,
+            booking: { select: { id: true } },
           },
         });
         if (!mission) return { outcome: "NOT_FOUND" };
@@ -447,12 +459,14 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
         // MISSION_CAPTURE_READY would put a duplicate in front of them.
         if (existing) return { outcome: "DUPLICATE" };
 
+        const targetId = await captureTargetOf(tx, capture, mission);
+
         const row = await tx.capture.create({
           data: {
             id: randomUUID(),
             userId: mission.userId,
             missionId: capture.missionId,
-            targetId: mission.targetId,
+            targetId,
             observatoryId: mission.observatoryId,
             telescopeId: mission.telescopeId,
             commandId: command.id,
@@ -524,13 +538,17 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
         );
 
         // DV-064. The DUPLICATE path above returns before this, so a re-sent
-        // capture queues nothing; the dedupe key is the second guard.
-        await queueEmail(tx, {
-          userId: mission.userId,
-          kind: "CAPTURE_READY",
-          dedupeKey: `capture-ready:${row.id}`,
-          payload: { captureId: row.id },
-        });
+        // capture queues nothing; the dedupe key is the second guard. A booked
+        // session sends one SESSION_SUMMARY at its end instead (ADR-079 §6), so a
+        // two-hour session does not send forty emails.
+        if (!mission.booking) {
+          await queueEmail(tx, {
+            userId: mission.userId,
+            kind: "CAPTURE_READY",
+            dedupeKey: `capture-ready:${row.id}`,
+            payload: { captureId: row.id },
+          });
+        }
 
         // thumbnailUrl is null and must be: it is a signed, short-expiry URL
         // minted against a caller, and there is no caller here. The client asks
@@ -597,6 +615,37 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
           },
           database,
         );
+      }
+
+      // ADR-079: the agent accepted the command that puts the mount on an object, so
+      // that is the session's current object and the dwell lock starts now. A
+      // REJECTED RETARGET changes nothing and, unlike a refused start, fails nothing.
+      const dwellTarget = dwellTargetOf(command.type, command.payload);
+      if (count === 1 && verdict.status === "ACCEPTED" && dwellTarget) {
+        await database.$transaction(async (tx) => {
+          const moved = await tx.mission.updateMany({
+            where: {
+              id: command.missionId,
+              observatoryId: verdict.observatoryId,
+              state: { in: [...LIVE_MISSION_STATES] },
+            },
+            data: { currentTargetId: dwellTarget, currentTargetSince: verdict.decidedAt },
+          });
+          if (moved.count === 1 && command.type === "RETARGET") {
+            await recordAuditEvent(
+              {
+                category: "MISSION",
+                action: "MISSION_TARGET_CHANGED",
+                missionId: command.missionId,
+                commandId: verdict.commandId,
+                entityType: "Mission",
+                entityId: command.missionId,
+                detail: { targetId: dwellTarget, acceptedAt: verdict.decidedAt.toISOString() },
+              },
+              tx,
+            );
+          }
+        });
       }
 
       if (
@@ -682,6 +731,205 @@ export function createPrismaStore(connectionString: string): RealtimeStore {
         if (applied) closed.push(mission.id);
       }
       return closed;
+    },
+
+    async loadMissionLiveContext(missionId: string) {
+      const mission = await database.mission.findUnique({
+        where: { id: missionId },
+        select: {
+          id: true,
+          state: true,
+          currentTargetId: true,
+          currentTargetSince: true,
+          booking: { select: { slotStartAt: true, durationMinutes: true } },
+          sessions: {
+            where: { revokedAt: null },
+            orderBy: { issuedAt: "desc" },
+            take: 1,
+            select: { expiresAt: true },
+          },
+          _count: { select: { captures: true } },
+        },
+      });
+      if (!mission) return null;
+
+      const [last, awaiting] = await Promise.all([
+        database.observatoryCommand.findFirst({
+          where: { missionId, type: "CAPTURE" },
+          orderBy: { issuedAt: "desc" },
+          select: { issuedAt: true },
+        }),
+        database.observatoryCommand.count({
+          where: {
+            missionId,
+            type: "CAPTURE",
+            status: { notIn: [...TERMINAL_COMMAND_STATUSES] },
+            result: { equals: Prisma.DbNull },
+            expiresAt: { gt: new Date() },
+          },
+        }),
+      ]);
+
+      return {
+        missionId: mission.id,
+        state: mission.state,
+        currentTargetId: mission.currentTargetId,
+        currentTargetSince: mission.currentTargetSince,
+        sessionEndsAt: mission.booking
+          ? slotEndOf(mission.booking)
+          : (mission.sessions[0]?.expiresAt ?? null),
+        lastCaptureIssuedAt: last?.issuedAt ?? null,
+        captureAwaitingVerdict: awaiting > 0,
+        captureCount: mission._count.captures,
+      };
+    },
+
+    async recordImageHealth({ observatoryId, missionId, unrecovered, at }) {
+      await database.mission.updateMany({
+        where: {
+          id: missionId,
+          observatoryId,
+          imageUnrecoveredSince: unrecovered ? null : { not: null },
+        },
+        data: { imageUnrecoveredSince: unrecovered ? at : null },
+      });
+    },
+
+    async claimEndedSlots(now: Date) {
+      // Candidates by slot start, then by slot end in code, as the no-show sweep does.
+      const candidates = await database.mission.findMany({
+        where: {
+          state: { in: [...LIVE_MISSION_STATES] },
+          slotEndNotifiedAt: null,
+          booking: { is: { slotStartAt: { lte: now } } },
+        },
+        select: {
+          id: true,
+          observatoryId: true,
+          isDemo: true,
+          booking: { select: { slotStartAt: true, durationMinutes: true } },
+        },
+      });
+
+      const claimed: { missionId: string; observatoryId: string }[] = [];
+      for (const mission of candidates) {
+        if (!mission.booking) continue;
+        const slotEndsAt = slotEndOf(mission.booking);
+        if (slotEndsAt > now) continue;
+
+        const won = await database.$transaction(async (tx) => {
+          const { count } = await tx.mission.updateMany({
+            where: { id: mission.id, slotEndNotifiedAt: null },
+            data: { slotEndNotifiedAt: now },
+          });
+          if (count === 0) return false;
+          await recordAuditEvent(
+            {
+              category: "MISSION",
+              action: "MISSION_SLOT_ENDED",
+              missionId: mission.id,
+              entityType: "Mission",
+              entityId: mission.id,
+              detail: { slotEndedAt: slotEndsAt.toISOString(), endReason: "SLOT_ENDED" },
+              isDemo: mission.isDemo,
+            },
+            tx,
+          );
+          return true;
+        });
+        if (won) claimed.push({ missionId: mission.id, observatoryId: mission.observatoryId });
+      }
+      return claimed;
+    },
+
+    async endMissionSession({ missionId, parked, now }) {
+      return database.$transaction(async (tx): Promise<SessionEndedRecord | null> => {
+        const mission = await tx.mission.findUnique({
+          where: { id: missionId },
+          select: {
+            id: true,
+            userId: true,
+            state: true,
+            failureReason: true,
+            completedAt: true,
+            currentTargetId: true,
+            isDemo: true,
+            booking: { select: { id: true } },
+            captures: { orderBy: { capturedAt: "asc" }, select: { id: true } },
+          },
+        });
+        // A mission that never started under ADR-079 has no session to end.
+        if (!mission || !isTerminalState(mission.state) || !mission.currentTargetId) {
+          return null;
+        }
+
+        const { count } = await tx.mission.updateMany({
+          where: { id: missionId, sessionEndedNotifiedAt: null },
+          data: { sessionEndedNotifiedAt: now },
+        });
+        if (count === 0) return null;
+
+        const reachedObserving =
+          (await tx.missionEvent.count({ where: { missionId, state: "OBSERVING" } })) > 0;
+        const summaryEmailQueued =
+          mission.booking !== null && reachedObserving
+            ? await queueEmail(tx, {
+                userId: mission.userId,
+                kind: "SESSION_SUMMARY",
+                dedupeKey: `session-summary:${missionId}`,
+                payload: { missionId },
+              })
+            : false;
+
+        const endReason = sessionEndReasonOf(mission.state, mission.failureReason);
+        await recordAuditEvent(
+          {
+            category: "MISSION",
+            action: "MISSION_SESSION_ENDED",
+            missionId,
+            entityType: "Mission",
+            entityId: missionId,
+            detail: {
+              endReason,
+              parked,
+              captureCount: mission.captures.length,
+              summaryEmailQueued,
+            },
+            isDemo: mission.isDemo,
+          },
+          tx,
+        );
+
+        return {
+          missionId,
+          state: mission.state,
+          failureReason: mission.failureReason,
+          endReason,
+          endedAt: mission.completedAt ?? now,
+          parked,
+          captureIds: mission.captures.map((capture) => capture.id),
+          summaryEmailQueued,
+        };
+      });
+    },
+
+    async overdueSessionEnds(now: Date) {
+      const cutoff = new Date(now.getTime() - END_TELEMETRY_SECONDS * 1000);
+      const missions = await database.mission.findMany({
+        where: {
+          state: { in: [...TERMINAL_MISSION_STATES] },
+          currentTargetId: { not: null },
+          sessionEndedNotifiedAt: null,
+          // A mission the cloud ended itself may carry no completedAt; its last
+          // write is then when it ended.
+          OR: [
+            { completedAt: { lte: cutoff } },
+            { completedAt: null, updatedAt: { lte: cutoff } },
+          ],
+        },
+        select: { id: true },
+      });
+      return missions.map((mission) => mission.id);
     },
 
     async loadSafetyEnvelope(
@@ -935,6 +1183,43 @@ async function heldObserverSeat(
     select: { id: true },
   });
   return seat !== null;
+}
+
+function isTerminalState(state: string): boolean {
+  return (TERMINAL_MISSION_STATES as readonly string[]).includes(state);
+}
+
+function slotEndOf(booking: { slotStartAt: Date; durationMinutes: number }): Date {
+  return new Date(booking.slotStartAt.getTime() + booking.durationMinutes * 60_000);
+}
+
+/**
+ * The object a capture shows (ADR-079). The agent's report is taken only for an
+ * object this mission was actually sent to -- its booked target, its current one, or
+ * the target of one of its own RETARGETs -- since a Capture row filed against any
+ * other target would put a stranger's object in the customer's Collection. Without
+ * a report, the current target: no RETARGET can run while a capture is in flight,
+ * so it is the one the capture was issued on.
+ */
+async function captureTargetOf(
+  tx: Prisma.TransactionClient,
+  capture: CaptureRecord,
+  mission: { targetId: string; currentTargetId: string | null },
+): Promise<string> {
+  const current = mission.currentTargetId ?? mission.targetId;
+  const reported = capture.targetId;
+  if (!reported || reported === current || reported === mission.targetId) {
+    return reported ?? current;
+  }
+  const sentThere = await tx.observatoryCommand.findFirst({
+    where: {
+      missionId: capture.missionId,
+      type: "RETARGET",
+      payload: { path: ["targetId"], equals: reported },
+    },
+    select: { id: true },
+  });
+  return sentThere ? reported : current;
 }
 
 function toActiveSession(row: {

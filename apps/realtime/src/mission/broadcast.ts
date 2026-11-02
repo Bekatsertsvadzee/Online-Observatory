@@ -1,9 +1,16 @@
 import type { AgentCommandAck, AgentStateDelta, Capture } from "@darkview/contracts";
 
-import { TERMINAL_MISSION_STATES, type LinkStore } from "@/link/store";
+import {
+  TERMINAL_MISSION_STATES,
+  type LinkStore,
+  type MissionLiveContext,
+  type SessionEndedRecord,
+} from "@/link/store";
+import { bookedSessionTelemetry } from "@/mission/booked-session";
 import {
   missionCaptureReady,
   missionCommandResult,
+  missionSessionEnded,
   missionStateUpdate,
   missionTelemetryUpdate,
   missionFrameInfo,
@@ -24,11 +31,23 @@ import type { LiveFrameSink } from "@/stream/live-stream";
  */
 export interface MissionBroadcast {
   missionMoved(snapshot: MissionSnapshot): void;
-  telemetryReported(missionId: string, delta: AgentStateDelta): void;
+  telemetryReported(missionId: string, delta: AgentStateDelta): Promise<void>;
   commandAnswered(ack: AgentCommandAck): Promise<void>;
   liveFrameArrived(frame: LiveFrame, detail: LiveFrameDetail): void;
   captureRecorded(capture: Capture): void;
+  sessionEnded(record: SessionEndedRecord): void;
 }
+
+/**
+ * How long one read of a mission's booked-session facts serves its telemetry.
+ *
+ * Telemetry arrives several times a second; the facts behind the dwell and the
+ * cooldown change a few times a session, and each change that passes through this
+ * service -- a verdict, a transition, a capture -- drops the cached read at once. The
+ * one that does not is a CAPTURE minted by the API, which this bounds to a few
+ * seconds of a stale "capture allowed".
+ */
+export const LIVE_CONTEXT_TTL_MS = 5_000;
 
 /**
  * The live implementation: agent events out to whoever is subscribed.
@@ -52,9 +71,16 @@ export class MissionRelay implements MissionBroadcast {
      * observatory's to send; this decides who sees it.
      */
     private readonly frames: LiveFrameSink,
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
+  private readonly contexts = new Map<
+    string,
+    { context: MissionLiveContext | null; loadedAt: number }
+  >();
+
   missionMoved(snapshot: MissionSnapshot): void {
+    this.contexts.delete(snapshot.missionId);
     this.registry.broadcast(snapshot.missionId, missionStateUpdate(snapshot));
 
     // A finished mission produces no more frames, so the last one it produced is
@@ -103,11 +129,47 @@ export class MissionRelay implements MissionBroadcast {
    * grants the mission's own user and nobody else.
    */
   captureRecorded(capture: Capture): void {
+    this.contexts.delete(capture.missionId);
     this.registry.broadcast(capture.missionId, missionCaptureReady(capture));
   }
 
-  telemetryReported(missionId: string, delta: AgentStateDelta): void {
-    this.registry.broadcast(missionId, missionTelemetryUpdate(missionId, delta));
+  /**
+   * One telemetry sample, narrowed, with the booked session's fields (ADR-079).
+   *
+   * Nobody watching, nothing read: the facts are loaded only for a mission somebody
+   * is subscribed to, and then at most once per LIVE_CONTEXT_TTL_MS.
+   */
+  async telemetryReported(missionId: string, delta: AgentStateDelta): Promise<void> {
+    if (this.registry.subscribers(missionId).length === 0) return;
+
+    const now = this.now();
+    const context = await this.liveContext(missionId, now);
+    const session = bookedSessionTelemetry(context, {
+      imageHealth: delta.imageHealth ?? null,
+      parked: delta.telemetry.parked === true,
+      now,
+    });
+    this.registry.broadcast(missionId, missionTelemetryUpdate(missionId, delta, session));
+  }
+
+  /** The session is over: told once, by whoever ended it (ADR-079 §6). */
+  sessionEnded(record: SessionEndedRecord): void {
+    this.contexts.delete(record.missionId);
+    this.registry.broadcast(record.missionId, missionSessionEnded(record));
+  }
+
+  private async liveContext(missionId: string, now: Date) {
+    const cached = this.contexts.get(missionId);
+    if (cached && now.getTime() - cached.loadedAt < LIVE_CONTEXT_TTL_MS) return cached.context;
+
+    // Swept on every fresh read rather than on a timer: an entry for a mission that
+    // stopped reporting is gone the next time any mission reports.
+    for (const [id, entry] of this.contexts) {
+      if (now.getTime() - entry.loadedAt >= LIVE_CONTEXT_TTL_MS) this.contexts.delete(id);
+    }
+    const context = await this.store.loadMissionLiveContext(missionId);
+    this.contexts.set(missionId, { context, loadedAt: now.getTime() });
+    return context;
   }
 
   /**
@@ -122,6 +184,8 @@ export class MissionRelay implements MissionBroadcast {
   async commandAnswered(ack: AgentCommandAck): Promise<void> {
     const command = await this.store.loadCommand(ack.commandId);
     if (!command) return;
+    // A verdict can move the dwell lock (RETARGET) or end a capture's wait.
+    this.contexts.delete(command.envelope.missionId);
 
     this.registry.broadcast(
       command.envelope.missionId,

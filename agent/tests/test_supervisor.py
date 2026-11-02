@@ -62,10 +62,12 @@ def test_a_goto_command_moves_the_simulated_mount():
 
 
 def test_a_mission_runs_from_a_goto_all_the_way_to_a_parked_mount():
-    agent = build_agent(max_altitude_degrees=70.0)
+    # Long enough that the ten frames finish before the session ends (ADR-079 §2).
+    agent = build_agent(max_altitude_degrees=70.0, max_observing_seconds=120.0)
     agent.own()
     agent.command(agent.goto())
 
+    run_to(agent, MissionState.capturing)
     run_to(agent, MissionState.complete)
 
     assert agent.supervisor.runner.frames_captured == 10
@@ -395,7 +397,7 @@ def test_an_absolute_focus_while_observing_moves_the_focuser_and_holds_the_missi
     ack = _focus(agent, "ABSOLUTE", 22000)
     assert ack["status"] == "ACCEPTED"
 
-    # Seven thousand steps is several seconds of travel; observing_seconds is 4.
+    # Seven thousand steps is several seconds of travel; max_observing_seconds is 4.
     agent.advance(4.0)
     assert agent.devices.focuser.status().moving is True
     assert agent.supervisor.runner.state is MissionState.observing
@@ -421,7 +423,8 @@ def test_an_inward_absolute_focus_ends_travelling_outward():
 
 
 def test_autofocus_while_observing_is_accepted_and_finishes_before_capturing():
-    agent = build_agent(max_altitude_degrees=70.0)
+    # The autofocus run outlasts the short default session.
+    agent = build_agent(max_altitude_degrees=70.0, max_observing_seconds=900.0)
     agent.own()
     agent.command(agent.goto())
     run_to(agent, MissionState.observing)
@@ -980,7 +983,7 @@ def test_the_correction_is_bounded():
 def test_the_live_view_runs_while_observing_and_a_nudge_restarts_its_stack():
     """#199. Frames reach the link for the whole of OBSERVING, a stack that climbs, and
     a nudge starts it again rather than averaging two fields into one picture."""
-    agent = build_agent(max_altitude_degrees=70.0, observing_seconds=120.0)
+    agent = build_agent(max_altitude_degrees=70.0, max_observing_seconds=120.0)
     agent.own()
     agent.command(agent.goto())
     run_to(agent, MissionState.observing)
@@ -988,7 +991,8 @@ def test_the_live_view_runs_while_observing_and_a_nudge_restarts_its_stack():
 
     agent.advance(20.0, steps=40)
     observing = agent.sent("AGENT_LIVE_FRAME")[before:]
-    stacked = [frame["stackedFrames"] for frame in observing]
+    # Auto exposure opens OBSERVING with a few unstacked frames (ADR-080 §5).
+    stacked = [frame["stackedFrames"] for frame in observing if frame["stackedFrames"] is not None]
     assert len(observing) >= 5
     assert stacked == sorted(stacked) and stacked[-1] >= 5
     assert all(frame["exposureMilliseconds"] > 0 for frame in observing)

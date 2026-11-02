@@ -1918,6 +1918,15 @@ paths:
         Exactly one active session owner exists at a time, enforced in the cloud and
         again in the agent. Starting a session issues the session identity that every
         subsequent CommandEnvelope must carry.
+
+        Opening the session page inside the booked slot is the start action (ADR-079,
+        amending ADR-018 §1): the client calls this on every open and every reload of
+        that page while `now` is inside the slot, with no button. Before the slot the
+        client shows a countdown and does not call it; after the slot it does not call
+        it. On a SCHEDULED mission it starts the mission (ADR-018); on a live mission it
+        rotates the session, so a reload never restarts anything. A refusal leaves the
+        client free to call again later in the slot (ADR-018 §2). `expiresAt` is the
+        slot's end, and the mission observes until then.
       parameters:
         - $ref: "#/components/parameters/MissionId"
       responses:
@@ -1944,6 +1953,36 @@ paths:
         sessionId, userId, issuedAt and expiresAt are all set by the cloud. The cloud
         validates ownership, expiry and the safety envelope, then relays the envelope to
         the agent, which validates it again independently and may refuse it.
+
+        A booked session (ADR-079) adds these in-slot rules, checked by the cloud in this
+        order and refused with 409 and the ErrorCode named:
+
+        RETARGET (body `retarget.targetId`):
+          1. mission not OBSERVING -> MISSION_BUSY
+          2. less than 300 s until the session's end -> SESSION_ENDING
+          3. target is the current target -> CONFLICT
+          4. now < `retargetAllowedAt` (600 s minimum dwell) -> DWELL_LOCKED, with
+             `details.allowedAt`. The lock is waived while the agent reports
+             `imageHealth.status` UNRECOVERED, and when the current target leaves
+             `GET /missions/{missionId}/targets` (it is setting).
+          5. target not in `GET /missions/{missionId}/targets` at this instant ->
+             TARGET_NOT_OBSERVABLE, with `details.blockReasons`
+          6. the existing pointing pre-check on the target's coordinates now ->
+             SAFETY_REFUSED
+          Accepted, the cloud mints a RETARGET envelope (RetargetPayload) for the agent.
+          The agent applies its own dwell lock and envelope and may still refuse it
+          (DWELL_LOCKED, MISSION_BUSY, SAFETY_*).
+
+        CAPTURE (repeatable while the session runs):
+          1. a CAPTURE for this mission is RECEIVED/ACCEPTED and not yet finished, or the
+             mission is CAPTURING or PROCESSING -> CAPTURE_IN_PROGRESS
+          2. less than 30 s since the previous CAPTURE's `issuedAt` -> CAPTURE_COOLDOWN,
+             with `details.allowedAt`
+          3. 50 captures already recorded or in flight -> CAPTURE_LIMIT_REACHED
+          4. less than 60 s until the session's end -> SESSION_ENDING
+
+        RECENTER returns to the CURRENT target (`Mission.currentTargetId`), not the
+        booked one, and never resets the dwell lock.
       parameters:
         - $ref: "#/components/parameters/MissionId"
       requestBody:
@@ -1969,6 +2008,50 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
+
+  /missions/{missionId}/targets:
+    get:
+      operationId: listMissionTargets
+      tags: [missions, targets]
+      summary: The objects a live session may switch to right now.
+      description: |
+        ADR-079. The "visible now" list a session owner picks a RETARGET from. Computed
+        at request time, never cached, with the same ephemeris and the same rules as
+        `GET /targets/visibility` uses for booking: altitude above the target's
+        `minAltitudeDegrees` and the envelope's minimum, below the MEASURED maximum,
+        outside the horizon mask and forbidden azimuth sectors, outside the Sun
+        exclusion, the Sun below the daylight limit, Moon separation, and fitting the
+        field.
+
+        The window judged is from `evaluatedAt` to `windowEndsAt` =
+        min(session end, evaluatedAt + 600 s): a target is listed only when it passes
+        at the window's start, every five minutes after it, and at its end -- so an
+        object chosen now stays up for the whole 10-minute dwell, or for what is left
+        of the slot when that is shorter. `expectedMissionMinutes` is not applied.
+
+        Only observable, enabled targets are listed, ranked by the same rule that picks
+        "Best in the sky" at booking (clients ADR-063), so `items[0]` is that rule's
+        choice. The current target is included, flagged `current: true`, when it still
+        passes; when it does not, it is setting, and the dwell lock is waived.
+
+        Owner only, as `GET /missions/{missionId}`: anyone else gets 404. 409
+        MISSION_NOT_ACTIVE when the mission is not in a live state. With an unmeasured
+        envelope the list is empty, because nothing may be slewed to.
+      parameters:
+        - $ref: "#/components/parameters/MissionId"
+      responses:
+        "200":
+          description: The targets observable now, best first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MissionTargetList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /missions/{missionId}/broadcast:
     patch:
@@ -3315,6 +3398,30 @@ components:
         - SAFETY_NOT_CONFIGURED
         - RATE_LIMITED
         - INTERNAL
+        - MISSION_BUSY
+        - DWELL_LOCKED
+        - CAPTURE_IN_PROGRESS
+        - CAPTURE_COOLDOWN
+        - CAPTURE_LIMIT_REACHED
+        - SESSION_ENDING
+      description: |
+        Stable machine-readable refusal codes. Client copy is localised from these.
+
+        The last six are a booked session's in-slot refusals (ADR-079), answered by
+        `POST /missions/{missionId}/command` with 409. Each carries
+        `details.rejectionReason` (the CommandRejectionReason of the same name) and,
+        where a wait would make the command acceptable, `details.allowedAt`:
+          - MISSION_BUSY: the mission is not OBSERVING (it is slewing, verifying,
+            centring, capturing or processing). RETARGET waits for OBSERVING.
+          - DWELL_LOCKED: the current object has been held for less than the
+            600-second minimum dwell. `details.allowedAt` is `retargetAllowedAt`.
+          - CAPTURE_IN_PROGRESS: a CAPTURE is already running or awaiting the agent's
+            verdict. One capture at a time.
+          - CAPTURE_COOLDOWN: less than 30 seconds since the previous CAPTURE was
+            issued. `details.allowedAt` is `captureAllowedAt`.
+          - CAPTURE_LIMIT_REACHED: the mission already holds 50 captures.
+          - SESSION_ENDING: too little of the slot remains -- under 300 seconds for
+            RETARGET, under 60 seconds for CAPTURE.
 
     ApiError:
       type: object
@@ -3849,6 +3956,79 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SlotTarget"
+
+    MissionTargetOption:
+      type: object
+      description: One object a live session may RETARGET to now (ADR-079).
+      additionalProperties: false
+      required: [target, visibility, observableUntil, current]
+      properties:
+        target:
+          $ref: "#/components/schemas/Target"
+        visibility:
+          $ref: "#/components/schemas/SlotVisibility"
+          description: |
+            The target judged across the dwell window, `evaluatedAt` to `windowEndsAt`.
+            Always observable here: a target that is not is not listed.
+        observableUntil:
+          type: string
+          format: date-time
+          description: |
+            The last five-minute step, at or before the session's end, up to which the
+            target still passes every rule. Equal to the session's end when it stays up
+            for the whole slot. The client may show "sets at" from it.
+        current:
+          type: boolean
+          description: True for the target the session is on now (`Mission.currentTargetId`).
+
+    MissionTargetList:
+      type: object
+      description: |
+        `GET /missions/{missionId}/targets` (ADR-079). What the session owner may switch
+        to at `evaluatedAt`, best first, and when they may.
+      additionalProperties: false
+      required:
+        [
+          missionId,
+          observatoryId,
+          evaluatedAt,
+          windowEndsAt,
+          sessionEndsAt,
+          currentTargetId,
+          retargetAllowedAt,
+          items,
+        ]
+      properties:
+        missionId:
+          type: string
+          format: uuid
+        observatoryId:
+          type: string
+          format: uuid
+        evaluatedAt:
+          type: string
+          format: date-time
+        windowEndsAt:
+          type: string
+          format: date-time
+          description: min(sessionEndsAt, evaluatedAt + 600 s), the end of the window every item passes across.
+        sessionEndsAt:
+          type: string
+          format: date-time
+        currentTargetId:
+          type: [string, "null"]
+          format: uuid
+        retargetAllowedAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            As `Mission.retargetAllowedAt`, with the waivers already applied: null when a
+            RETARGET would not be dwell-locked now (the lock has passed, the agent reports
+            UNRECOVERED, or the current target is no longer listed).
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MissionTargetOption"
 
     WeekVoteCandidate:
       type: object
@@ -5735,6 +5915,15 @@ components:
         are not states -- "Target locked" and "LIVE" are display labels mapped in the
         web layer. Its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as
         MissionFailureReason detail on a state above, never as states.
+
+        A booked session runs for its whole slot (ADR-079), which adds transitions and
+        no state: PROCESSING -> OBSERVING after each capture while the slot runs;
+        OBSERVING -> SLEWING for a RETARGET; OBSERVING -> COMPLETE at the slot's end
+        with no capture in flight. A capture in flight at the slot's end is finished
+        early through CAPTURING -> PROCESSING -> COMPLETE with the frames already
+        stacked. Parking after COMPLETE is not a state: see MissionEndPhase. For a
+        LUNAR or PLANETARY imaging profile, VERIFYING measures the bright disc's
+        centroid instead of plate-solving (ADR-080).
       enum:
         - REQUESTED
         - SCHEDULED
@@ -5799,6 +5988,29 @@ components:
         targetId:
           type: string
           format: uuid
+          description: The booked target -- the first object of the session. A RETARGET never changes it.
+        currentTargetId:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            ADR-079. The target the session is on now, or switching to: set to the
+            RETARGET's target when the agent ACCEPTS that command, and to `targetId` when
+            the mission starts. Null only on a mission that never started. RECENTER
+            returns here.
+        sessionEndsAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            ADR-079. When the session ends and the telescope parks: the booked slot's end,
+            the `expiresAt` of the session. Null when there is no booking and no session.
+        retargetAllowedAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            ADR-079. The dwell lock: the first instant a RETARGET is accepted, equal to the
+            time the agent ACCEPTED the GOTO or RETARGET that put the mount on the current
+            target plus 600 seconds. Null when no session is live. A value in the past
+            means unlocked. Not moved by RECENTER, NUDGE or the agent's own re-centring.
         observatoryId:
           type: string
           format: uuid
@@ -5824,6 +6036,7 @@ components:
           format: date-time
         captureIds:
           type: array
+          description: Every capture the mission produced, oldest first. A booked session may hold up to 50 (ADR-079).
           items:
             type: string
             format: uuid
@@ -6034,6 +6247,7 @@ components:
           format: uuid
         target:
           type: object
+          description: The object on the telescope now (`Mission.currentTargetId`), which a RETARGET changes (ADR-079).
           additionalProperties: false
           required: [slug, nameEn, nameKa, type]
           properties:
@@ -6210,6 +6424,7 @@ components:
         - ABORT
         - PARK
         - SET_PROFILE
+        - RETARGET
 
     ClientCommandType:
       type: string
@@ -6217,12 +6432,19 @@ components:
         What a customer may ask for during a live observation. GOTO, FOCUS, PARK and
         SET_PROFILE are never client-initiated: the target comes from the booking and
         the rest are cloud or operator concerns. RECENTER is translated by the cloud
-        into a GOTO back to the booked target; it is not a free-form slew.
+        into a GOTO back to the current target (`Mission.currentTargetId`, the booked
+        target until a RETARGET); it is not a free-form slew.
+
+        RETARGET (ADR-079) names a catalogue target id from
+        `GET /missions/{missionId}/targets`, never coordinates. The cloud looks the
+        target up, computes its coordinates now and mints a RETARGET envelope; the
+        client never chooses where the mount points.
       enum:
         - NUDGE
         - CAPTURE
         - RECENTER
         - ABORT
+        - RETARGET
 
     NudgeAxis:
       type: string
@@ -6299,6 +6521,11 @@ components:
       description: |
         Phase 1 capture is a short-exposure / live-stacking run, not a long exposure.
         The requested integration is bounded by the imaging profile.
+
+        A booked session may capture many times (ADR-079): one CAPTURE at a time, at
+        least 30 seconds between successive CAPTUREs' `issuedAt`, at most 50 per
+        mission, none in the last 60 seconds of the slot. Each CAPTURE is its own
+        command id and therefore its own upload grants and its own `Capture`.
       additionalProperties: false
       required: [kind, imagingProfile]
       properties:
@@ -6375,6 +6602,55 @@ components:
             - $ref: "#/components/schemas/RegionOfInterest"
             - type: "null"
 
+    RetargetPayload:
+      type: object
+      description: |
+        ADR-079. Move a live session to another catalogue object. Minted only by the
+        cloud from a client RETARGET whose target was in `GET /missions/{missionId}/targets`;
+        the coordinates are the cloud's, computed at mint time (an EPHEMERIS target's
+        position now).
+
+        The agent accepts it only while the mission is OBSERVING (else MISSION_BUSY),
+        no capture is running (else CAPTURE_IN_PROGRESS), at least 300 s of the session
+        remain (else SESSION_ENDING), the coordinates pass its own envelope (else the
+        SAFETY_ reason), and its own dwell lock has passed: 600 s since it ACCEPTED the
+        GOTO or RETARGET that put the mount on the current target, with 15 s of
+        tolerance for clock skew (else DWELL_LOCKED). It waives its lock while its own
+        image health is UNRECOVERED.
+
+        Accepted, it resets the nudge offset and the live stack, starts a new dwell
+        lock, and moves the mission OBSERVING -> SLEWING -> VERIFYING -> CENTERING ->
+        OBSERVING exactly as the first acquisition. A solve or centring failure on a
+        retargeted object does not fail the mission: it returns to OBSERVING with image
+        health UNRECOVERED (ADR-080). `imagingProfile` sets the auto-exposure scene and,
+        for LUNAR or PLANETARY, centroid centring instead of plate solving.
+      additionalProperties: false
+      required: [kind, targetId, coordinates, opticalConfig, imagingProfile]
+      properties:
+        kind:
+          type: string
+          enum: [RETARGET]
+        targetId:
+          type: string
+          format: uuid
+        coordinates:
+          $ref: "#/components/schemas/EquatorialCoordinates"
+        opticalConfig:
+          $ref: "#/components/schemas/OpticalConfig"
+        imagingProfile:
+          $ref: "#/components/schemas/ImagingProfile"
+
+    RetargetRequest:
+      type: object
+      description: The client's RETARGET intent. A catalogue target id only (ADR-079).
+      additionalProperties: false
+      required: [targetId]
+      properties:
+        targetId:
+          type: string
+          format: uuid
+          description: A `target.id` from `GET /missions/{missionId}/targets`.
+
     CommandPayload:
       description: |
         Discriminated by `kind`. `payload.kind` MUST equal the envelope's `type`; both
@@ -6387,6 +6663,7 @@ components:
         - $ref: "#/components/schemas/AbortPayload"
         - $ref: "#/components/schemas/ParkPayload"
         - $ref: "#/components/schemas/SetProfilePayload"
+        - $ref: "#/components/schemas/RetargetPayload"
       discriminator:
         propertyName: kind
         mapping:
@@ -6397,6 +6674,7 @@ components:
           ABORT: "#/components/schemas/AbortPayload"
           PARK: "#/components/schemas/ParkPayload"
           SET_PROFILE: "#/components/schemas/SetProfilePayload"
+          RETARGET: "#/components/schemas/RetargetPayload"
 
     CommandEnvelope:
       type: object
@@ -6468,6 +6746,11 @@ components:
           oneOf:
             - $ref: "#/components/schemas/CapturePayload"
             - type: "null"
+        retarget:
+          oneOf:
+            - $ref: "#/components/schemas/RetargetRequest"
+            - type: "null"
+          description: Required when type is RETARGET; 422 VALIDATION_FAILED without it.
         reason:
           type: [string, "null"]
 
@@ -6481,6 +6764,12 @@ components:
         Why a command was refused. The SAFETY_ prefixed values are produced by the
         agent's own envelope check and may occur even when the cloud approved the
         command; that is the design, not a bug.
+
+        The last seven are a booked session's in-slot rules (ADR-079); the ErrorCode of
+        the same name describes each. TARGET_NOT_VISIBLE_NOW is the cloud's only: the
+        target was not in `GET /missions/{missionId}/targets` (ErrorCode
+        TARGET_NOT_OBSERVABLE). The agent produces MISSION_BUSY, DWELL_LOCKED,
+        CAPTURE_IN_PROGRESS and SESSION_ENDING from its own state and clock.
       enum:
         - DUPLICATE_COMMAND_ID
         - COMMAND_EXPIRED
@@ -6506,6 +6795,13 @@ components:
         - WEATHER_HOLD_ACTIVE
         - OBSERVATORY_OFFLINE
         - UNATTENDED_DISARMED
+        - MISSION_BUSY
+        - DWELL_LOCKED
+        - TARGET_NOT_VISIBLE_NOW
+        - CAPTURE_IN_PROGRESS
+        - CAPTURE_COOLDOWN
+        - CAPTURE_LIMIT_REACHED
+        - SESSION_ENDING
 
     MissionCommandAccepted:
       type: object
@@ -6610,6 +6906,7 @@ components:
         targetId:
           type: string
           format: uuid
+          description: The object this capture shows -- the session's current target when it ran, which after a RETARGET is not the booked one (ADR-079).
         capturedAt:
           type: string
           format: date-time
@@ -7327,6 +7624,111 @@ components:
         detail:
           type: [string, "null"]
 
+    ImageHealthStatus:
+      type: string
+      description: |
+        ADR-080. What the agent's watchdog on its own live frames concludes, while a
+        mission is OBSERVING. Display copy is the client's (e.g. "Re-centring the
+        object", "Clouds over the telescope -- waiting for a gap").
+          - OK: the picture passes every check.
+          - RECOVERING: a check failed and the recovery ladder is running a step.
+          - WAITING: the sky is cloudy (`reason` CLOUDS). The agent holds on the target,
+            tracking, live view running, and retries the ladder at `nextRetryAt`
+            (every 120 s). It never slews to look for a gap.
+          - UNRECOVERED: the ladder gave up on this object. The live view continues,
+            no further automatic slews are made on it, the dwell lock is waived so the
+            customer may switch, and a re-check (re-expose and solve, no blind slew)
+            runs every 300 s. A RETARGET or RECENTER re-arms the ladder.
+      enum: [OK, RECOVERING, WAITING, UNRECOVERED]
+
+    ImageHealthReason:
+      type: string
+      description: |
+        ADR-080. Why the picture is not OK, judged on three consecutive live frames
+        (and at least 10 s) before it is reported, from the frame statistics of
+        ADR-080 §2.
+          - BLANK_FRAME: a flat frame -- nothing above the background (dark, capped or
+            uniform).
+          - NO_STARS: a deep-sky or star frame with sky background but fewer than three
+            stars detected, and the background not raised.
+          - OFF_CENTRE: the object has drifted from the frame centre beyond the limit
+            (plate-solved offset for deep sky, disc centroid for Moon and planets), or
+            the disc is not in the frame at all.
+          - CLOUDS: the star count fell below 30% of the count at acquisition while the
+            background rose to 1.5x or more, or a Moon or planet disc lost more than 60%
+            of its peak at the same exposure and gain, or a fitted sky sensor reports
+            cloud.
+          - OVEREXPOSED: more than 25% of the frame clipped, or for a Moon or planet a
+            blown-out disc.
+      enum: [NO_STARS, BLANK_FRAME, OFF_CENTRE, CLOUDS, OVEREXPOSED]
+
+    RecoveryStep:
+      type: string
+      description: |
+        ADR-080. The recovery ladder's rungs, in the order tried: RE_EXPOSE (auto
+        exposure for the object type and the picture), RE_SOLVE (plate solve, or disc
+        centroid for Moon and planets), RE_CENTRE (a corrective slew of the solved
+        offset, passing the envelope like any slew), WAIT_FOR_SKY (clouds; hold and
+        retry).
+      enum: [RE_EXPOSE, RE_SOLVE, RE_CENTRE, WAIT_FOR_SKY]
+
+    ImageHealth:
+      type: object
+      description: |
+        ADR-080. The agent's verdict on its live picture. Client-safe: no device
+        identity, exposure detail or address. Sent by the agent on AGENT_STATE_DELTA
+        and relayed unchanged on MISSION_TELEMETRY. Null outside OBSERVING.
+      additionalProperties: false
+      required: [status, since]
+      properties:
+        status:
+          $ref: "#/components/schemas/ImageHealthStatus"
+        reason:
+          oneOf:
+            - $ref: "#/components/schemas/ImageHealthReason"
+            - type: "null"
+          description: Null exactly when status is OK.
+        step:
+          oneOf:
+            - $ref: "#/components/schemas/RecoveryStep"
+            - type: "null"
+          description: The rung running now while RECOVERING; WAIT_FOR_SKY while WAITING; otherwise null.
+        attempt:
+          type: [integer, "null"]
+          minimum: 1
+          description: Which pass of the ladder this is for the current incident (at most two before UNRECOVERED).
+        since:
+          type: string
+          format: date-time
+          description: When the status last changed, on the observatory clock.
+        nextRetryAt:
+          type: [string, "null"]
+          format: date-time
+          description: While WAITING or UNRECOVERED, when the agent next tries; otherwise null.
+
+    MissionEndPhase:
+      type: string
+      description: |
+        ADR-079. How far a booked session's ending has got, derived by the cloud, not a
+        MissionState (ADR-004 adds no state). Null while the session runs.
+          - FINISHING: the slot has ended (or the session was ended) and the mission is
+            still in a live state -- an in-flight capture is being flushed.
+          - PARKING: the mission is terminal and the agent's telemetry does not yet
+            report `parked: true`.
+          - PARKED: the mission is terminal and the agent reports `parked: true`.
+      enum: [FINISHING, PARKING, PARKED]
+
+    SessionEndReason:
+      type: string
+      description: |
+        ADR-079. Why a session ended rather than rotated.
+          - SLOT_ENDED: the booked slot's end was reached.
+          - CUSTOMER_ENDED: the owner aborted.
+          - OPERATOR_ENDED: an operator cancelled or aborted the mission.
+          - WEATHER: a weather hold ended it.
+          - FAULT: a hardware error, a refused start or a lost link ended it.
+      enum: [SLOT_ENDED, CUSTOMER_ENDED, OPERATOR_ENDED, WEATHER, FAULT]
+
     AgentStateDelta:
       type: object
       description: Emitted on the agent control loop. Carries telemetry and, if a mission is held, its state.
@@ -7362,6 +7764,17 @@ components:
         residualArcminutes:
           type: [number, "null"]
           description: Distance between the solved position and the target after the last iteration.
+        currentTargetId:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            ADR-079. The target of the GOTO or RETARGET the agent last accepted for the
+            held mission. The cloud compares it with `Mission.currentTargetId`.
+        imageHealth:
+          oneOf:
+            - $ref: "#/components/schemas/ImageHealth"
+            - type: "null"
+          description: ADR-080. The watchdog's verdict while OBSERVING; null in every other state.
 
     AgentMissionEvent:
       type: object
@@ -7561,6 +7974,13 @@ components:
           type: [integer, "null"]
         heightPx:
           type: [integer, "null"]
+        targetId:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            ADR-079. The target the mount was on when the capture ran. The cloud records
+            the `Capture` against it; when null (an older agent) it uses
+            `Mission.currentTargetId` at the CAPTURE command's issue time.
         mode:
           $ref: "#/components/schemas/ObservatoryMode"
 
@@ -7767,6 +8187,22 @@ components:
         expiresAt:
           type: [string, "null"]
           format: date-time
+          description: |
+            The session's end: for a booked mission, the slot's end. The agent observes
+            until this instant and then ends the mission on its own clock -- flushing an
+            in-flight capture, COMPLETE, Park -- whether or not the cloud says anything
+            (ADR-079).
+        endReason:
+          oneOf:
+            - $ref: "#/components/schemas/SessionEndReason"
+            - type: "null"
+          description: |
+            ADR-079. Set only when `sessionId` is null and the session ENDED rather than
+            rotated. With SLOT_ENDED the agent finishes the mission now (flush any
+            capture, COMPLETE, Park), even if its own clock has not reached `expiresAt`.
+            A null `sessionId` with no `endReason` is a revocation or rotation: the agent
+            stops accepting client commands, and the mission keeps observing until a
+            new owner arrives or `expiresAt` passes.
 
     CloudSafetyEnvelopeUpdate:
       type: object
@@ -8042,6 +8478,35 @@ components:
             Where the mount is pointing, rounded to 0.1°. Null when the agent has not reported
             a position. Sent only on the channel of the mission it belongs to. Read-only: no
             client message addresses the mount, and this field does not change that.
+        currentTargetId:
+          type: [string, "null"]
+          format: uuid
+          description: ADR-079. As `Mission.currentTargetId`.
+        retargetAllowedAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            ADR-079. The dwell lock, as `MissionTargetList.retargetAllowedAt`: null when a
+            RETARGET would not be dwell-locked now. The client counts down to it.
+        captureAllowedAt:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            ADR-079. When the next CAPTURE is accepted: the previous CAPTURE's `issuedAt`
+            plus 30 s, or null when one is accepted now. Null too while one is in
+            progress (the mission state says so) and when the limit is reached.
+        imageHealth:
+          oneOf:
+            - $ref: "#/components/schemas/ImageHealth"
+            - type: "null"
+          description: ADR-080. The agent's latest verdict, relayed unchanged; null outside OBSERVING.
+        endPhase:
+          oneOf:
+            - $ref: "#/components/schemas/MissionEndPhase"
+            - type: "null"
+          description: |
+            ADR-079. Null while the session runs. The cloud keeps sending MISSION_TELEMETRY
+            for a mission after it is terminal until it reports PARKED, or for 300 s.
 
     MissionStreamInfo:
       type: object
@@ -8135,6 +8600,58 @@ components:
         capture:
           $ref: "#/components/schemas/Capture"
 
+    MissionSessionEnded:
+      type: object
+      description: |
+        ADR-079. Sent once per mission on its channel when the session is over: the
+        mission is terminal and the agent reports the mount parked, or 300 s after the
+        mission became terminal without that report (then `parked` is false). Lists every
+        capture the session kept. The client shows the Parked end state and links the
+        Collection.
+      additionalProperties: false
+      required:
+        [type, messageId, sentAt, missionId, state, endReason, endedAt, parked, captureIds, summaryEmailQueued]
+      properties:
+        type:
+          type: string
+          enum: [MISSION_SESSION_ENDED]
+        messageId:
+          type: string
+          format: uuid
+        sentAt:
+          type: string
+          format: date-time
+        missionId:
+          type: string
+          format: uuid
+        state:
+          $ref: "#/components/schemas/MissionState"
+        failureReason:
+          oneOf:
+            - $ref: "#/components/schemas/MissionFailureReason"
+            - type: "null"
+        endReason:
+          $ref: "#/components/schemas/SessionEndReason"
+        endedAt:
+          type: string
+          format: date-time
+          description: The mission's `endedAt`.
+        parked:
+          type: boolean
+          description: True when the agent reported the mount parked; false when the 300 s wait ran out.
+        captureIds:
+          type: array
+          description: Every capture of the mission, oldest first, as `Mission.captureIds`.
+          items:
+            type: string
+            format: uuid
+        summaryEmailQueued:
+          type: boolean
+          description: |
+            True when the session summary email (outbox kind SESSION_SUMMARY) was
+            written for the owner. It is written once per mission that reached OBSERVING,
+            listing every capture and linking the Collection.
+
     MissionCommandResult:
       type: object
       description: The outcome of a command the client submitted over HTTP, delivered asynchronously.
@@ -8192,6 +8709,7 @@ components:
         - $ref: "#/components/schemas/MissionCaptureReady"
         - $ref: "#/components/schemas/MissionCommandResult"
         - $ref: "#/components/schemas/MissionChannelError"
+        - $ref: "#/components/schemas/MissionSessionEnded"
       discriminator:
         propertyName: type
         mapping:
@@ -8202,6 +8720,7 @@ components:
           MISSION_CAPTURE_READY: "#/components/schemas/MissionCaptureReady"
           MISSION_COMMAND_RESULT: "#/components/schemas/MissionCommandResult"
           MISSION_ERROR: "#/components/schemas/MissionChannelError"
+          MISSION_SESSION_ENDED: "#/components/schemas/MissionSessionEnded"
 
     MissionClientSubscribe:
       type: object

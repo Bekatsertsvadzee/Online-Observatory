@@ -368,6 +368,69 @@ and the last step is attended.
    3. **The horizon mask and cable-wrap sectors** from the site compass survey.
    4. **The first attended mission**, with the operator at the mount and able to cut power.
 
+### Dedicated Mac with the serial mount (ADR-076) — **[UNEXERCISED]**
+
+For the hardware test observatory (ADR-074) on a MacBook: mount and focuser over the hand
+controller's PL2303 cable, camera through the ZWO SDK, no ASCOM. Nothing here moves the
+telescope until the attended run at the end.
+
+1. **Python 3.12** and the agent with its hardware extra (zwoasi, pyserial):
+
+   ```sh
+   python3.12 -m venv agent/.venv
+   agent/.venv/bin/pip install -e "agent[hardware]"
+   ```
+
+2. **PL2303 driver.** Install Prolific's macOS driver (PL2303 Serial from the App Store),
+   allow it under System Settings → Privacy & Security, plug in the hand controller cable,
+   and find the port with `ls /dev/cu.PL2303* /dev/cu.usbserial*`. Use the `cu.` device.
+   Quit the `~/telescope` panel first: one program owns the port at a time.
+3. **ZWO SDK.** `libASICamera2.dylib` from the ZWO ASI SDK's `lib/mac` folder (the panel
+   keeps a copy at `~/telescope/libASICamera2.dylib`). Its path is
+   `DARKVIEW_AGENT_ZWO_SDK_PATH`.
+4. **ASTAP** for macOS (hnsky.org/astap.htm) and the D50 database. The command-line binary
+   is `/Applications/ASTAP.app/Contents/MacOS/astap`; set `DARKVIEW_AGENT_ASTAP_PATH` to it,
+   and `DARKVIEW_AGENT_ASTAP_DATABASE_DIR` if the database is elsewhere.
+5. **Pointing model.** Align in the panel (centre a star, Sync; three or more points across
+   the sky), then point the agent at the panel's file or a copy of it. Re-sync after the
+   tripod moves or the mount is power-cycled.
+6. **Settings.** `python -m darkview_agent setup` for the cloud credentials of the hardware
+   test observatory (ADR-074), then add to `~/.darkview/agent.env`:
+
+   ```
+   DARKVIEW_AGENT_MOUNT_DRIVER=NEXSTAR_SERIAL
+   DARKVIEW_AGENT_NEXSTAR_PORT=/dev/cu.PL2303G-USBtoUART110
+   DARKVIEW_AGENT_NEXSTAR_MODEL_PATH=/Users/<you>/telescope/observatory.json
+   DARKVIEW_AGENT_SITE_LATITUDE=<deg N>
+   DARKVIEW_AGENT_SITE_LONGITUDE=<deg E>
+   DARKVIEW_AGENT_ZWO_SDK_PATH=/Users/<you>/telescope/libASICamera2.dylib
+   DARKVIEW_AGENT_ASTAP_PATH=/Applications/ASTAP.app/Contents/MacOS/astap
+   ```
+
+   The focus motor must have been calibrated from the hand controller; an uncalibrated one
+   reports no limits and is refused. `check-devices` checks only the Alpaca path for now and
+   will FAIL its bridge, mount and focuser steps on this Mac; its camera and solve steps
+   still apply.
+7. **Keep the Mac awake.** Power adapter in, lid open or an external display, and run the
+   agent under `caffeinate -dims` so neither the display nor the system sleeps and USB stays
+   powered.
+8. **Starting it.** In a Terminal the operator opened at the telescope:
+
+   ```sh
+   export DARKVIEW_AGENT_DRIVER_MODE=REAL
+   export DARKVIEW_AGENT_ATTENDED=1
+   caffeinate -dims agent/.venv/bin/python -m darkview_agent
+   ```
+
+   **Not at login.** A launchd agent or login item may start the agent only in SIMULATED
+   mode: REAL and ATTENDED are refused from a file, and must never go in a plist's
+   `EnvironmentVariables`, for the same reason they are never in a Windows service. A
+   LaunchAgent that keeps the Mac awake (`caffeinate -dims` alone, `RunAtLoad`) is fine.
+9. **Order of first use** is as for the mini-PC: §5's MAX_ALT_SAFE measurement, the horizon
+   survey, then the first attended mission through the operator console's *Test mission*
+   on the hardware test observatory (ADR-075). The emergency stop is the person at the
+   mount: Park, Ctrl-C (the agent parks on the way out), then the mount's power.
+
 ## 4. Bringing it down
 
 ```

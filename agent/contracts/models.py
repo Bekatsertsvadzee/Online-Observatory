@@ -30,6 +30,26 @@ class UserRole(StrEnum):
 
 
 class ErrorCode(StrEnum):
+    """
+    Stable machine-readable refusal codes. Client copy is localised from these.
+
+    The last six are a booked session's in-slot refusals (ADR-079), answered by
+    `POST /missions/{missionId}/command` with 409. Each carries
+    `details.rejectionReason` (the CommandRejectionReason of the same name) and,
+    where a wait would make the command acceptable, `details.allowedAt`:
+      - MISSION_BUSY: the mission is not OBSERVING (it is slewing, verifying,
+        centring, capturing or processing). RETARGET waits for OBSERVING.
+      - DWELL_LOCKED: the current object has been held for less than the
+        600-second minimum dwell. `details.allowedAt` is `retargetAllowedAt`.
+      - CAPTURE_IN_PROGRESS: a CAPTURE is already running or awaiting the agent's
+        verdict. One capture at a time.
+      - CAPTURE_COOLDOWN: less than 30 seconds since the previous CAPTURE was
+        issued. `details.allowedAt` is `captureAllowedAt`.
+      - CAPTURE_LIMIT_REACHED: the mission already holds 50 captures.
+      - SESSION_ENDING: too little of the slot remains -- under 300 seconds for
+        RETARGET, under 60 seconds for CAPTURE.
+
+    """
     bad_request = 'BAD_REQUEST'
     unauthenticated = 'UNAUTHENTICATED'
     forbidden = 'FORBIDDEN'
@@ -56,6 +76,12 @@ class ErrorCode(StrEnum):
     safety_not_configured = 'SAFETY_NOT_CONFIGURED'
     rate_limited = 'RATE_LIMITED'
     internal = 'INTERNAL'
+    mission_busy = 'MISSION_BUSY'
+    dwell_locked = 'DWELL_LOCKED'
+    capture_in_progress = 'CAPTURE_IN_PROGRESS'
+    capture_cooldown = 'CAPTURE_COOLDOWN'
+    capture_limit_reached = 'CAPTURE_LIMIT_REACHED'
+    session_ending = 'SESSION_ENDING'
 
 
 class ApiError(BaseModel):
@@ -407,6 +433,38 @@ class SlotTargetList(BaseModel):
     start_at: AwareDatetime = Field(..., alias='startAt')
     duration_minutes: int = Field(..., alias='durationMinutes', gt=0)
     items: list[SlotTarget]
+
+
+class MissionTargetOption(BaseModel):
+    """
+    One object a live session may RETARGET to now (ADR-079).
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    target: Target
+    visibility: SlotVisibility = Field(..., description='The target judged across the dwell window, `evaluatedAt` to `windowEndsAt`.\nAlways observable here: a target that is not is not listed.\n')
+    observable_until: AwareDatetime = Field(..., alias='observableUntil', description='The last five-minute step, at or before the session\'s end, up to which the\ntarget still passes every rule. Equal to the session\'s end when it stays up\nfor the whole slot. The client may show "sets at" from it.\n')
+    current: bool = Field(..., description='True for the target the session is on now (`Mission.currentTargetId`).')
+
+
+class MissionTargetList(BaseModel):
+    """
+    `GET /missions/{missionId}/targets` (ADR-079). What the session owner may switch
+    to at `evaluatedAt`, best first, and when they may.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    mission_id: UUID = Field(..., alias='missionId')
+    observatory_id: UUID = Field(..., alias='observatoryId')
+    evaluated_at: AwareDatetime = Field(..., alias='evaluatedAt')
+    window_ends_at: AwareDatetime = Field(..., alias='windowEndsAt', description='min(sessionEndsAt, evaluatedAt + 600 s), the end of the window every item passes across.')
+    session_ends_at: AwareDatetime = Field(..., alias='sessionEndsAt')
+    current_target_id: UUID | None = Field(..., alias='currentTargetId')
+    retarget_allowed_at: AwareDatetime | None = Field(..., alias='retargetAllowedAt', description='As `Mission.retargetAllowedAt`, with the waivers already applied: null when a\nRETARGET would not be dwell-locked now (the lock has passed, the agent reports\nUNRECOVERED, or the current target is no longer listed).\n')
+    items: list[MissionTargetOption]
 
 
 class WeekVoteCandidate(BaseModel):
@@ -1348,6 +1406,15 @@ class MissionState(StrEnum):
     web layer. Its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as
     MissionFailureReason detail on a state above, never as states.
 
+    A booked session runs for its whole slot (ADR-079), which adds transitions and
+    no state: PROCESSING -> OBSERVING after each capture while the slot runs;
+    OBSERVING -> SLEWING for a RETARGET; OBSERVING -> COMPLETE at the slot's end
+    with no capture in flight. A capture in flight at the slot's end is finished
+    early through CAPTURING -> PROCESSING -> COMPLETE with the frames already
+    stacked. Parking after COMPLETE is not a state: see MissionEndPhase. For a
+    LUNAR or PLANETARY imaging profile, VERIFYING measures the bright disc's
+    centroid instead of plate-solving (ADR-080).
+
     """
     requested = 'REQUESTED'
     scheduled = 'SCHEDULED'
@@ -1399,7 +1466,10 @@ class Mission(BaseModel):
     id: UUID
     user_id: UUID = Field(..., alias='userId')
     booking_id: UUID | None = Field(..., alias='bookingId', description='The booking this mission was sold from, or null. Required so it is always\nstated, nullable because not every mission is sold: an operator mission and\na demo mission have no booking, and inventing one for them would put a\nfiction in the payment tables.\n')
-    target_id: UUID = Field(..., alias='targetId')
+    target_id: UUID = Field(..., alias='targetId', description='The booked target -- the first object of the session. A RETARGET never changes it.')
+    current_target_id: UUID | None = Field(None, alias='currentTargetId', description="ADR-079. The target the session is on now, or switching to: set to the\nRETARGET's target when the agent ACCEPTS that command, and to `targetId` when\nthe mission starts. Null only on a mission that never started. RECENTER\nreturns here.\n")
+    session_ends_at: AwareDatetime | None = Field(None, alias='sessionEndsAt', description="ADR-079. When the session ends and the telescope parks: the booked slot's end,\nthe `expiresAt` of the session. Null when there is no booking and no session.\n")
+    retarget_allowed_at: AwareDatetime | None = Field(None, alias='retargetAllowedAt', description="ADR-079. The dwell lock: the first instant a RETARGET is accepted, equal to the\ntime the agent ACCEPTED the GOTO or RETARGET that put the mount on the current\ntarget plus 600 seconds. Null when no session is live. A value in the past\nmeans unlocked. Not moved by RECENTER, NUDGE or the agent's own re-centring.\n")
     observatory_id: UUID = Field(..., alias='observatoryId')
     state: MissionState
     failure_reason: MissionFailureReason | None = Field(None, alias='failureReason')
@@ -1408,7 +1478,7 @@ class Mission(BaseModel):
     requested_at: AwareDatetime = Field(..., alias='requestedAt')
     started_at: AwareDatetime | None = Field(None, alias='startedAt')
     ended_at: AwareDatetime | None = Field(None, alias='endedAt')
-    capture_ids: list[UUID] | None = Field(None, alias='captureIds')
+    capture_ids: list[UUID] | None = Field(None, alias='captureIds', description='Every capture the mission produced, oldest first. A booked session may hold up to 50 (ADR-079).')
     observable: bool | None = Field(False, description='Whether the controller has opted this session in to being observed. Sessions\nare PRIVATE by default (ADR-007). Only the session owner may change it.\n')
     broadcast: bool | None = Field(False, description='Clients ADR-066. Whether the owner has opened this session to anyone on\nTonight, live (`GET /tonight`). Off by default; only the owner changes it,\nwith `PATCH /missions/{missionId}/broadcast`. Separate from `observable`,\nwhich is a paid seat for a signed-in customer.\n')
     observer_capacity: int | None = Field(10, alias='observerCapacity', description='Hard server-side cap on concurrent observers. Never exceeds 10 (ADR-007 as\namended by ADR-036).\n', ge=0, le=10)
@@ -1512,6 +1582,9 @@ class MissionBroadcastSettings(BaseModel):
 
 
 class Target1(BaseModel):
+    """
+    The object on the telescope now (`Mission.currentTargetId`), which a RETARGET changes (ADR-079).
+    """
     model_config = ConfigDict(
         extra='forbid',
     )
@@ -1527,7 +1600,7 @@ class TonightSession(BaseModel):
     )
     mission_id: UUID = Field(..., alias='missionId')
     observatory_id: UUID = Field(..., alias='observatoryId')
-    target: Target1
+    target: Target1 = Field(..., description='The object on the telescope now (`Mission.currentTargetId`), which a RETARGET changes (ADR-079).')
     state: MissionState
     mode: ObservatoryMode = Field(..., description="A SIMULATED session's view is badged Simulated wherever it is shown.")
     ends_at: AwareDatetime | None = Field(..., alias='endsAt', description='When the booked slot ends; null for a session with no booking.')
@@ -1591,6 +1664,7 @@ class CommandType(StrEnum):
     abort = 'ABORT'
     park = 'PARK'
     set_profile = 'SET_PROFILE'
+    retarget = 'RETARGET'
 
 
 class ClientCommandType(StrEnum):
@@ -1598,13 +1672,20 @@ class ClientCommandType(StrEnum):
     What a customer may ask for during a live observation. GOTO, FOCUS, PARK and
     SET_PROFILE are never client-initiated: the target comes from the booking and
     the rest are cloud or operator concerns. RECENTER is translated by the cloud
-    into a GOTO back to the booked target; it is not a free-form slew.
+    into a GOTO back to the current target (`Mission.currentTargetId`, the booked
+    target until a RETARGET); it is not a free-form slew.
+
+    RETARGET (ADR-079) names a catalogue target id from
+    `GET /missions/{missionId}/targets`, never coordinates. The cloud looks the
+    target up, computes its coordinates now and mints a RETARGET envelope; the
+    client never chooses where the mount points.
 
     """
     nudge = 'NUDGE'
     capture = 'CAPTURE'
     recenter = 'RECENTER'
     abort = 'ABORT'
+    retarget = 'RETARGET'
 
 
 class NudgeAxis(StrEnum):
@@ -1662,6 +1743,11 @@ class CapturePayload(BaseModel):
     Phase 1 capture is a short-exposure / live-stacking run, not a long exposure.
     The requested integration is bounded by the imaging profile.
 
+    A booked session may capture many times (ADR-079): one CAPTURE at a time, at
+    least 30 seconds between successive CAPTUREs' `issuedAt`, at most 50 per
+    mission, none in the last 60 seconds of the slot. Each CAPTURE is its own
+    command id and therefore its own upload grants and its own `Capture`.
+
     """
     model_config = ConfigDict(
         extra='forbid',
@@ -1711,8 +1797,51 @@ class SetProfilePayload(BaseModel):
     region_of_interest: RegionOfInterest | None = Field(None, alias='regionOfInterest')
 
 
-class CommandPayload(RootModel[GotoPayload | NudgePayload | CapturePayload | FocusPayload | AbortPayload | ParkPayload | SetProfilePayload]):
-    root: GotoPayload | NudgePayload | CapturePayload | FocusPayload | AbortPayload | ParkPayload | SetProfilePayload = Field(..., description="Discriminated by `kind`. `payload.kind` MUST equal the envelope's `type`; both\nthe cloud and the agent reject an envelope where they disagree.\n", discriminator='kind')
+class RetargetPayload(BaseModel):
+    """
+    ADR-079. Move a live session to another catalogue object. Minted only by the
+    cloud from a client RETARGET whose target was in `GET /missions/{missionId}/targets`;
+    the coordinates are the cloud's, computed at mint time (an EPHEMERIS target's
+    position now).
+
+    The agent accepts it only while the mission is OBSERVING (else MISSION_BUSY),
+    no capture is running (else CAPTURE_IN_PROGRESS), at least 300 s of the session
+    remain (else SESSION_ENDING), the coordinates pass its own envelope (else the
+    SAFETY_ reason), and its own dwell lock has passed: 600 s since it ACCEPTED the
+    GOTO or RETARGET that put the mount on the current target, with 15 s of
+    tolerance for clock skew (else DWELL_LOCKED). It waives its lock while its own
+    image health is UNRECOVERED.
+
+    Accepted, it resets the nudge offset and the live stack, starts a new dwell
+    lock, and moves the mission OBSERVING -> SLEWING -> VERIFYING -> CENTERING ->
+    OBSERVING exactly as the first acquisition. A solve or centring failure on a
+    retargeted object does not fail the mission: it returns to OBSERVING with image
+    health UNRECOVERED (ADR-080). `imagingProfile` sets the auto-exposure scene and,
+    for LUNAR or PLANETARY, centroid centring instead of plate solving.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    kind: Literal['RETARGET']
+    target_id: UUID = Field(..., alias='targetId')
+    coordinates: EquatorialCoordinates
+    optical_config: OpticalConfig = Field(..., alias='opticalConfig')
+    imaging_profile: ImagingProfile = Field(..., alias='imagingProfile')
+
+
+class RetargetRequest(BaseModel):
+    """
+    The client's RETARGET intent. A catalogue target id only (ADR-079).
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    target_id: UUID = Field(..., alias='targetId', description='A `target.id` from `GET /missions/{missionId}/targets`.')
+
+
+class CommandPayload(RootModel[GotoPayload | NudgePayload | CapturePayload | FocusPayload | AbortPayload | ParkPayload | SetProfilePayload | RetargetPayload]):
+    root: GotoPayload | NudgePayload | CapturePayload | FocusPayload | AbortPayload | ParkPayload | SetProfilePayload | RetargetPayload = Field(..., description="Discriminated by `kind`. `payload.kind` MUST equal the envelope's `type`; both\nthe cloud and the agent reject an envelope where they disagree.\n", discriminator='kind')
 
 
 class CommandEnvelope(BaseModel):
@@ -1759,6 +1888,7 @@ class MissionCommandRequest(BaseModel):
     type: ClientCommandType
     nudge: NudgePayload | None = None
     capture: CapturePayload | None = None
+    retarget: RetargetRequest | None = Field(None, description='Required when type is RETARGET; 422 VALIDATION_FAILED without it.')
     reason: str | None = None
 
 
@@ -1776,6 +1906,12 @@ class CommandRejectionReason(StrEnum):
     Why a command was refused. The SAFETY_ prefixed values are produced by the
     agent's own envelope check and may occur even when the cloud approved the
     command; that is the design, not a bug.
+
+    The last seven are a booked session's in-slot rules (ADR-079); the ErrorCode of
+    the same name describes each. TARGET_NOT_VISIBLE_NOW is the cloud's only: the
+    target was not in `GET /missions/{missionId}/targets` (ErrorCode
+    TARGET_NOT_OBSERVABLE). The agent produces MISSION_BUSY, DWELL_LOCKED,
+    CAPTURE_IN_PROGRESS and SESSION_ENDING from its own state and clock.
 
     """
     duplicate_command_id = 'DUPLICATE_COMMAND_ID'
@@ -1802,6 +1938,13 @@ class CommandRejectionReason(StrEnum):
     weather_hold_active = 'WEATHER_HOLD_ACTIVE'
     observatory_offline = 'OBSERVATORY_OFFLINE'
     unattended_disarmed = 'UNATTENDED_DISARMED'
+    mission_busy = 'MISSION_BUSY'
+    dwell_locked = 'DWELL_LOCKED'
+    target_not_visible_now = 'TARGET_NOT_VISIBLE_NOW'
+    capture_in_progress = 'CAPTURE_IN_PROGRESS'
+    capture_cooldown = 'CAPTURE_COOLDOWN'
+    capture_limit_reached = 'CAPTURE_LIMIT_REACHED'
+    session_ending = 'SESSION_ENDING'
 
 
 class MissionCommandAccepted(BaseModel):
@@ -1868,7 +2011,7 @@ class Capture(BaseModel):
     id: UUID
     mission_id: UUID = Field(..., alias='missionId')
     user_id: UUID = Field(..., alias='userId')
-    target_id: UUID = Field(..., alias='targetId')
+    target_id: UUID = Field(..., alias='targetId', description="The object this capture shows -- the session's current target when it ran, which after a RETARGET is not the booked one (ADR-079).")
     captured_at: AwareDatetime = Field(..., alias='capturedAt')
     imaging_profile: ImagingProfile = Field(..., alias='imagingProfile')
     optical_config: OpticalConfig = Field(..., alias='opticalConfig')
@@ -1891,6 +2034,16 @@ class CapturePage(BaseModel):
     )
     items: list[Capture]
     page: PageMeta
+
+
+class Target2(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    slug: str
+    name_en: str = Field(..., alias='nameEn')
+    name_ka: str = Field(..., alias='nameKa')
+    type: TargetType
 
 
 class Place(BaseModel):
@@ -1918,7 +2071,7 @@ class GalleryCapture(BaseModel):
         extra='forbid',
     )
     id: str
-    target: Target1
+    target: Target2
     place: Place
     telescope: Telescope = Field(..., description='Aperture and focal length only; no maker or model name.')
     captured_at: AwareDatetime = Field(..., alias='capturedAt')
@@ -2236,6 +2389,121 @@ class AgentCommandAck(BaseModel):
     detail: str | None = None
 
 
+class ImageHealthStatus(StrEnum):
+    """
+    ADR-080. What the agent's watchdog on its own live frames concludes, while a
+    mission is OBSERVING. Display copy is the client's (e.g. "Re-centring the
+    object", "Clouds over the telescope -- waiting for a gap").
+      - OK: the picture passes every check.
+      - RECOVERING: a check failed and the recovery ladder is running a step.
+      - WAITING: the sky is cloudy (`reason` CLOUDS). The agent holds on the target,
+        tracking, live view running, and retries the ladder at `nextRetryAt`
+        (every 120 s). It never slews to look for a gap.
+      - UNRECOVERED: the ladder gave up on this object. The live view continues,
+        no further automatic slews are made on it, the dwell lock is waived so the
+        customer may switch, and a re-check (re-expose and solve, no blind slew)
+        runs every 300 s. A RETARGET or RECENTER re-arms the ladder.
+
+    """
+    ok = 'OK'
+    recovering = 'RECOVERING'
+    waiting = 'WAITING'
+    unrecovered = 'UNRECOVERED'
+
+
+class ImageHealthReason(StrEnum):
+    """
+    ADR-080. Why the picture is not OK, judged on three consecutive live frames
+    (and at least 10 s) before it is reported, from the frame statistics of
+    ADR-080 §2.
+      - BLANK_FRAME: a flat frame -- nothing above the background (dark, capped or
+        uniform).
+      - NO_STARS: a deep-sky or star frame with sky background but fewer than three
+        stars detected, and the background not raised.
+      - OFF_CENTRE: the object has drifted from the frame centre beyond the limit
+        (plate-solved offset for deep sky, disc centroid for Moon and planets), or
+        the disc is not in the frame at all.
+      - CLOUDS: the star count fell below 30% of the count at acquisition while the
+        background rose to 1.5x or more, or a Moon or planet disc lost more than 60%
+        of its peak at the same exposure and gain, or a fitted sky sensor reports
+        cloud.
+      - OVEREXPOSED: more than 25% of the frame clipped, or for a Moon or planet a
+        blown-out disc.
+
+    """
+    no_stars = 'NO_STARS'
+    blank_frame = 'BLANK_FRAME'
+    off_centre = 'OFF_CENTRE'
+    clouds = 'CLOUDS'
+    overexposed = 'OVEREXPOSED'
+
+
+class RecoveryStep(StrEnum):
+    """
+    ADR-080. The recovery ladder's rungs, in the order tried: RE_EXPOSE (auto
+    exposure for the object type and the picture), RE_SOLVE (plate solve, or disc
+    centroid for Moon and planets), RE_CENTRE (a corrective slew of the solved
+    offset, passing the envelope like any slew), WAIT_FOR_SKY (clouds; hold and
+    retry).
+
+    """
+    re_expose = 'RE_EXPOSE'
+    re_solve = 'RE_SOLVE'
+    re_centre = 'RE_CENTRE'
+    wait_for_sky = 'WAIT_FOR_SKY'
+
+
+class ImageHealth(BaseModel):
+    """
+    ADR-080. The agent's verdict on its live picture. Client-safe: no device
+    identity, exposure detail or address. Sent by the agent on AGENT_STATE_DELTA
+    and relayed unchanged on MISSION_TELEMETRY. Null outside OBSERVING.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    status: ImageHealthStatus
+    reason: ImageHealthReason | None = Field(None, description='Null exactly when status is OK.')
+    step: RecoveryStep | None = Field(None, description='The rung running now while RECOVERING; WAIT_FOR_SKY while WAITING; otherwise null.')
+    attempt: int | None = Field(None, description='Which pass of the ladder this is for the current incident (at most two before UNRECOVERED).', ge=1)
+    since: AwareDatetime = Field(..., description='When the status last changed, on the observatory clock.')
+    next_retry_at: AwareDatetime | None = Field(None, alias='nextRetryAt', description='While WAITING or UNRECOVERED, when the agent next tries; otherwise null.')
+
+
+class MissionEndPhase(StrEnum):
+    """
+    ADR-079. How far a booked session's ending has got, derived by the cloud, not a
+    MissionState (ADR-004 adds no state). Null while the session runs.
+      - FINISHING: the slot has ended (or the session was ended) and the mission is
+        still in a live state -- an in-flight capture is being flushed.
+      - PARKING: the mission is terminal and the agent's telemetry does not yet
+        report `parked: true`.
+      - PARKED: the mission is terminal and the agent reports `parked: true`.
+
+    """
+    finishing = 'FINISHING'
+    parking = 'PARKING'
+    parked = 'PARKED'
+
+
+class SessionEndReason(StrEnum):
+    """
+    ADR-079. Why a session ended rather than rotated.
+      - SLOT_ENDED: the booked slot's end was reached.
+      - CUSTOMER_ENDED: the owner aborted.
+      - OPERATOR_ENDED: an operator cancelled or aborted the mission.
+      - WEATHER: a weather hold ended it.
+      - FAULT: a hardware error, a refused start or a lost link ended it.
+
+    """
+    slot_ended = 'SLOT_ENDED'
+    customer_ended = 'CUSTOMER_ENDED'
+    operator_ended = 'OPERATOR_ENDED'
+    weather = 'WEATHER'
+    fault = 'FAULT'
+
+
 class AgentStateDelta(BaseModel):
     """
     Emitted on the agent control loop. Carries telemetry and, if a mission is held, its state.
@@ -2252,6 +2520,8 @@ class AgentStateDelta(BaseModel):
     failure_reason: MissionFailureReason | None = Field(None, alias='failureReason')
     centering_iteration: int | None = Field(None, alias='centeringIteration', description='Current plate-solve / re-slew iteration, capped at three.', ge=0)
     residual_arcminutes: float | None = Field(None, alias='residualArcminutes', description='Distance between the solved position and the target after the last iteration.')
+    current_target_id: UUID | None = Field(None, alias='currentTargetId', description='ADR-079. The target of the GOTO or RETARGET the agent last accepted for the\nheld mission. The cloud compares it with `Mission.currentTargetId`.\n')
+    image_health: ImageHealth | None = Field(None, alias='imageHealth', description="ADR-080. The watchdog's verdict while OBSERVING; null in every other state.")
 
 
 class AgentMissionEvent(BaseModel):
@@ -2334,6 +2604,7 @@ class AgentCaptureReady(BaseModel):
     solved_focal_length_mm: float | None = Field(None, alias='solvedFocalLengthMm')
     width_px: int | None = Field(None, alias='widthPx')
     height_px: int | None = Field(None, alias='heightPx')
+    target_id: UUID | None = Field(None, alias='targetId', description="ADR-079. The target the mount was on when the capture ran. The cloud records\nthe `Capture` against it; when null (an older agent) it uses\n`Mission.currentTargetId` at the CAPTURE command's issue time.\n")
     mode: ObservatoryMode
 
 
@@ -2448,7 +2719,8 @@ class CloudSessionUpdate(BaseModel):
     mission_id: UUID = Field(..., alias='missionId')
     session_id: UUID | None = Field(None, alias='sessionId', description='Null revokes the session. The agent then accepts no client-originated command for this mission.')
     user_id: UUID | None = Field(None, alias='userId')
-    expires_at: AwareDatetime | None = Field(None, alias='expiresAt')
+    expires_at: AwareDatetime | None = Field(None, alias='expiresAt', description="The session's end: for a booked mission, the slot's end. The agent observes\nuntil this instant and then ends the mission on its own clock -- flushing an\nin-flight capture, COMPLETE, Park -- whether or not the cloud says anything\n(ADR-079).\n")
+    end_reason: SessionEndReason | None = Field(None, alias='endReason', description='ADR-079. Set only when `sessionId` is null and the session ENDED rather than\nrotated. With SLOT_ENDED the agent finishes the mission now (flush any\ncapture, COMPLETE, Park), even if its own clock has not reached `expiresAt`.\nA null `sessionId` with no `endReason` is a revocation or rotation: the agent\nstops accepting client commands, and the mission keeps observing until a\nnew owner arrives or `expiresAt` passes.\n')
 
 
 class CloudSafetyEnvelopeUpdate(BaseModel):
@@ -2591,6 +2863,11 @@ class MissionTelemetryUpdate(BaseModel):
     nudge_used_degrees: float | None = Field(None, alias='nudgeUsedDegrees', ge=0.0)
     ambient_temperature_c: float | None = Field(None, alias='ambientTemperatureC')
     pointing: HorizontalCoordinates | None = Field(None, description='Where the mount is pointing, rounded to 0.1°. Null when the agent has not reported\na position. Sent only on the channel of the mission it belongs to. Read-only: no\nclient message addresses the mount, and this field does not change that.\n')
+    current_target_id: UUID | None = Field(None, alias='currentTargetId', description='ADR-079. As `Mission.currentTargetId`.')
+    retarget_allowed_at: AwareDatetime | None = Field(None, alias='retargetAllowedAt', description='ADR-079. The dwell lock, as `MissionTargetList.retargetAllowedAt`: null when a\nRETARGET would not be dwell-locked now. The client counts down to it.\n')
+    capture_allowed_at: AwareDatetime | None = Field(None, alias='captureAllowedAt', description="ADR-079. When the next CAPTURE is accepted: the previous CAPTURE's `issuedAt`\nplus 30 s, or null when one is accepted now. Null too while one is in\nprogress (the mission state says so) and when the limit is reached.\n")
+    image_health: ImageHealth | None = Field(None, alias='imageHealth', description="ADR-080. The agent's latest verdict, relayed unchanged; null outside OBSERVING.")
+    end_phase: MissionEndPhase | None = Field(None, alias='endPhase', description='ADR-079. Null while the session runs. The cloud keeps sending MISSION_TELEMETRY\nfor a mission after it is terminal until it reports PARKED, or for 300 s.\n')
 
 
 class MissionStreamInfo(BaseModel):
@@ -2644,6 +2921,31 @@ class MissionCaptureReady(BaseModel):
     capture: Capture
 
 
+class MissionSessionEnded(BaseModel):
+    """
+    ADR-079. Sent once per mission on its channel when the session is over: the
+    mission is terminal and the agent reports the mount parked, or 300 s after the
+    mission became terminal without that report (then `parked` is false). Lists every
+    capture the session kept. The client shows the Parked end state and links the
+    Collection.
+
+    """
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    type: Literal['MISSION_SESSION_ENDED']
+    message_id: UUID = Field(..., alias='messageId')
+    sent_at: AwareDatetime = Field(..., alias='sentAt')
+    mission_id: UUID = Field(..., alias='missionId')
+    state: MissionState
+    failure_reason: MissionFailureReason | None = Field(None, alias='failureReason')
+    end_reason: SessionEndReason = Field(..., alias='endReason')
+    ended_at: AwareDatetime = Field(..., alias='endedAt', description="The mission's `endedAt`.")
+    parked: bool = Field(..., description='True when the agent reported the mount parked; false when the 300 s wait ran out.')
+    capture_ids: list[UUID] = Field(..., alias='captureIds', description='Every capture of the mission, oldest first, as `Mission.captureIds`.')
+    summary_email_queued: bool = Field(..., alias='summaryEmailQueued', description='True when the session summary email (outbox kind SESSION_SUMMARY) was\nwritten for the owner. It is written once per mission that reached OBSERVING,\nlisting every capture and linking the Collection.\n')
+
+
 class MissionCommandResult(BaseModel):
     """
     The outcome of a command the client submitted over HTTP, delivered asynchronously.
@@ -2671,8 +2973,8 @@ class MissionChannelError(BaseModel):
     message: str
 
 
-class MissionChannelMessage(RootModel[MissionStateUpdate | MissionTelemetryUpdate | MissionStreamInfo | MissionFrameInfo | MissionCaptureReady | MissionCommandResult | MissionChannelError]):
-    root: MissionStateUpdate | MissionTelemetryUpdate | MissionStreamInfo | MissionFrameInfo | MissionCaptureReady | MissionCommandResult | MissionChannelError = Field(..., description='Everything the cloud pushes to a subscribed live-mission client.', discriminator='type')
+class MissionChannelMessage(RootModel[MissionStateUpdate | MissionTelemetryUpdate | MissionStreamInfo | MissionFrameInfo | MissionCaptureReady | MissionCommandResult | MissionChannelError | MissionSessionEnded]):
+    root: MissionStateUpdate | MissionTelemetryUpdate | MissionStreamInfo | MissionFrameInfo | MissionCaptureReady | MissionCommandResult | MissionChannelError | MissionSessionEnded = Field(..., description='Everything the cloud pushes to a subscribed live-mission client.', discriminator='type')
 
 
 class MissionClientSubscribe(BaseModel):

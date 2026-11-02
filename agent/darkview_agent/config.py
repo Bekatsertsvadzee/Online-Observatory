@@ -26,6 +26,13 @@ class DriverMode(StrEnum):
     REAL = "REAL"
 
 
+class MountDriverKind(StrEnum):
+    """How a REAL agent reaches the mount (ADR-076)."""
+
+    ALPACA = "ALPACA"
+    NEXSTAR_SERIAL = "NEXSTAR_SERIAL"
+
+
 class ConfigurationError(Exception):
     """Raised when configuration would put the agent in an unsafe state."""
 
@@ -48,6 +55,9 @@ FILE_FORBIDDEN_SETTINGS = ("DARKVIEW_AGENT_DRIVER_MODE", "DARKVIEW_AGENT_ATTENDE
 #: ASCOM Remote's own defaults. The host is loopback and can only ever be loopback.
 DEFAULT_ALPACA_HOST = "127.0.0.1"
 DEFAULT_ALPACA_PORT = 11111
+
+#: The pointing model a NEXSTAR_SERIAL mount reads: the panel's sync points (ADR-076).
+DEFAULT_NEXSTAR_MODEL_PATH = Path.home() / ".darkview" / "nexstar-model.json"
 
 
 def _env_flag(environment: dict[str, str], name: str) -> bool:
@@ -95,6 +105,14 @@ class AgentConfig:
     alpaca_port: int = DEFAULT_ALPACA_PORT
     mount_device_number: int = 0
     focuser_device_number: int = 0
+    mount_driver: MountDriverKind = MountDriverKind.ALPACA
+    """ALPACA: mount and focuser over the loopback bridge. NEXSTAR_SERIAL: both over
+    the hand controller's serial port, for a Mac with no ASCOM (ADR-076)."""
+
+    nexstar_port: Path | None = None
+    """The hand controller's serial device, e.g. /dev/cu.PL2303G-USBtoUART110."""
+
+    nexstar_model_path: Path = DEFAULT_NEXSTAR_MODEL_PATH
     zwo_sdk_path: Path | None = None
     """The ZWO ASI SDK library (`ASICamera2.dll` on Windows). Required in REAL mode."""
 
@@ -199,11 +217,28 @@ def load_config(environment: dict[str, str] | None = None) -> AgentConfig:
         alpaca_port=_whole_number(env, "DARKVIEW_AGENT_ALPACA_PORT", DEFAULT_ALPACA_PORT, 1, 65535),
         mount_device_number=_whole_number(env, "DARKVIEW_AGENT_ALPACA_MOUNT_DEVICE", 0),
         focuser_device_number=_whole_number(env, "DARKVIEW_AGENT_ALPACA_FOCUSER_DEVICE", 0),
+        mount_driver=_mount_driver(env),
+        nexstar_port=_optional_path(env, "DARKVIEW_AGENT_NEXSTAR_PORT"),
+        nexstar_model_path=_optional_path(env, "DARKVIEW_AGENT_NEXSTAR_MODEL_PATH")
+        or DEFAULT_NEXSTAR_MODEL_PATH,
         zwo_sdk_path=_optional_path(env, "DARKVIEW_AGENT_ZWO_SDK_PATH"),
         zwo_camera_index=_optional_whole_number(env, "DARKVIEW_AGENT_ZWO_CAMERA_INDEX"),
         astap_path=_optional_path(env, "DARKVIEW_AGENT_ASTAP_PATH"),
         astap_database_dir=_optional_path(env, "DARKVIEW_AGENT_ASTAP_DATABASE_DIR"),
     )
+
+
+def _mount_driver(environment: dict[str, str]) -> MountDriverKind:
+    raw = environment.get("DARKVIEW_AGENT_MOUNT_DRIVER", "").strip().upper()
+    if raw == "":
+        return MountDriverKind.ALPACA
+    try:
+        return MountDriverKind(raw)
+    except ValueError:
+        raise ConfigurationError(
+            f"DARKVIEW_AGENT_MOUNT_DRIVER={raw!r} is not a mount driver. "
+            f"Valid values: {', '.join(tuple(MountDriverKind))}."
+        ) from None
 
 
 def _alpaca_host(environment: dict[str, str]) -> str:

@@ -51,7 +51,10 @@ from contracts.models import (
     NetworkNodeApprovalStatus,
     ObservatoryMode,
     SafetyEnvelopeConfig,
+    SessionEndReason,
+    WeatherSource,
     WeatherState,
+    WeatherStatus,
 )
 from darkview_agent import __version__
 from darkview_agent.capture import profiles
@@ -66,6 +69,7 @@ from darkview_agent.devices.base import DeviceError
 from darkview_agent.devices.frame import Frame
 from darkview_agent.link.session import LinkSession
 from darkview_agent.mission.runner import (
+    RETARGET_CLOSE_SECONDS,
     FinishedCapture,
     MissionAlreadyActive,
     MissionEvent,
@@ -494,6 +498,8 @@ class Supervisor:
                 mission_state=self._runner.state if active else None,
                 centering_iteration=self._runner.centering_iterations if active else None,
                 weather=self._weather,
+                current_target_id=self._runner.current_target_id if active else None,
+                image_health=self._runner.image_health() if active else None,
             )
         if delta is not None and self._link.send_state_delta(delta):
             self._telemetry.sent(delta, at_time)
@@ -508,7 +514,7 @@ class Supervisor:
         if message_type == "CLOUD_COMMAND":
             self._handle_command(message, at_time)
         elif message_type == "CLOUD_SESSION_UPDATE":
-            self._handle_session_update(message)
+            self._handle_session_update(message, at_time)
         elif message_type == "CLOUD_SAFETY_ENVELOPE_UPDATE":
             self._handle_envelope_update(message)
         elif message_type == "CLOUD_WEATHER_UPDATE":
@@ -524,8 +530,8 @@ class Supervisor:
         else:
             logger.warning("ignoring an unrecognised message type: %r", message_type)
 
-    def _handle_session_update(self, message: dict) -> None:
-        """Take the cloud's word on who owns the observatory — and only that.
+    def _handle_session_update(self, message: dict, at_time: datetime) -> None:
+        """Take the cloud's word on who owns the observatory, and when the session ends.
 
         The cloud decides ownership; it is the only party that can. What it
         cannot decide is whether a command is safe, which is why nothing in this
@@ -535,6 +541,11 @@ class Supervisor:
         previous owner in place. Ownership is the difference between a command
         being obeyed and refused, so an update this agent could not read must not
         leave a stale owner able to keep driving.
+
+        Two things reach the mission (ADR-079 §2). `expiresAt` is its observing
+        deadline. A null `sessionId` with `endReason: SLOT_ENDED` ends it now; a
+        null `sessionId` without one is a revocation or a rotation, which stops
+        client commands and leaves the mission observing.
         """
         mission_id = _parse_uuid(message.get("missionId"))
         if mission_id is None:
@@ -542,9 +553,15 @@ class Supervisor:
             self._set_owner(None)
             return
 
+        holds_it = self._runner.is_active and self._runner.mission_id == str(mission_id)
         session_id = _parse_uuid(message.get("sessionId"))
         if session_id is None:
-            logger.info("session revoked for mission %s", mission_id)
+            if message.get("endReason") == SessionEndReason.slot_ended.value:
+                logger.info("the slot for mission %s has ended", mission_id)
+                if holds_it:
+                    self._runner.end_session(at_time)
+            else:
+                logger.info("session revoked for mission %s", mission_id)
             self._set_owner(None)
             return
 
@@ -560,12 +577,15 @@ class Supervisor:
             self._set_owner(None)
             return
 
+        expires_at = _parse_time(message.get("expiresAt"))
+        if holds_it:
+            self._runner.set_session_end(expires_at)
         self._set_owner(
             _Owner(
                 ownership=SessionOwnership(
                     mission_id=mission_id, session_id=session_id, user_id=user_id
                 ),
-                expires_at=_parse_time(message.get("expiresAt")),
+                expires_at=expires_at,
             )
         )
 
@@ -727,6 +747,11 @@ class Supervisor:
         was_holding = self._weather is not None and self._weather.hold_active
         self._weather = weather
         self._validator.set_weather_hold(weather.hold_active)
+        # Only a fitted sensor's word on cloud is image evidence (ADR-080 §2). An
+        # operator's CLOUDY is a forecast-grade call and is already the hold above.
+        self._runner.set_sky_cloudy(
+            weather.source is WeatherSource.sensor and weather.status is WeatherStatus.cloudy
+        )
         if self._store is not None:
             self._store.save_weather(weather)
 
@@ -881,6 +906,8 @@ class Supervisor:
                     return self._execute_focus(envelope, payload)
                 if payload.kind == "NUDGE":
                     return self._execute_nudge(payload)
+                if payload.kind == "RETARGET":
+                    return self._execute_retarget(envelope, payload, at_time)
                 if payload.kind == "ABORT":
                     return self._execute_abort(envelope, at_time)
                 if payload.kind == "PARK":
@@ -919,9 +946,10 @@ class Supervisor:
                 payload.coordinates.ra_hours, payload.coordinates.dec_degrees, at_time
             )
             if refusal is None:
-                # Back on the booked target, so the drift this measured is gone.
+                # Back on the current object, so the drift this measured is gone,
+                # and the watch starts again (ADR-080 §3). The dwell lock does not.
                 self._validator.reset_nudge_offset()
-                self._runner.pointing_changed()
+                self._runner.returned_to_target(at_time)
             return refusal
 
         if payload.recenter:
@@ -931,6 +959,7 @@ class Supervisor:
                 "booked target to return to",
             )
 
+        settings = profiles.PROFILES[payload.imaging_profile]
         try:
             self._runner.offer(
                 MissionRequest(
@@ -939,12 +968,88 @@ class Supervisor:
                     user_id=envelope.user_id,
                     right_ascension_hours=payload.coordinates.ra_hours,
                     declination_degrees=payload.coordinates.dec_degrees,
+                    exposure_milliseconds=settings.exposure_milliseconds,
+                    gain=settings.gain,
                     operator_override=self._validator.operator_override(envelope),
+                    target_id=payload.target_id,
+                    imaging_profile=payload.imaging_profile,
+                    optical_config=payload.optical_config,
                 ),
                 at_time,
             )
         except MissionAlreadyActive as error:
             return (CommandRejectionReason.mission_already_active, str(error))
+        owner = self._owner
+        if owner is not None and owner.ownership.mission_id == envelope.mission_id:
+            self._runner.set_session_end(owner.expires_at)
+        return None
+
+    def _execute_retarget(
+        self, envelope: CommandEnvelope, payload, at_time: datetime
+    ) -> Refusal | None:
+        """Move the session to another object, after the agent's own checks (ADR-079 §4).
+
+        The cloud checked all of these. Each is checked again here, in the
+        contract's order, because the cloud's word is not the agent's: the
+        envelope was already judged by the validator, and the dwell lock is the
+        agent's own, measured from when it accepted the slew that put the mount on
+        the current object.
+        """
+        runner = self._runner
+        if not runner.is_active:
+            return (
+                CommandRejectionReason.no_active_mission,
+                "a retarget arrived with no mission running",
+            )
+        if runner.mission_id != str(envelope.mission_id):
+            return (
+                CommandRejectionReason.mission_already_active,
+                f"mission {runner.mission_id} is running; "
+                f"{envelope.mission_id} is not the mission on target",
+            )
+        if runner.state is not MissionState.observing:
+            return (
+                CommandRejectionReason.mission_busy,
+                f"the mission is {runner.state.value}; a retarget waits for OBSERVING",
+            )
+        if runner.capture_pending:
+            return (
+                CommandRejectionReason.capture_in_progress,
+                "a capture is running; the object cannot change under it",
+            )
+        left = runner.seconds_left(at_time)
+        if left is not None and left < RETARGET_CLOSE_SECONDS:
+            return (
+                CommandRejectionReason.session_ending,
+                f"{max(0.0, left):.0f}s of the session remain; a retarget needs "
+                f"{RETARGET_CLOSE_SECONDS:.0f}s",
+            )
+        if runner.dwell_locked(at_time):
+            allowed = runner.dwell_allowed_at()
+            assert allowed is not None
+            return (
+                CommandRejectionReason.dwell_locked,
+                f"the mount stays on its object until {wire_timestamp(allowed)}",
+            )
+
+        refusal = runner.retarget(
+            payload.target_id,
+            payload.coordinates.ra_hours,
+            payload.coordinates.dec_degrees,
+            payload.imaging_profile,
+            payload.optical_config,
+            at_time,
+        )
+        if refusal is not None:
+            return (CommandRejectionReason.mission_busy, refusal)
+        # A new object: the customer's framing of the old one is gone.
+        self._validator.reset_nudge_offset()
+        self._audit_event(
+            "RETARGET_ACCEPTED",
+            command_id=str(envelope.command_id),
+            detail=f"to {payload.target_id} ({payload.imaging_profile.value})",
+            context={"missionId": str(envelope.mission_id)},
+        )
         return None
 
     def _execute_capture(self, envelope: CommandEnvelope, payload) -> Refusal | None:
@@ -1070,8 +1175,9 @@ class Supervisor:
             azimuth = normalise_azimuth(azimuth + signed)
 
         self._devices.mount.slew_to(altitude, azimuth)
-        # The live stack belongs to the field before the step (#199).
-        self._runner.pointing_changed()
+        # The live stack belongs to the field before the step (#199), and the
+        # framing is now the customer's, not the watch's to undo (ADR-080).
+        self._runner.pointing_changed(nudged=True)
         return None
 
     def _execute_abort(self, envelope: CommandEnvelope, at_time: datetime) -> Refusal | None:
@@ -1352,6 +1458,7 @@ class Supervisor:
                 "framesStacked": finished.frames_stacked,
                 "integrationSeconds": finished.integration_seconds,
                 "imageStorageKey": image_key,
+                "targetId": str(finished.target_id) if finished.target_id else None,
                 "unmarkedStorageKey": pending.written.get(CaptureAssetKind.unmarked),
                 "fitsStorageKey": None,
                 # Only what was written. A thumbnail whose grant was refused or
@@ -1562,7 +1669,7 @@ def build_supervisor(
     now: Callable[[], datetime] | None = None,
     stream_settings: StreamSettings | None = None,
     uploader: Uploader | None = None,
-    observing_seconds: float | None = None,
+    max_observing_seconds: float | None = None,
     sustained_link_loss_seconds: float | None = None,
 ) -> Supervisor:
     """Assemble a supervisor from configuration. The only place the wiring lives.
@@ -1633,7 +1740,9 @@ def build_supervisor(
         show=lambda frame: frames.append((runner.mission_id, frame)),
         on_capture=captures.append,
         **(
-            {} if observing_seconds is None else {"observing_seconds": observing_seconds}
+            {}
+            if max_observing_seconds is None
+            else {"max_observing_seconds": max_observing_seconds}
         ),
     )
     validator = CommandValidator(

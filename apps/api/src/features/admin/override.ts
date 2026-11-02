@@ -295,7 +295,8 @@ async function preValidate(input: {
     return null;
   }
 
-  if (request.payload.kind !== "GOTO") return null;
+  // Both carry the coordinates the mount would be sent to (ADR-079 added RETARGET).
+  if (request.payload.kind !== "GOTO" && request.payload.kind !== "RETARGET") return null;
 
   const config = await loadSafetyEnvelope(observatory.id);
   const site = siteOf(observatory);

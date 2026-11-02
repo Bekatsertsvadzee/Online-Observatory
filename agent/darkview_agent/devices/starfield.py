@@ -41,6 +41,8 @@ def render(
     gain: int,
     star_count: int = 220,
     defocus_px: float = 0.0,
+    star_transmission: float = 1.0,
+    sky_glow: float = 1.0,
 ) -> np.ndarray:
     """Render one exposure of the field at this pointing.
 
@@ -48,6 +50,9 @@ def render(
     together, the way a real sensor behaves. `defocus_px` widens every star by
     that much in quadrature and spreads the same light over the wider disc, so an
     out-of-focus star is bigger and fainter rather than simply bigger.
+
+    Cloud is `star_transmission` (the fraction of starlight that gets through) and
+    `sky_glow` (how much brighter the background is, lit from below by the city).
     """
     if width_px <= 0 or height_px <= 0:
         raise ValueError("frame dimensions must be positive")
@@ -58,7 +63,7 @@ def render(
 
     # Sky background rises with exposure and gain. Bortle 8-9 skies are bright,
     # which is the whole reason Phase 1 is a live-view product.
-    background = 900.0 * exposure_factor * gain_factor
+    background = 900.0 * exposure_factor * gain_factor * sky_glow
     image = rng.normal(background, background * 0.06 + 12.0, (height_px, width_px))
 
     y_grid, x_grid = np.mgrid[0:height_px, 0:width_px]
@@ -70,7 +75,7 @@ def render(
     # Seeing varies slightly star to star, as it does on a real frame.
     sigmas = rng.uniform(1.3, 2.4, star_count)
     blurred = np.sqrt(sigmas**2 + defocus_px**2)
-    brightnesses = brightnesses * (sigmas / blurred) ** 2
+    brightnesses = brightnesses * (sigmas / blurred) ** 2 * star_transmission
 
     for x, y, brightness, sigma in zip(xs, ys, brightnesses, blurred, strict=True):
         # Only render the neighbourhood of each star; a full-frame Gaussian per

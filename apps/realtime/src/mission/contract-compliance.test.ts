@@ -4,12 +4,22 @@ import { zMissionChannelMessage } from "@darkview/contracts/zod";
 import {
   missionChannelError,
   missionCommandResult,
+  missionSessionEnded,
   missionStateUpdate,
   missionTelemetryUpdate,
 } from "@/mission/protocol";
+import type { BookedSessionTelemetry } from "@/mission/booked-session";
 
 const MISSION = randomUUID();
 const now = new Date().toISOString();
+
+const NOTHING_BOOKED: BookedSessionTelemetry = {
+  currentTargetId: null,
+  retargetAllowedAt: null,
+  captureAllowedAt: null,
+  imageHealth: null,
+  endPhase: null,
+};
 
 /**
  * Every message this service pushes to a client, parsed by the contract's own
@@ -55,7 +65,7 @@ describe("every message this service emits satisfies the contract", () => {
         failureReason: null,
         centeringIteration: null,
         residualArcminutes: null,
-      } as never),
+      } as never, NOTHING_BOOKED),
     );
     expect(parsed.error?.issues ?? "ok").toEqual("ok");
   });
@@ -88,12 +98,66 @@ describe("every message this service emits satisfies the contract", () => {
         failureReason: null,
         centeringIteration: null,
         residualArcminutes: null,
-      } as never),
+      } as never, NOTHING_BOOKED),
     );
     expect(parsed.error?.issues ?? "ok").toEqual("ok");
     expect(parsed.data).toMatchObject({
       pointing: { altitudeDegrees: -12.3, azimuthDegrees: 0 },
     });
+  });
+
+  it("MISSION_TELEMETRY of a booked session, recovering its picture while parking", () => {
+    const parsed = zMissionChannelMessage.safeParse(
+      missionTelemetryUpdate(
+        MISSION,
+        {
+          type: "AGENT_STATE_DELTA",
+          messageId: randomUUID(),
+          sentAt: now,
+          missionId: MISSION,
+          telemetry: {
+            mode: "SIMULATED",
+            link: "ONLINE",
+            mount: { health: "OK", detail: null },
+            camera: { health: "OK", detail: null },
+            focuser: { health: "NOT_CONFIGURED", detail: null },
+            weather: { status: "CLEAR", source: "OPERATOR", holdActive: false, note: null, updatedAt: now },
+            reportedAt: now,
+          },
+        } as never,
+        {
+          currentTargetId: randomUUID(),
+          retargetAllowedAt: now,
+          captureAllowedAt: now,
+          imageHealth: {
+            status: "RECOVERING",
+            reason: "BLANK_FRAME",
+            step: "RE_EXPOSE",
+            attempt: 1,
+            since: now,
+            nextRetryAt: null,
+          },
+          endPhase: "PARKING",
+        },
+      ),
+    );
+    expect(parsed.error?.issues ?? "ok").toEqual("ok");
+  });
+
+  it("MISSION_SESSION_ENDED", () => {
+    const parsed = zMissionChannelMessage.safeParse(
+      missionSessionEnded({
+        missionId: MISSION,
+        state: "COMPLETE",
+        failureReason: null,
+        endReason: "SLOT_ENDED",
+        endedAt: new Date(),
+        parked: true,
+        captureIds: [randomUUID(), randomUUID()],
+        summaryEmailQueued: true,
+      }),
+    );
+    expect(parsed.error?.issues ?? "ok").toEqual("ok");
   });
 
   it("MISSION_COMMAND_RESULT", () => {

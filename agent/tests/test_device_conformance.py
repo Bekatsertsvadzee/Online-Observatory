@@ -10,6 +10,9 @@ not an interface, it is a description of the simulator.
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import pytest
 
 from contracts.models import DeviceHealth, ObservatoryMode
@@ -28,6 +31,9 @@ from tests.fake_alpaca import (
     alpaca_mount,
 )
 from tests.fake_asi import zwo_camera
+from tests.fake_nexstar import FakeNexStarPort, nexstar_focuser, nexstar_mount, write_model
+
+_NEXSTAR_MODEL = write_model(Path(tempfile.mkdtemp()) / "nexstar-model.json")
 
 
 # Registries. Real implementations join these as they are written; nothing else
@@ -36,6 +42,10 @@ def mount_implementations():
     return [
         ("SimMount", lambda clock: SimMount(clock=clock)),
         ("AlpacaMount", lambda clock: alpaca_mount(FakeAlpacaTelescope(clock))),
+        (
+            "NexStarMount",
+            lambda clock: nexstar_mount(FakeNexStarPort(clock), _NEXSTAR_MODEL),
+        ),
     ]
 
 
@@ -50,6 +60,7 @@ def focuser_implementations():
     return [
         ("SimFocuser", lambda clock: SimFocuser(clock=clock)),
         ("AlpacaFocuser", lambda clock: alpaca_focuser(FakeAlpacaFocuser(clock))),
+        ("NexStarFocuser", lambda clock: nexstar_focuser(FakeNexStarPort(clock))),
     ]
 
 

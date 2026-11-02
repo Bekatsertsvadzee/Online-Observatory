@@ -16,6 +16,7 @@ import type {
   ErrorCode,
   NetworkNodeApprovalStatus,
   SafetyEnvelopeConfig,
+  SessionEndReason,
   WeatherState,
 } from "@darkview/contracts";
 import { zAgentToCloudMessage } from "@darkview/contracts/zod";
@@ -173,10 +174,15 @@ export function cloudUploadGrant(grant: {
  * userId does not match the session owner, so an update without one leaves it
  * holding half an owner -- and the agent's answer to that, correctly, is to hold
  * no owner and refuse everything.
+ *
+ * `endReason` (ADR-079) is set only with a null session, and says the session ended
+ * rather than rotated: with SLOT_ENDED the agent finishes the mission now and parks.
+ * Without it a null session is a revocation, and the mission observes on.
  */
 export function cloudSessionUpdate(
   missionId: string,
   session: { sessionId: string; userId: string; expiresAt: Date } | null,
+  endReason: SessionEndReason | null = null,
 ): CloudSessionUpdate {
   return {
     type: "CLOUD_SESSION_UPDATE",
@@ -185,6 +191,7 @@ export function cloudSessionUpdate(
     sessionId: session?.sessionId ?? null,
     userId: session?.userId ?? null,
     expiresAt: session?.expiresAt.toISOString() ?? null,
+    ...(session === null && endReason ? { endReason } : {}),
   };
 }
 

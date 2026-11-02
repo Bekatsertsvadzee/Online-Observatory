@@ -14,6 +14,7 @@ import type {
   MissionFailureReason,
   MissionState,
   ObservatoryMode,
+  SessionEndReason,
   WeatherState,
 } from "@darkview/contracts";
 
@@ -25,6 +26,9 @@ import type {
  * two services rather than imported, because this service does not depend on the
  * Next.js app; if one changes, all three change. Inside this service there is one
  * copy, here, and both store implementations use it.
+ *
+ * PROCESSING is live since ADR-079: a booked session returns from it to OBSERVING
+ * for the rest of the slot, so a mission in it still holds the observatory.
  */
 export const LIVE_MISSION_STATES = [
   "PREPARING",
@@ -33,6 +37,7 @@ export const LIVE_MISSION_STATES = [
   "CENTERING",
   "OBSERVING",
   "CAPTURING",
+  "PROCESSING",
 ] as const;
 
 /**
@@ -78,27 +83,34 @@ export const HOLD_MISSION_STATES = [
  *
  * A state may always be re-reported -- a retried event is the ordinary case, and
  * refusing it would turn a lost ack into a lost mission.
+ *
+ * ADR-079 adds three edges and no state: OBSERVING -> SLEWING for a RETARGET,
+ * PROCESSING -> OBSERVING after a capture while the slot runs, and OBSERVING ->
+ * COMPLETE when the slot ends with no capture in flight.
  */
 const LEGAL_PREDECESSORS: Record<MissionState, readonly MissionState[]> = {
   REQUESTED: [],
   SCHEDULED: [],
   // A hold that lifts starts the mission again from the top.
   PREPARING: ["SCHEDULED", ...HOLD_MISSION_STATES],
-  // Re-entered from CENTERING: a corrected position is slewed to again.
-  SLEWING: ["PREPARING", "CENTERING"],
+  // Re-entered from CENTERING: a corrected position is slewed to again. From
+  // OBSERVING: a RETARGET the agent accepted (ADR-079).
+  SLEWING: ["PREPARING", "CENTERING", "OBSERVING"],
   VERIFYING: ["SLEWING"],
   CENTERING: ["VERIFYING"],
-  OBSERVING: ["VERIFYING"],
+  // From PROCESSING: a capture was delivered and the slot runs on (ADR-079).
+  OBSERVING: ["VERIFYING", "PROCESSING"],
   CAPTURING: ["OBSERVING"],
   PROCESSING: ["CAPTURING"],
-  COMPLETE: ["PROCESSING"],
+  // From OBSERVING: the slot ended with no capture in flight (ADR-079).
+  COMPLETE: ["PROCESSING", "OBSERVING"],
   // An observation can stop at any point up to the moment it is finished, and a
   // hold is an ending in its own right -- it is not replaced by a later one.
   WEATHER_HOLD: [...LIVE_MISSION_STATES, "SCHEDULED"],
   NOT_VISIBLE: [...LIVE_MISSION_STATES, "SCHEDULED"],
   HARDWARE_ERROR: [...LIVE_MISSION_STATES, "SCHEDULED"],
-  CANCELLED: [...LIVE_MISSION_STATES, "SCHEDULED", "PROCESSING"],
-  FAILED: [...LIVE_MISSION_STATES, "SCHEDULED", "PROCESSING"],
+  CANCELLED: [...LIVE_MISSION_STATES, "SCHEDULED"],
+  FAILED: [...LIVE_MISSION_STATES, "SCHEDULED"],
 };
 
 /**
@@ -137,6 +149,18 @@ export function isStartingGoto(type: string, payload: unknown): boolean {
   if (type !== "GOTO" || typeof payload !== "object" || payload === null) return false;
   const goto = payload as { kind?: unknown; recenter?: unknown };
   return goto.kind === "GOTO" && goto.recenter !== true;
+}
+
+/**
+ * The object an accepted command puts the mount on, when it is one that starts the
+ * dwell lock (ADR-079): the starting GOTO, or a RETARGET. Null for everything else
+ * -- a RECENTER returns to the same object and does not reset the lock.
+ */
+export function dwellTargetOf(type: string, payload: unknown): string | null {
+  if (type !== "RETARGET" && !isStartingGoto(type, payload)) return null;
+  if (typeof payload !== "object" || payload === null) return null;
+  const targetId = (payload as { targetId?: unknown }).targetId;
+  return typeof targetId === "string" ? targetId : null;
 }
 
 /**
@@ -213,6 +237,11 @@ export type CaptureRecord = {
   widthPx: number | null;
   heightPx: number | null;
   solvedFocalLengthMm: number | null;
+  /**
+   * ADR-079: the object the mount was on, as the agent reports it. Null from an
+   * agent that predates it; the store then uses the mission's current target.
+   */
+  targetId: string | null;
   assets: { kind: CaptureAssetKind; storageKey: string }[];
 };
 
@@ -409,7 +438,77 @@ export interface LinkStore {
    * mission enters the observer's Collection".
    */
   recordCapture(capture: CaptureRecord): Promise<CaptureOutcome>;
+
+  /**
+   * What a booked session's telemetry needs from the database (ADR-079): the current
+   * object and when the agent accepted it, the session's end, and the captures. Read
+   * by the mission relay, which caches it; never per telemetry sample.
+   */
+  loadMissionLiveContext(missionId: string): Promise<MissionLiveContext | null>;
+
+  /**
+   * ADR-080: the agent reports its picture UNRECOVERED, or no longer does. Called on a
+   * change only. The API reads it to waive the dwell lock.
+   */
+  recordImageHealth(input: {
+    observatoryId: string;
+    missionId: string;
+    unrecovered: boolean;
+    at: Date;
+  }): Promise<void>;
+
+  /**
+   * ADR-079 §2: every live booked mission whose slot has ended and whose agent has not
+   * been told yet, marked told. The caller sends each one a CloudSessionUpdate with
+   * `endReason: SLOT_ENDED`. Never mints a PARK: ending the session is a message the
+   * agent acts on itself.
+   */
+  claimEndedSlots(now: Date): Promise<{ missionId: string; observatoryId: string }[]>;
+
+  /**
+   * ADR-079 §6, once per mission: mark the session ended and, for a booked mission
+   * that reached OBSERVING, queue the SESSION_SUMMARY email, in one transaction.
+   * Null when the mission is not terminal, never started under ADR-079, or was
+   * already ended -- so a second call sends nothing.
+   */
+  endMissionSession(input: {
+    missionId: string;
+    parked: boolean;
+    now: Date;
+  }): Promise<SessionEndedRecord | null>;
+
+  /**
+   * Terminal missions whose session was never ended and whose end is more than
+   * END_TELEMETRY_SECONDS old: the agent never reported the mount parked, or the link
+   * dropped. The caller ends each with `parked: false`.
+   */
+  overdueSessionEnds(now: Date): Promise<string[]>;
 }
+
+/** See `LinkStore.loadMissionLiveContext`. */
+export type MissionLiveContext = {
+  missionId: string;
+  state: MissionState;
+  currentTargetId: string | null;
+  currentTargetSince: Date | null;
+  sessionEndsAt: Date | null;
+  lastCaptureIssuedAt: Date | null;
+  /** A CAPTURE minted and not yet answered by the agent. */
+  captureAwaitingVerdict: boolean;
+  captureCount: number;
+};
+
+/** MISSION_SESSION_ENDED, before its message header. */
+export type SessionEndedRecord = {
+  missionId: string;
+  state: MissionState;
+  failureReason: MissionFailureReason | null;
+  endReason: SessionEndReason;
+  endedAt: Date;
+  parked: boolean;
+  captureIds: string[];
+  summaryEmailQueued: boolean;
+};
 
 /** A state transition the agent reported, as it reported it. */
 export type MissionEventRecord = {

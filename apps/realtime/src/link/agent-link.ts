@@ -3,8 +3,10 @@ import type {
   AgentToCloudMessage,
   CloudToAgentMessage,
   DisarmReason,
+  ImageHealth,
   ObservatoryTelemetry,
 } from "@darkview/contracts";
+import { END_TELEMETRY_SECONDS } from "@darkview/db/booked-session";
 import type { CaptureAssetKind } from "@darkview/db/enums";
 import type { StorageConfiguration } from "@darkview/storage/config";
 import { captureObjectKey } from "@darkview/storage/keys";
@@ -21,7 +23,11 @@ import {
   type Close,
   type Send,
 } from "@/link/protocol";
-import type { LinkStore, ObservatoryRecord } from "@/link/store";
+import {
+  TERMINAL_MISSION_STATES,
+  type LinkStore,
+  type ObservatoryRecord,
+} from "@/link/store";
 import type { MissionBroadcast } from "@/mission/broadcast";
 import type { LiveFrame } from "@/stream/frames";
 
@@ -90,6 +96,19 @@ export class AgentLink {
     AgentToCloudMessage,
     { type: "AGENT_LIVE_FRAME" }
   > | null = null;
+  /**
+   * The mission this agent last reported ended (ADR-079 §5), and when. For up to
+   * END_TELEMETRY_SECONDS its telemetry -- the park -- still goes to that mission's
+   * channel, whether or not a delta names it, and a delta saying the mount is parked
+   * ends the session.
+   */
+  private ending: { missionId: string; since: number } | null = null;
+  /**
+   * Per mission, whether the agent's picture was last recorded UNRECOVERED (ADR-080).
+   * Written to the store on a change, and once per link for each mission so a flag
+   * left by an earlier link is corrected.
+   */
+  private readonly imageUnrecovered = new Map<string, boolean>();
 
   constructor(
     readonly observatory: ObservatoryRecord,
@@ -337,6 +356,12 @@ export class AgentLink {
       return;
     }
 
+    // Recorded as well as applied: an operator may have ended the mission in the
+    // cloud first, and the agent's report of it is still the start of its park.
+    if ((TERMINAL_MISSION_STATES as readonly string[]).includes(message.state)) {
+      this.ending = { missionId: message.missionId, since: this.now() };
+    }
+
     // Only what actually moved the mission. A `RECORDED` outcome is an event that
     // arrived after a terminal state and did not change it, and telling a customer
     // the mission had gone back to OBSERVING after they were shown FAILED would be
@@ -544,6 +569,7 @@ export class AgentLink {
       widthPx: message.widthPx ?? null,
       heightPx: message.heightPx ?? null,
       solvedFocalLengthMm: message.solvedFocalLengthMm ?? null,
+      targetId: message.targetId ?? null,
       assets,
     });
 
@@ -575,13 +601,48 @@ export class AgentLink {
     // observatory-wide telemetry, and an idle observatory is still worth watching.
     this.telemetry = message.telemetry;
 
-    const missionId = message.missionId;
+    if (
+      this.ending &&
+      this.now() - this.ending.since > END_TELEMETRY_SECONDS * 1000
+    ) {
+      // The sweep ends that session now, with `parked: false`.
+      this.ending = null;
+    }
+
+    const missionId = message.missionId ?? this.ending?.missionId ?? null;
     if (!missionId) return;
     if (!(await this.ownsMission(missionId))) {
       this.refuse(`Mission ${missionId} is not this observatory's to report on.`);
       return;
     }
-    this.broadcast.telemetryReported(missionId, message);
+    if (message.missionId) await this.applyImageHealth(missionId, message.imageHealth ?? null);
+    await this.broadcast.telemetryReported(missionId, message);
+
+    if (this.ending?.missionId === missionId && message.telemetry.parked === true) {
+      this.ending = null;
+      const ended = await this.store.endMissionSession({
+        missionId,
+        parked: true,
+        now: new Date(this.now()),
+      });
+      if (ended) this.broadcast.sessionEnded(ended);
+    }
+  }
+
+  /**
+   * Whether the agent's picture is UNRECOVERED (ADR-080), stored when it changes. The
+   * API waives the dwell lock on it, and the API does not hear telemetry.
+   */
+  private async applyImageHealth(missionId: string, health: ImageHealth | null) {
+    const unrecovered = health?.status === "UNRECOVERED";
+    if (this.imageUnrecovered.get(missionId) === unrecovered) return;
+    this.imageUnrecovered.set(missionId, unrecovered);
+    await this.store.recordImageHealth({
+      observatoryId: this.observatory.id,
+      missionId,
+      unrecovered,
+      at: new Date(this.now()),
+    });
   }
 
   /**

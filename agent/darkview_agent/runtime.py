@@ -16,10 +16,12 @@ from pathlib import Path
 from typing import Any
 
 from contracts.models import MissionFailureReason, OpticalConfig
-from darkview_agent.config import AgentConfig, ConfigurationError, DriverMode
+from darkview_agent.config import AgentConfig, ConfigurationError, DriverMode, MountDriverKind
 from darkview_agent.devices.alpaca import AlpacaMount
 from darkview_agent.devices.alpaca_focuser import AlpacaFocuser
 from darkview_agent.devices.base import CameraDriver, FocuserDriver, MountDriver
+from darkview_agent.devices.nexstar import NexStarLink, NexStarMount, pyserial_port
+from darkview_agent.devices.nexstar_focuser import NexStarFocuser
 from darkview_agent.devices.simulated import SimCamera, SimFocuser, SimMount
 from darkview_agent.devices.zwo import ZwoCamera
 from darkview_agent.devices.zwoasi_binding import ZwoasiCamera
@@ -184,6 +186,9 @@ def build_devices(config: AgentConfig) -> Devices:
 
     if not config.attended:
         raise ConfigurationError("REAL devices are only ever built for an attended operator.")
+    if config.mount_driver is MountDriverKind.NEXSTAR_SERIAL:
+        mount, focuser = nexstar_devices(config)
+        return Devices(mount=mount, camera=zwo_camera(config), focuser=focuser)
     return Devices(
         mount=AlpacaMount(config.alpaca_host, config.alpaca_port, config.mount_device_number),
         camera=zwo_camera(config),
@@ -191,6 +196,35 @@ def build_devices(config: AgentConfig) -> Devices:
             config.alpaca_host, config.alpaca_port, config.focuser_device_number
         ),
     )
+
+
+def nexstar_devices(config: AgentConfig) -> tuple[NexStarMount, NexStarFocuser]:
+    """Mount and AUX focuser on the hand controller's serial port (ADR-076)."""
+    port = config.nexstar_port
+    if port is None:
+        raise ConfigurationError(
+            "DARKVIEW_AGENT_MOUNT_DRIVER=NEXSTAR_SERIAL needs DARKVIEW_AGENT_NEXSTAR_PORT: "
+            "the hand controller's serial device, e.g. /dev/cu.PL2303G-USBtoUART110."
+        )
+    if not port.exists():
+        raise ConfigurationError(
+            f"DARKVIEW_AGENT_NEXSTAR_PORT={port} does not exist (cable unplugged, or the "
+            "PL2303 driver is not installed)."
+        )
+    if not config.nexstar_model_path.is_file():
+        raise ConfigurationError(
+            f"DARKVIEW_AGENT_NEXSTAR_MODEL_PATH={config.nexstar_model_path} is not a file: "
+            "the pointing model written by syncing in the panel."
+        )
+    if config.site is None:
+        raise ConfigurationError(
+            "DARKVIEW_AGENT_MOUNT_DRIVER=NEXSTAR_SERIAL tracks the sky itself and needs "
+            "DARKVIEW_AGENT_SITE_LATITUDE and DARKVIEW_AGENT_SITE_LONGITUDE."
+        )
+    if importlib.util.find_spec("serial") is None:
+        raise ConfigurationError(f"The pyserial package is not installed. {HARDWARE_EXTRA_HINT}")
+    link = NexStarLink(pyserial_port(str(port)))
+    return NexStarMount(link, config.nexstar_model_path, config.site), NexStarFocuser(link)
 
 
 def build_solver(config: AgentConfig) -> PlateSolver:
