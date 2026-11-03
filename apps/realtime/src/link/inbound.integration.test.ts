@@ -868,6 +868,7 @@ describe("a capture reaching the Collection", () => {
       widthPx: 3840,
       heightPx: 2160,
       solvedFocalLengthMm: 1500,
+      targetId: null,
       assets,
     });
   }
@@ -983,6 +984,7 @@ describe("a capture reaching the Collection", () => {
       widthPx: null,
       heightPx: null,
       solvedFocalLengthMm: null,
+      targetId: null,
       assets: [{ kind: "IMAGE", storageKey: "captures/image.jpg" }],
     });
 
@@ -1027,6 +1029,7 @@ describe("a capture reaching the Collection", () => {
       widthPx: null,
       heightPx: null,
       solvedFocalLengthMm: null,
+      targetId: null,
       assets: [{ kind: "IMAGE", storageKey: "captures/image.jpg" }],
     });
 

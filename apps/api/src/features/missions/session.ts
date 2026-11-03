@@ -2,8 +2,9 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import type { ErrorCode, GotoPayload, MissionSession } from "@darkview/contracts";
+import type { ErrorCode, GotoPayload, Mission, MissionSession } from "@darkview/contracts";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { dwellEndsAt } from "@darkview/db/booked-session";
 
 import { COMMAND_TTL_SECONDS } from "@/features/missions/command";
 import { getDatabase } from "@/lib/db/client";
@@ -16,9 +17,12 @@ import { loadSafetyEnvelope, siteOf } from "@/lib/safety/store";
 /**
  * The states during which a mission may command the mount.
  *
- * The same list is the predicate of Mission_active_per_observatory_unique in the
- * DV-058 migration. If one changes the other must, and the database is the one
- * that actually stops two live missions.
+ * The same list is the predicate of Mission_active_per_observatory_unique (DV-058,
+ * rebuilt by ADR-079's migration). If one changes the other must, and the database
+ * is the one that actually stops two live missions.
+ *
+ * PROCESSING is live since ADR-079: a booked session returns from it to OBSERVING
+ * and keeps the observatory for the rest of the slot.
  */
 export const LIVE_MISSION_STATES = [
   "PREPARING",
@@ -27,6 +31,7 @@ export const LIVE_MISSION_STATES = [
   "CENTERING",
   "OBSERVING",
   "CAPTURING",
+  "PROCESSING",
 ] as const;
 
 /**
@@ -51,7 +56,13 @@ export const TERMINAL_MISSION_STATES = ["COMPLETE", "CANCELLED", "FAILED"] as co
 export const UNBOOKED_SESSION_MINUTES = 30;
 
 /** What a customer may cause to be minted. The contract's ClientCommandType. */
-export const ALLOWED_CLIENT_COMMANDS = ["NUDGE", "CAPTURE", "RECENTER", "ABORT"] as const;
+export const ALLOWED_CLIENT_COMMANDS = [
+  "NUDGE",
+  "CAPTURE",
+  "RECENTER",
+  "ABORT",
+  "RETARGET",
+] as const;
 
 export type SessionFailure = {
   ok: false;
@@ -353,9 +364,11 @@ async function startScheduledMission(input: {
       // Conditional, so two starts cannot both win: the second finds the mission
       // no longer SCHEDULED and writes nothing. Mission_active_per_observatory_unique
       // refuses this update outright if another mission is live here.
+      // The booked target is the session's first object (ADR-079). The dwell lock
+      // starts when the agent accepts the GOTO, not here.
       const moved = await tx.mission.updateMany({
         where: { id: mission.id, state: "SCHEDULED" },
-        data: { state: "PREPARING", startedAt: now },
+        data: { state: "PREPARING", startedAt: now, currentTargetId: mission.target.id },
       });
       if (moved.count !== 1) return null;
 
@@ -534,6 +547,56 @@ export async function currentSession(missionId: string, now: Date) {
   return getDatabase().missionSession.findFirst({
     where: { missionId, revokedAt: null, expiresAt: { gt: now } },
   });
+}
+
+/** The columns `bookedSessionFields` reads, for a mission query's `select`/`include`. */
+export const BOOKED_SESSION_SELECT = {
+  booking: { select: { id: true, slotStartAt: true, durationMinutes: true } },
+  sessions: {
+    where: { revokedAt: null },
+    orderBy: { issuedAt: "desc" },
+    take: 1,
+    select: { expiresAt: true },
+  },
+} as const;
+
+/**
+ * ADR-079's three Mission fields, from the row.
+ *
+ * `sessionEndsAt` is the booked slot's end, or the live session's for a mission with
+ * no booking. `retargetAllowedAt` is the raw dwell lock, without the waivers
+ * `GET /missions/{missionId}/targets` applies, and null unless the mission is live.
+ * A mission that ended before ADR-079 has no current target column; one that started
+ * was on its booked target, so that is what it reports.
+ */
+export function bookedSessionFields(row: {
+  state: string;
+  targetId: string;
+  startedAt: Date | null;
+  currentTargetId: string | null;
+  currentTargetSince: Date | null;
+  booking: { slotStartAt: Date; durationMinutes: number } | null;
+  sessions: { expiresAt: Date }[];
+}): Pick<Mission, "currentTargetId" | "sessionEndsAt" | "retargetAllowedAt"> {
+  const live = (LIVE_MISSION_STATES as readonly string[]).includes(row.state);
+  const endsAt = sessionEndsAtOf(row.booking, row.sessions[0] ?? null);
+  return {
+    currentTargetId: row.currentTargetId ?? (row.startedAt ? row.targetId : null),
+    sessionEndsAt: endsAt?.toISOString() ?? null,
+    retargetAllowedAt: live ? (dwellEndsAt(row.currentTargetSince)?.toISOString() ?? null) : null,
+  };
+}
+
+/**
+ * When a started session ends: its slot's end, or for a mission with no booking the
+ * end of the session that owns it now. Null when neither exists.
+ */
+export function sessionEndsAtOf(
+  booking: { slotStartAt: Date; durationMinutes: number } | null,
+  session: { expiresAt: Date } | null,
+): Date | null {
+  if (booking) return sessionExpiry(booking, booking.slotStartAt);
+  return session?.expiresAt ?? null;
 }
 
 /**

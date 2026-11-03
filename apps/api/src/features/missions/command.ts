@@ -9,8 +9,11 @@ import type {
   GotoPayload,
   MissionCommandAccepted,
   MissionCommandRequest,
+  RetargetPayload,
 } from "@darkview/contracts";
+import { Prisma } from "@darkview/db";
 import { recordAuditEvent } from "@darkview/db/audit";
+import { dwellEndsAt } from "@darkview/db/booked-session";
 
 import { getDatabase } from "@/lib/db/client";
 import { horizontalAirlessOf } from "@/lib/ephemeris/engine";
@@ -18,7 +21,13 @@ import { equatorialFor } from "@/lib/ephemeris/visibility";
 import { notifyAgent } from "@/lib/observatory/relay";
 import { evaluateNudgeStep, evaluatePointing } from "@/lib/safety/envelope";
 import { loadSafetyEnvelope, siteOf } from "@/lib/safety/store";
-import { currentSession, LIVE_MISSION_STATES } from "@/features/missions/session";
+import { judgeCapture, judgeRetarget } from "@/features/missions/in-slot";
+import {
+  currentSession,
+  LIVE_MISSION_STATES,
+  sessionEndsAtOf,
+} from "@/features/missions/session";
+import { visibleNowFor } from "@/features/missions/targets";
 
 /**
  * How long a minted command stays valid.
@@ -139,9 +148,10 @@ export async function mintMissionCommand(input: {
   const mission = await database.mission.findUnique({
     where: { id: missionId },
     include: {
-      observatory: true,
+      observatory: { include: { weatherState: { select: { holdActive: true } } } },
       target: true,
-      booking: { select: { targetId: true } },
+      currentTarget: true,
+      booking: { select: { targetId: true, slotStartAt: true, durationMinutes: true } },
     },
   });
 
@@ -183,7 +193,88 @@ export async function mintMissionCommand(input: {
     };
   }
 
-  const payload = buildPayload(request, mission, now);
+  // ADR-079's in-slot rules, before anything is built: each answers from facts the
+  // cloud already holds, and the first one broken is the one the customer hears.
+  const sessionEndsAt = sessionEndsAtOf(mission.booking, session) ?? session.expiresAt;
+  let retargetTo: RetargetTarget | null = null;
+  let inSlot: MintFailure | null = null;
+
+  if (request.type === "CAPTURE") {
+    inSlot = judgeCapture({
+      state: mission.state,
+      now,
+      sessionEndsAt,
+      ...(await captureHistory(missionId, now)),
+    });
+  }
+
+  if (request.type === "RETARGET") {
+    if (!request.retarget) return missingPayload("RETARGET", "retarget");
+    const targetId = request.retarget.targetId;
+    retargetTo = await database.target.findUnique({ where: { id: targetId } });
+    if (!retargetTo) {
+      return { ok: false, status: 404, code: "NOT_FOUND", message: "No such target." };
+    }
+    const requested = retargetTo;
+    const currentTargetId = mission.currentTargetId ?? mission.targetId;
+    // Loaded before the judgement, because the judgement is synchronous; computed
+    // inside it only once the cheap rules have passed.
+    const visible =
+      mission.state === "OBSERVING" && targetId !== currentTargetId
+        ? await visibleNowFor({
+            observatory: mission.observatory,
+            currentTargetId,
+            sessionEndsAt,
+            now,
+          })
+        : null;
+    inSlot = judgeRetarget({
+      state: mission.state,
+      now,
+      sessionEndsAt,
+      currentTargetId,
+      targetId,
+      dwellEndsAt: dwellEndsAt(mission.currentTargetSince),
+      unrecovered: mission.imageUnrecoveredSince !== null,
+      visibleNow: () => {
+        const items = visible?.items ?? [];
+        const listed = items.some((item) => item.target.id === targetId);
+        return {
+          currentListed: items.some((item) => item.current),
+          requested: {
+            listed,
+            blockReasons: listed
+              ? []
+              : (visible?.blocked.get(targetId) ??
+                (requested.enabled ? [] : ["TARGET_DISABLED"])),
+          },
+        };
+      },
+    });
+  }
+
+  if (inSlot) {
+    await recordAuditEvent(
+      {
+        category: "COMMAND",
+        action: "COMMAND_REFUSED_IN_SLOT",
+        actorUserId: actor.id,
+        missionId,
+        entityType: "Mission",
+        entityId: missionId,
+        detail: {
+          commandType: request.type,
+          rejectionReason: inSlot.details?.rejectionReason ?? inSlot.code,
+          detail: inSlot.message,
+        },
+        isDemo: mission.isDemo,
+      },
+      database,
+    );
+    return inSlot;
+  }
+
+  const payload = buildPayload(request, mission, retargetTo, now);
   if ("error" in payload) return payload.error;
 
   // The cloud's half of the two independent safety checks. Until this existed the
@@ -307,7 +398,9 @@ async function preValidate(
   },
   now: Date,
 ): Promise<MintFailure | null> {
-  if (payload.type !== "GOTO" && payload.type !== "NUDGE") return null;
+  if (payload.type !== "GOTO" && payload.type !== "NUDGE" && payload.type !== "RETARGET") {
+    return null;
+  }
 
   const config = await loadSafetyEnvelope(mission.observatoryId);
   const site = siteOf(mission.observatory);
@@ -319,7 +412,10 @@ async function preValidate(
     return verdict.permitted ? null : unsafe(verdict.reason, verdict.detail);
   }
 
-  if (payload.type === "GOTO" && payload.payload.kind === "GOTO") {
+  if (
+    (payload.type === "GOTO" && payload.payload.kind === "GOTO") ||
+    (payload.type === "RETARGET" && payload.payload.kind === "RETARGET")
+  ) {
     // Airless, because that is the convention the agent's envelope uses. A
     // refracted altitude would make the cloud more permissive than the agent near
     // the horizon, which is the wrong way round for a pre-check.
@@ -350,25 +446,63 @@ function unsafe(reason: string, detail: string): MintFailure {
 type BuiltPayload =
   { type: CommandEnvelope["type"]; payload: CommandPayload } | { error: MintFailure };
 
+type RetargetTarget = Parameters<typeof equatorialFor>[0] & {
+  id: string;
+  enabled: boolean;
+  opticalConfig: string;
+  imagingProfile: string;
+};
+
+/**
+ * What the cloud knows about this mission's captures, for ADR-079's CAPTURE rules.
+ *
+ * A capture is awaiting its verdict while its command has been minted, has not
+ * expired unanswered, and carries no agent result. The agent answers ACCEPTED or
+ * REJECTED and never COMPLETED, so after ACCEPTED the mission state (CAPTURING,
+ * PROCESSING) is what says one is running.
+ */
+async function captureHistory(missionId: string, now: Date) {
+  const database = getDatabase();
+  const [last, awaiting, captureCount] = await Promise.all([
+    database.observatoryCommand.findFirst({
+      where: { missionId, type: "CAPTURE" },
+      orderBy: { issuedAt: "desc" },
+      select: { issuedAt: true },
+    }),
+    database.observatoryCommand.count({
+      where: {
+        missionId,
+        type: "CAPTURE",
+        status: { in: ["RECEIVED", "AUTHORIZED", "EXECUTING"] },
+        result: { equals: Prisma.DbNull },
+        expiresAt: { gt: now },
+      },
+    }),
+    database.capture.count({ where: { missionId } }),
+  ]);
+  return { lastIssuedAt: last?.issuedAt ?? null, awaitingVerdict: awaiting > 0, captureCount };
+}
+
 /**
  * Client intent to contract payload.
  *
  * RECENTER is the interesting one. It becomes a GOTO, and its coordinates come
- * from the booked target -- never from the request, which carries none. That is
- * what stops "recentre" being a free-form slew wearing a friendlier name.
+ * from the current target (ADR-079: the booked one until a RETARGET) -- never from
+ * the request, which carries none. That is what stops "recentre" being a free-form
+ * slew wearing a friendlier name. RETARGET is the same idea: the request names a
+ * catalogue id the in-slot rules have already judged, and the coordinates are the
+ * cloud's, computed now.
  */
 function buildPayload(
   request: MissionCommandRequest,
   mission: {
     targetId: string;
-    target: Parameters<typeof equatorialFor>[0] & {
-      opticalConfig: string;
-      imagingProfile: string;
-      id: string;
-    };
+    target: RetargetTarget;
+    currentTarget: RetargetTarget | null;
     booking: { targetId: string } | null;
     observatory: { latitude: number; longitude: number };
   },
+  retargetTo: RetargetTarget | null,
   now: Date,
 ): BuiltPayload {
   switch (request.type) {
@@ -409,21 +543,39 @@ function buildPayload(
         };
       }
 
-      const coordinates = equatorialFor(mission.target, now, {
+      const current = mission.currentTarget ?? mission.target;
+      const coordinates = equatorialFor(current, now, {
         latitudeDegrees: mission.observatory.latitude,
         longitudeDegrees: mission.observatory.longitude,
       });
 
       const goto: GotoPayload = {
         kind: "GOTO",
-        targetId: bookedTargetId,
+        targetId: current.id,
         coordinates,
-        opticalConfig: mission.target.opticalConfig as GotoPayload["opticalConfig"],
-        imagingProfile: mission.target.imagingProfile as GotoPayload["imagingProfile"],
+        opticalConfig: current.opticalConfig as GotoPayload["opticalConfig"],
+        imagingProfile: current.imagingProfile as GotoPayload["imagingProfile"],
         recenter: true,
       };
 
       return { type: "GOTO", payload: goto };
+    }
+
+    case "RETARGET": {
+      if (!request.retarget || !retargetTo) {
+        return { error: missingPayload("RETARGET", "retarget") };
+      }
+      const retarget: RetargetPayload = {
+        kind: "RETARGET",
+        targetId: retargetTo.id,
+        coordinates: equatorialFor(retargetTo, now, {
+          latitudeDegrees: mission.observatory.latitude,
+          longitudeDegrees: mission.observatory.longitude,
+        }),
+        opticalConfig: retargetTo.opticalConfig as RetargetPayload["opticalConfig"],
+        imagingProfile: retargetTo.imagingProfile as RetargetPayload["imagingProfile"],
+      };
+      return { type: "RETARGET", payload: retarget };
     }
   }
 }

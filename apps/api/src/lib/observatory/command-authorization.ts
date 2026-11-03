@@ -47,6 +47,8 @@ const activeMissionStates = new Set([
   "CENTERING",
   "OBSERVING",
   "CAPTURING",
+  // ADR-079: a booked session returns from PROCESSING to OBSERVING.
+  "PROCESSING",
 ]);
 
 export function authorizeTelescopeCommand(

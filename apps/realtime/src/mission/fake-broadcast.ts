@@ -1,5 +1,6 @@
 import type { AgentCommandAck, AgentStateDelta, Capture } from "@darkview/contracts";
 
+import type { SessionEndedRecord } from "@/link/store";
 import type { MissionBroadcast } from "@/mission/broadcast";
 import type { LiveFrameDetail } from "@/mission/protocol";
 import type { MissionSnapshot } from "@/mission/store";
@@ -24,8 +25,14 @@ export class RecordingBroadcast implements MissionBroadcast {
     this.moved.push(snapshot);
   }
 
-  telemetryReported(missionId: string, delta: AgentStateDelta): void {
+  async telemetryReported(missionId: string, delta: AgentStateDelta): Promise<void> {
     this.telemetry.push({ missionId, delta });
+  }
+
+  readonly ended: SessionEndedRecord[] = [];
+
+  sessionEnded(record: SessionEndedRecord): void {
+    this.ended.push(record);
   }
 
   async commandAnswered(ack: AgentCommandAck): Promise<void> {

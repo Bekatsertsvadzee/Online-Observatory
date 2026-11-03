@@ -50,7 +50,7 @@ def observing_runner(clock: ManualClock, shown: list, observing_seconds: float =
         solver=SimSolver(),
         clock=clock,
         show=lambda frame: shown.append((clock.monotonic(), frame)),
-        observing_seconds=observing_seconds,
+        max_observing_seconds=observing_seconds,
     )
     runner.offer(request(), NIGHT)
     for _ in range(400):
@@ -132,10 +132,11 @@ def test_capture_waits_for_the_live_exposure_and_starts_its_own_stack() -> None:
     for _ in range(200):
         runner.pump(NIGHT)
         clock.advance(PUMP_SECONDS)
-        if runner.state is MissionState.complete:
+        if runner.state is MissionState.observing and not runner.capture_pending:
             break
 
-    assert runner.state is MissionState.complete
+    # The capture is delivered and the slot runs on (ADR-079 §5).
+    assert runner.state is MissionState.observing
     assert runner.frames_captured == 4
 
 

@@ -83,6 +83,10 @@ class Agent:
     def mount(self) -> SimMount:
         return self.devices.mount  # type: ignore[return-value]
 
+    @property
+    def camera(self) -> SimCamera:
+        return self.devices.camera  # type: ignore[return-value]
+
     # -- driving --------------------------------------------------------
 
     def close(self) -> None:
@@ -186,6 +190,19 @@ class Agent:
         payload["recenter"] = recenter
         return commands.goto(payload=payload, issued_at=self.wall.now, **kwargs)
 
+    def retarget(self, **kwargs) -> dict:
+        payload = commands.retarget_payload(
+            ra_hours=kwargs.pop("ra_hours", TARGET_RA_HOURS),
+            dec_degrees=kwargs.pop("dec_degrees", TARGET_DEC_DEGREES),
+            target_id=kwargs.pop("target_id", None),
+            imaging_profile=kwargs.pop("imaging_profile", "GLOBULAR_CLUSTER"),
+        )
+        return commands.retarget(payload=payload, issued_at=self.wall.now, **kwargs)
+
+    def capture(self, *, frames: int = 3, **kwargs) -> dict:
+        payload = dict(commands.capture_payload(), requestedFrames=frames)
+        return commands.capture(payload=payload, issued_at=self.wall.now, **kwargs)
+
     def nudge(self, *, step_arcminutes: float = 6.0, **kwargs) -> dict:
         payload = commands.nudge_payload(
             step_arcminutes=step_arcminutes,
@@ -223,16 +240,19 @@ def build_agent(
     state_path: Path | None = None,
     mount: SimMount | None = None,
     uploader=None,
-    observing_seconds: float = 4.0,
+    max_observing_seconds: float = 30.0,
     sustained_link_loss_seconds: float | None = None,
     driver_mode: DriverMode = DriverMode.SIMULATED,
+    frame_size: tuple[int, int] | None = None,
+    solver: SimSolver | None = None,
 ) -> Agent:
     """Assemble one agent. Passing the same `state_path` twice is a restart.
 
-    `observing_seconds` is short by default. OBSERVING waits for a person, and
-    the production default is a minute and a half -- which every full-mission
-    test would otherwise pump through two seconds at a time. The real default is
-    exercised on its own, in `test_capture_upload.py`.
+    `max_observing_seconds` is short by default: long enough for a ten-frame
+    capture, short enough to pump through. A mission observes until its session's
+    `expiresAt` (ADR-079), and a test that never sends one would otherwise observe
+    for the four-hour ceiling. A test about the slot's end passes `expires_at` to
+    `own` and a long ceiling.
 
     `mount` exists for the restart tests. A crashed agent does not park anything
     on its way out -- the mount keeps tracking wherever it was -- so a test about
@@ -243,7 +263,12 @@ def build_agent(
     wall = Wall(start)
 
     mount = SimMount(clock) if mount is None else mount
-    devices = Devices(mount=mount, camera=SimCamera(clock, mount), focuser=SimFocuser(clock))
+    camera = (
+        SimCamera(clock, mount)
+        if frame_size is None
+        else SimCamera(clock, mount, width_px=frame_size[0], height_px=frame_size[1])
+    )
+    devices = Devices(mount=mount, camera=camera, focuser=SimFocuser(clock))
 
     config = AgentConfig(
         driver_mode=driver_mode,
@@ -270,12 +295,12 @@ def build_agent(
         devices=devices,
         connect=connector,
         envelope=envelope,
-        solver=SimSolver(initial_error_degrees=solve_error_degrees),
+        solver=solver or SimSolver(initial_error_degrees=solve_error_degrees),
         store=store,
         clock=clock,
         now=wall,
         uploader=uploader,
-        observing_seconds=observing_seconds,
+        max_observing_seconds=max_observing_seconds,
         sustained_link_loss_seconds=sustained_link_loss_seconds,
     )
     # Before the first pump, because the hello that pump sends is where a
@@ -309,10 +334,21 @@ def hello_from(agent: Agent) -> dict:
 
 
 def run_to(agent: Agent, state: MissionState, budget_seconds: float = 240.0) -> None:
-    """Advance until the mission reaches a state, or fail saying where it stopped."""
+    """Advance until the mission reaches a state, or fail saying where it stopped.
+
+    CAPTURING and PROCESSING are only reached by a CAPTURE (ADR-079 §5), so for
+    either of them this presses Capture once the mission is observing -- ten
+    frames, the run every test before ADR-079 got without asking.
+    """
+    runner = agent.supervisor.runner
+    wants_capture = state in (MissionState.capturing, MissionState.processing)
     for _ in range(int(budget_seconds / 2)):
-        if agent.supervisor.runner.state is state:
+        if runner.state is state:
             return
+        if wants_capture and runner.state is MissionState.observing and not runner.capture_pending:
+            ack = agent.command(agent.capture(frames=10))
+            assert ack is not None and ack["status"] == "ACCEPTED", ack
+            continue
         agent.advance(2.0)
     raise AssertionError(
         f"mission never reached {state.value}; it is in "

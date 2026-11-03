@@ -2,6 +2,8 @@ import type { ObservatoryCommandStatus } from "@darkview/db/enums";
 
 import { randomUUID } from "node:crypto";
 
+import { END_TELEMETRY_SECONDS, sessionEndReasonOf } from "@darkview/db/booked-session";
+
 import type {
   AgentPosture,
   Capture,
@@ -19,7 +21,9 @@ import {
   COMMAND_STATUS_FOR,
   LIVE_MISSION_STATES,
   START_NOT_RUN_STATUSES,
+  TERMINAL_COMMAND_STATUSES,
   TERMINAL_MISSION_STATES,
+  dwellTargetOf,
   failureReasonForRefusedStart,
   isStartingGoto,
   isLegalMissionTransition,
@@ -35,7 +39,9 @@ import {
   type MissionEventRecord,
   type ObservatoryRecord,
   type RelayableCommand,
+  type MissionLiveContext,
   type ResumeOutcome,
+  type SessionEndedRecord,
 } from "@/link/store";
 import type { ChannelUser, MissionChannelStore, MissionSnapshot } from "@/mission/store";
 
@@ -51,6 +57,22 @@ export type FakeMission = {
   telescopeId: string;
   /** The end of the booked slot, for a booked mission. */
   slotEndsAt?: Date;
+  /** ADR-079: the object the session is on now, and when the agent accepted it. */
+  currentTargetId?: string | null;
+  currentTargetSince?: Date | null;
+  imageUnrecoveredSince?: Date | null;
+  slotEndNotifiedAt?: Date | null;
+  sessionEndedNotifiedAt?: Date | null;
+  /** When the mission reached a terminal state. */
+  endedAt?: Date | null;
+};
+
+/** An outbox row, as the fake keeps it. */
+export type FakeEmail = {
+  userId: string;
+  kind: string;
+  dedupeKey: string;
+  payload: Record<string, string>;
 };
 
 export type FakeMissionEvent = {
@@ -115,6 +137,9 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
   readonly envelopeReads: string[] = [];
   readonly revoked: { sessionId: string; reason: string }[] = [];
   readonly completedAt = new Map<string, Date>();
+  readonly emails: FakeEmail[] = [];
+  /** ADR-080 writes, in order, so a test can count them. */
+  readonly imageHealthWrites: { missionId: string; unrecovered: boolean }[] = [];
 
   private readonly envelopes = new Map<string, SafetyEnvelopeConfig>();
   private readonly weather = new Map<string, WeatherState>();
@@ -357,7 +382,7 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
       id: randomUUID(),
       missionId: record.missionId,
       userId: mission.userId,
-      targetId: mission.targetId,
+      targetId: this.captureTargetOf(record, mission),
       capturedAt: record.capturedAt.toISOString(),
       imagingProfile: record.imagingProfile,
       opticalConfig: record.opticalConfig,
@@ -379,7 +404,38 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
       ownerId: mission.userId,
       assets: record.assets,
     });
+    // A booked session sends one summary at its end instead (ADR-079 §6).
+    if (!mission.slotEndsAt) {
+      this.queueEmail({
+        userId: mission.userId,
+        kind: "CAPTURE_READY",
+        dedupeKey: `capture-ready:${capture.id}`,
+        payload: { captureId: capture.id },
+      });
+    }
     return { outcome: "RECORDED", capture };
+  }
+
+  /** The same rule as the Prisma store's `captureTargetOf`. */
+  private captureTargetOf(record: CaptureRecord, mission: FakeMission): string {
+    const current = mission.currentTargetId ?? mission.targetId;
+    const reported = record.targetId;
+    if (!reported || reported === current || reported === mission.targetId) {
+      return reported ?? current;
+    }
+    const sentThere = [...this.commands.values()].some(
+      (command) =>
+        command.envelope.missionId === record.missionId &&
+        command.envelope.type === "RETARGET" &&
+        (command.envelope.payload as { targetId?: string }).targetId === reported,
+    );
+    return sentThere ? reported : current;
+  }
+
+  private queueEmail(email: FakeEmail): boolean {
+    if (this.emails.some((queued) => queued.dedupeKey === email.dedupeKey)) return false;
+    this.emails.push(email);
+    return true;
   }
 
   async hasObserverSeat(missionId: string, userId: string): Promise<boolean> {
@@ -448,6 +504,7 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
 
     mission.state = event.state;
     mission.failureReason = event.failureReason;
+    if (isTerminal(event.state)) mission.endedAt = event.occurredAt;
     return "APPLIED";
   }
 
@@ -532,6 +589,21 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
 
     const missionId = command.envelope.missionId;
     const mission = this.missions.get(missionId);
+
+    const dwellTarget = dwellTargetOf(command.envelope.type, command.envelope.payload);
+    if (verdict.status === "ACCEPTED" && dwellTarget && mission && isLive(mission.state)) {
+      mission.currentTargetId = dwellTarget;
+      mission.currentTargetSince = verdict.decidedAt;
+      if (command.envelope.type === "RETARGET") {
+        this.audit("MISSION", "MISSION_TARGET_CHANGED", {
+          missionId,
+          commandId: verdict.commandId,
+          entityId: missionId,
+          detail: { targetId: dwellTarget, acceptedAt: verdict.decidedAt.toISOString() },
+        });
+      }
+    }
+
     if (
       (START_NOT_RUN_STATUSES as readonly string[]).includes(status) &&
       isStartingGoto(command.envelope.type, command.envelope.payload) &&
@@ -594,6 +666,135 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
       closed.push(missionId);
     }
     return closed;
+  }
+
+  async loadMissionLiveContext(missionId: string): Promise<MissionLiveContext | null> {
+    const mission = this.missions.get(missionId);
+    if (!mission) return null;
+
+    const captureCommands = [...this.commands.values()]
+      .filter(
+        (command) =>
+          command.envelope.missionId === missionId && command.envelope.type === "CAPTURE",
+      )
+      .sort((a, b) => Date.parse(b.envelope.issuedAt) - Date.parse(a.envelope.issuedAt));
+    const session = [...this.sessions.values()].find((held) => held.missionId === missionId);
+
+    return {
+      missionId,
+      state: mission.state,
+      currentTargetId: mission.currentTargetId ?? null,
+      currentTargetSince: mission.currentTargetSince ?? null,
+      sessionEndsAt: mission.slotEndsAt ?? session?.expiresAt ?? null,
+      lastCaptureIssuedAt: captureCommands[0]
+        ? new Date(captureCommands[0].envelope.issuedAt)
+        : null,
+      captureAwaitingVerdict: captureCommands.some(
+        (command) =>
+          !this.verdicts.has(command.envelope.commandId) &&
+          !(TERMINAL_COMMAND_STATUSES as readonly string[]).includes(
+            this.commandStatusOf(command.envelope.commandId),
+          ) &&
+          Date.parse(command.envelope.expiresAt) > Date.now(),
+      ),
+      captureCount: [...this.captures.values()].filter(
+        (held) => held.capture.missionId === missionId,
+      ).length,
+    };
+  }
+
+  async recordImageHealth(input: {
+    observatoryId: string;
+    missionId: string;
+    unrecovered: boolean;
+    at: Date;
+  }) {
+    const mission = this.missions.get(input.missionId);
+    if (!mission || mission.observatoryId !== input.observatoryId) return;
+    this.imageHealthWrites.push({ missionId: input.missionId, unrecovered: input.unrecovered });
+    if (input.unrecovered) mission.imageUnrecoveredSince ??= input.at;
+    else mission.imageUnrecoveredSince = null;
+  }
+
+  async claimEndedSlots(now: Date) {
+    const claimed: { missionId: string; observatoryId: string }[] = [];
+    for (const [missionId, mission] of this.missions) {
+      if (!isLive(mission.state) || !mission.slotEndsAt || mission.slotEndsAt > now) continue;
+      if (mission.slotEndNotifiedAt) continue;
+      mission.slotEndNotifiedAt = now;
+      this.audit("MISSION", "MISSION_SLOT_ENDED", {
+        missionId,
+        entityId: missionId,
+        detail: { slotEndedAt: mission.slotEndsAt.toISOString(), endReason: "SLOT_ENDED" },
+      });
+      claimed.push({ missionId, observatoryId: mission.observatoryId });
+    }
+    return claimed;
+  }
+
+  async endMissionSession(input: {
+    missionId: string;
+    parked: boolean;
+    now: Date;
+  }): Promise<SessionEndedRecord | null> {
+    const mission = this.missions.get(input.missionId);
+    if (!mission || !isTerminal(mission.state) || !mission.currentTargetId) return null;
+    if (mission.sessionEndedNotifiedAt) return null;
+    mission.sessionEndedNotifiedAt = input.now;
+
+    const reachedObserving = this.missionEvents.some(
+      (event) => event.missionId === input.missionId && event.state === "OBSERVING",
+    );
+    const summaryEmailQueued =
+      mission.slotEndsAt !== undefined && reachedObserving
+        ? this.queueEmail({
+            userId: mission.userId,
+            kind: "SESSION_SUMMARY",
+            dedupeKey: `session-summary:${input.missionId}`,
+            payload: { missionId: input.missionId },
+          })
+        : false;
+
+    const captureIds = [...this.captures.values()]
+      .filter((held) => held.capture.missionId === input.missionId)
+      .sort((a, b) => Date.parse(a.capture.capturedAt) - Date.parse(b.capture.capturedAt))
+      .map((held) => held.capture.id);
+    const endReason = sessionEndReasonOf(mission.state, mission.failureReason);
+
+    this.audit("MISSION", "MISSION_SESSION_ENDED", {
+      missionId: input.missionId,
+      entityId: input.missionId,
+      detail: {
+        endReason,
+        parked: input.parked,
+        captureCount: captureIds.length,
+        summaryEmailQueued,
+      },
+    });
+
+    return {
+      missionId: input.missionId,
+      state: mission.state,
+      failureReason: mission.failureReason,
+      endReason,
+      endedAt: mission.endedAt ?? input.now,
+      parked: input.parked,
+      captureIds,
+      summaryEmailQueued,
+    };
+  }
+
+  async overdueSessionEnds(now: Date): Promise<string[]> {
+    const cutoff = now.getTime() - END_TELEMETRY_SECONDS * 1000;
+    return [...this.missions.entries()]
+      .filter(
+        ([, mission]) =>
+          isTerminal(mission.state) &&
+          mission.currentTargetId &&
+          !mission.sessionEndedNotifiedAt &&
+          (mission.endedAt?.getTime() ?? 0) <= cutoff,
+      )
+      .map(([missionId]) => missionId);
   }
 
   /** The command id, if this observatory really owns a command by that id. */

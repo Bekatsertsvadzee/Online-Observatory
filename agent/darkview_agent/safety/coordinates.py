@@ -97,6 +97,36 @@ def equatorial_to_horizontal(
     )
 
 
+def horizontal_to_equatorial(
+    altitude_degrees: float,
+    azimuth_degrees: float,
+    moment: datetime,
+    site: SiteLocation,
+) -> tuple[float, float]:
+    """The inverse: which catalogue position is in this direction now.
+
+    Right ascension in hours and declination in degrees, with the same J2000-as-apparent
+    simplification as above. Used to hold a direction on the sky while it turns.
+    """
+    altitude = math.radians(altitude_degrees)
+    azimuth = math.radians(azimuth_degrees)
+    latitude = math.radians(site.latitude_degrees)
+
+    sine_declination = math.sin(altitude) * math.sin(latitude) + math.cos(altitude) * math.cos(
+        latitude
+    ) * math.cos(azimuth)
+    declination = math.asin(max(-1.0, min(1.0, sine_declination)))
+    hour_angle = math.degrees(
+        math.atan2(
+            -math.sin(azimuth) * math.cos(altitude),
+            math.sin(altitude) * math.cos(latitude)
+            - math.cos(altitude) * math.sin(latitude) * math.cos(azimuth),
+        )
+    )
+    right_ascension = (local_sidereal_time(moment, site) - hour_angle) % 360.0 / 15.0
+    return (0.0 if right_ascension >= 24.0 else right_ascension), math.degrees(declination)
+
+
 def _wrap_azimuth(degrees: float) -> float:
     """Into 0..360, with 360 itself excluded.
 

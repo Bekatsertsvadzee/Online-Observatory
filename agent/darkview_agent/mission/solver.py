@@ -17,7 +17,13 @@ import math
 from dataclasses import dataclass
 from typing import Protocol
 
+import numpy as np
+
 from darkview_agent.devices.frame import Frame
+
+#: Below this spread between the brightest pixels and the median, a frame has
+#: nothing in it to match: a capped lens, a dead sensor, a white-out.
+FEATURELESS_FRACTION = 0.02
 
 
 @dataclass(frozen=True)
@@ -45,6 +51,12 @@ def separation_degrees(
     return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
 
 
+def featureless(frame: Frame) -> bool:
+    sample = frame.pixels[::4, ::4]
+    spread = float(np.percentile(sample, 99.9)) - float(np.median(sample))
+    return spread < FEATURELESS_FRACTION * 65535.0
+
+
 class PlateSolver(Protocol):
     def solve(self, frame: Frame) -> SolveResult | None:
         """Return the true pointing, or None if the field could not be solved.
@@ -66,7 +78,11 @@ class SimSolver(PlateSolver):
     way it would on a real telescope.
 
     `error_drift_degrees` is a mount whose error changes after every solve by
-    that much in declination, which no bounded correction catches.
+    that much in declination, which no bounded correction catches. `drift` moves
+    the error once, the way a mount walks off a target over minutes (ADR-080), so a
+    later solve finds the offset and a correction can take it out.
+
+    A flat frame never solves, as on a real solver: there are no stars to match.
     """
 
     def __init__(
@@ -92,9 +108,20 @@ class SimSolver(PlateSolver):
         """
         self.commanded = (ra_hours, dec_degrees)
 
+    def drift(self, ra_hours: float = 0.0, dec_degrees: float = 0.0) -> None:
+        """The mount's pointing walks this far from where it was sent."""
+        self._ra_error += ra_hours
+        self._error += dec_degrees
+
+    def fail(self, count: int) -> None:
+        """The next `count` solves fail, as on a frame too thin to match."""
+        self._remaining_failures = count
+
     def solve(self, frame: Frame) -> SolveResult | None:
         self.solve_count += 1
 
+        if featureless(frame):
+            return None
         if self._fail_always or self._remaining_failures > 0:
             self._remaining_failures = max(0, self._remaining_failures - 1)
             return None

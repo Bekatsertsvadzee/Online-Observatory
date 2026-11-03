@@ -292,6 +292,7 @@ describe("opening a session", () => {
       "CAPTURE",
       "RECENTER",
       "ABORT",
+      "RETARGET",
     ]);
   });
 

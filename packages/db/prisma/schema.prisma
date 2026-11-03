@@ -200,6 +200,8 @@ enum CommandType {
   ABORT
   PARK
   SET_PROFILE
+  /// ADR-079: a live session moved to another object visible now.
+  RETARGET
 }
 
 enum ObservatoryCommandStatus {
@@ -758,7 +760,8 @@ model Target {
   updatedAt               DateTime              @updatedAt
   compatibleObservatories TargetObservatory[]
   bookings                Booking[]
-  missions                Mission[]
+  missions                Mission[]             @relation("MissionBookedTarget")
+  currentMissions         Mission[]             @relation("MissionCurrentTarget")
   captures                Capture[]
   votes                   Vote[]
   cardDrawCards           CardDrawCard[]
@@ -836,10 +839,28 @@ model Mission {
   scheduledFor        DateTime?
   startedAt           DateTime?
   completedAt         DateTime?
+  /// ADR-079. The object the session is on now. `targetId` is the booked target and
+  /// never changes; this starts as it and follows each RETARGET the agent accepts.
+  /// Null only on a mission that never started.
+  currentTargetId     String?              @db.Uuid
+  /// ADR-079. When the agent accepted the GOTO or RETARGET that put the mount on
+  /// `currentTargetId`: the start of the 600-second dwell lock. RECENTER, NUDGE and
+  /// the agent's own re-centring do not move it.
+  currentTargetSince  DateTime?
+  /// ADR-080. Since when the agent has reported its picture UNRECOVERED, else null.
+  /// Written when that changes, not per telemetry sample; it waives the dwell lock.
+  imageUnrecoveredSince DateTime?
+  /// ADR-079. When the slot-end sweep told the agent the session ended (SLOT_ENDED).
+  /// Set once, so the sweep tells it once.
+  slotEndNotifiedAt   DateTime?
+  /// ADR-079. When MISSION_SESSION_ENDED was sent and the summary email queued. Set
+  /// once, in the transaction that queues the email, so neither happens twice.
+  sessionEndedNotifiedAt DateTime?
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   user                User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
-  target              Target               @relation(fields: [targetId], references: [id], onDelete: Restrict)
+  target              Target               @relation("MissionBookedTarget", fields: [targetId], references: [id], onDelete: Restrict)
+  currentTarget       Target?              @relation("MissionCurrentTarget", fields: [currentTargetId], references: [id], onDelete: Restrict)
   observatory         Observatory          @relation(fields: [observatoryId], references: [id], onDelete: Restrict)
   telescope           Telescope            @relation(fields: [telescopeId], references: [id], onDelete: Restrict)
   events              MissionEvent[]
@@ -857,6 +878,7 @@ model Mission {
   @@index([userId, requestedAt])
   @@index([observatoryId, state, scheduledFor])
   @@index([targetId])
+  @@index([currentTargetId])
   @@index([telescopeId])
 }
 
@@ -1488,6 +1510,8 @@ enum EmailNotificationKind {
   CARD_PRIZE_WON
   /// Clients ADR-068: a freed slot is held for the first person waiting for it.
   WAITLIST_OFFER
+  /// ADR-079: a booked session ended; every capture it kept, in one email.
+  SESSION_SUMMARY
 }
 
 /// Contract: BookingLossCause (DV-111).

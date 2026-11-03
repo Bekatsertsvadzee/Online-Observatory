@@ -52,6 +52,23 @@ const DATA: Record<string, Record<string, unknown>> = {
     expiresAt: null,
     codeLast4: "EFGH",
   },
+  SESSION_SUMMARY: {
+    missionId: "44444444-4444-4444-8444-444444444444",
+    simulated: true,
+    observatory,
+    captures: [
+      {
+        captureId: "22222222-2222-4222-8222-222222222222",
+        capturedAt: "2026-12-15T18:20:00.000Z",
+        target,
+      },
+      {
+        captureId: "77777777-7777-4777-8777-777777777777",
+        capturedAt: "2026-12-15T18:41:00.000Z",
+        target: { nameEn: "Saturn", nameKa: "სატურნი" },
+      },
+    ],
+  },
   CARD_PRIZE_WON: {
     cardPrizeId: "66666666-6666-4666-8666-666666666666",
     kind: "DISCOUNT",
@@ -87,6 +104,29 @@ describe("every outbox email (ADR-062)", () => {
   it("says a simulated capture is simulated", () => {
     const email = renderEmail({ kind: "CAPTURE_READY", locale: "en", data: DATA.CAPTURE_READY, appUrl: APP_URL });
     expect(email.text).toContain("marked Simulated");
+  });
+
+  it("lists every capture of a session, in the observatory's time, and links the Collection", () => {
+    const en = renderEmail({ kind: "SESSION_SUMMARY", locale: "en", data: DATA.SESSION_SUMMARY, appUrl: APP_URL });
+    expect(en.subject).toContain("2 captures");
+    expect(en.text).toContain("22:20 — M13");
+    expect(en.text).toContain("22:41 — Saturn");
+    expect(en.text).toContain("marked Simulated");
+    expect(en.text).toContain(`${APP_URL}/en/app/collection`);
+    const ka = renderEmail({ kind: "SESSION_SUMMARY", locale: "ka", data: DATA.SESSION_SUMMARY, appUrl: APP_URL });
+    expect(ka.text).toContain("22:41 — სატურნი");
+    expect(ka.text).toContain(`${APP_URL}/ka/app/collection`);
+  });
+
+  it("says plainly when a session kept nothing", () => {
+    const email = renderEmail({
+      kind: "SESSION_SUMMARY",
+      locale: "en",
+      data: { ...DATA.SESSION_SUMMARY, simulated: false, captures: [] },
+      appUrl: APP_URL,
+    });
+    expect(email.subject).toContain("Your session has ended");
+    expect(email.text).toContain("Nothing was captured");
   });
 
   it("writes the gift code and escapes what a person typed", () => {

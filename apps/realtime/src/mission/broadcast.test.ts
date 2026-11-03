@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   AgentCommandAck,
@@ -9,7 +9,7 @@ import type {
 } from "@darkview/contracts";
 
 import { FakeLinkStore } from "@/link/fake-store";
-import { MissionRelay } from "@/mission/broadcast";
+import { LIVE_CONTEXT_TTL_MS, MissionRelay } from "@/mission/broadcast";
 import { MissionChannel } from "@/mission/channel";
 import { MissionChannelRegistry } from "@/mission/registry";
 import type { ChannelUser } from "@/mission/store";
@@ -153,7 +153,7 @@ describe("telemetry narrowing", () => {
   it("carries the client-safe fields", async () => {
     const client = await subscriber(MISSION);
 
-    relay.telemetryReported(MISSION, stateDelta(MISSION));
+    await relay.telemetryReported(MISSION, stateDelta(MISSION));
 
     expect(client.received[0]).toMatchObject({
       type: "MISSION_TELEMETRY",
@@ -173,7 +173,7 @@ describe("telemetry narrowing", () => {
     // This is that sentence as an assertion.
     const client = await subscriber(MISSION);
 
-    relay.telemetryReported(MISSION, stateDelta(MISSION));
+    await relay.telemetryReported(MISSION, stateDelta(MISSION));
 
     const message = client.received[0] as Record<string, unknown>;
     for (const forbidden of [
@@ -252,7 +252,7 @@ describe("where the mount is pointing (#148)", () => {
     expect(unseated.channel.currentState).toBe("CLOSED");
     expect(borrowed.channel.currentState).toBe("CLOSED");
 
-    relay.telemetryReported(MISSION, slewing(41.237, 120.04));
+    await relay.telemetryReported(MISSION, slewing(41.237, 120.04));
 
     const expected = { altitudeDegrees: 41.2, azimuthDegrees: 120 };
     expect(pointingsOf(owner.received)).toEqual([expected]);
@@ -268,7 +268,7 @@ describe("where the mount is pointing (#148)", () => {
     store.closeToObservers(MISSION);
     const observer = await watcher(MISSION, observerId, null);
 
-    relay.telemetryReported(MISSION, slewing(30, 90));
+    await relay.telemetryReported(MISSION, slewing(30, 90));
 
     expect(observer.received).toEqual([]);
   });
@@ -281,7 +281,7 @@ describe("where the mount is pointing (#148)", () => {
       [35.55, 200.04],
       [56.662, 238.572],
     ] as const) {
-      relay.telemetryReported(MISSION, slewing(altitude, azimuth));
+      await relay.telemetryReported(MISSION, slewing(altitude, azimuth));
     }
 
     expect(pointingsOf(owner.received)).toEqual([
@@ -296,7 +296,7 @@ describe("where the mount is pointing (#148)", () => {
     const delta = stateDelta(MISSION);
     delta.telemetry.pointingHorizontal = null;
 
-    relay.telemetryReported(MISSION, delta);
+    await relay.telemetryReported(MISSION, delta);
 
     expect(pointingsOf(owner.received)).toEqual([null]);
   });
@@ -304,7 +304,7 @@ describe("where the mount is pointing (#148)", () => {
   it("wraps an azimuth that rounds up to 360 back to north", async () => {
     const owner = await subscriber(MISSION);
 
-    relay.telemetryReported(MISSION, slewing(45, 359.96));
+    await relay.telemetryReported(MISSION, slewing(45, 359.96));
 
     expect(pointingsOf(owner.received)).toEqual([
       { altitudeDegrees: 45, azimuthDegrees: 0 },
@@ -380,5 +380,84 @@ describe("command results", () => {
     await relay.commandAnswered(ack(randomUUID()));
 
     expect(client.received).toEqual([]);
+  });
+});
+
+describe("a booked session's telemetry (ADR-079)", () => {
+  const CURRENT = "44444444-4444-4444-8444-444444444444";
+
+  beforeEach(() => {
+    relay = new MissionRelay(store, registry, frames, () => new Date(now));
+    Object.assign(store.mission(MISSION)!, {
+      currentTargetId: CURRENT,
+      currentTargetSince: new Date(now - 60_000),
+    });
+  });
+
+  it("carries the current object and the dwell countdown", async () => {
+    const client = await subscriber(MISSION);
+
+    await relay.telemetryReported(MISSION, stateDelta(MISSION));
+
+    expect(client.received[0]).toMatchObject({
+      type: "MISSION_TELEMETRY",
+      currentTargetId: CURRENT,
+      retargetAllowedAt: new Date(now + 540_000).toISOString(),
+      captureAllowedAt: null,
+      endPhase: null,
+    });
+  });
+
+  it("reads the store once per few seconds, not once per sample", async () => {
+    await subscriber(MISSION);
+    const reads = vi.spyOn(store, "loadMissionLiveContext");
+
+    await relay.telemetryReported(MISSION, stateDelta(MISSION));
+    await relay.telemetryReported(MISSION, stateDelta(MISSION));
+    expect(reads).toHaveBeenCalledTimes(1);
+
+    now += LIVE_CONTEXT_TTL_MS;
+    await relay.telemetryReported(MISSION, stateDelta(MISSION));
+    expect(reads).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads again at once after the mission moves", async () => {
+    await subscriber(MISSION);
+    const reads = vi.spyOn(store, "loadMissionLiveContext");
+
+    await relay.telemetryReported(MISSION, stateDelta(MISSION));
+    relay.missionMoved({ missionId: MISSION, state: "COMPLETE", failureReason: null });
+    await relay.telemetryReported(MISSION, stateDelta(MISSION));
+
+    expect(reads).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads nothing for a mission nobody is watching", async () => {
+    const reads = vi.spyOn(store, "loadMissionLiveContext");
+
+    await relay.telemetryReported(MISSION, stateDelta(MISSION));
+
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it("tells the watchers the session is over", async () => {
+    const client = await subscriber(MISSION);
+
+    relay.sessionEnded({
+      missionId: MISSION,
+      state: "COMPLETE",
+      failureReason: null,
+      endReason: "SLOT_ENDED",
+      endedAt: new Date(now),
+      parked: true,
+      captureIds: [],
+      summaryEmailQueued: true,
+    });
+
+    expect(client.received[0]).toMatchObject({
+      type: "MISSION_SESSION_ENDED",
+      missionId: MISSION,
+      parked: true,
+    });
   });
 });

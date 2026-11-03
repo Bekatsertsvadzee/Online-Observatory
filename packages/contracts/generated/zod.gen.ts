@@ -11,6 +11,26 @@ export const zCurrency = z.enum(['GEL']);
 
 export const zUserRole = z.enum(['USER', 'OPERATOR']);
 
+/**
+ * Stable machine-readable refusal codes. Client copy is localised from these.
+ *
+ * The last six are a booked session's in-slot refusals (ADR-079), answered by
+ * `POST /missions/{missionId}/command` with 409. Each carries
+ * `details.rejectionReason` (the CommandRejectionReason of the same name) and,
+ * where a wait would make the command acceptable, `details.allowedAt`:
+ * - MISSION_BUSY: the mission is not OBSERVING (it is slewing, verifying,
+ * centring, capturing or processing). RETARGET waits for OBSERVING.
+ * - DWELL_LOCKED: the current object has been held for less than the
+ * 600-second minimum dwell. `details.allowedAt` is `retargetAllowedAt`.
+ * - CAPTURE_IN_PROGRESS: a CAPTURE is already running or awaiting the agent's
+ * verdict. One capture at a time.
+ * - CAPTURE_COOLDOWN: less than 30 seconds since the previous CAPTURE was
+ * issued. `details.allowedAt` is `captureAllowedAt`.
+ * - CAPTURE_LIMIT_REACHED: the mission already holds 50 captures.
+ * - SESSION_ENDING: too little of the slot remains -- under 300 seconds for
+ * RETARGET, under 60 seconds for CAPTURE.
+ *
+ */
 export const zErrorCode = z.enum([
     'BAD_REQUEST',
     'UNAUTHENTICATED',
@@ -37,7 +57,13 @@ export const zErrorCode = z.enum([
     'SAFETY_REFUSED',
     'SAFETY_NOT_CONFIGURED',
     'RATE_LIMITED',
-    'INTERNAL'
+    'INTERNAL',
+    'MISSION_BUSY',
+    'DWELL_LOCKED',
+    'CAPTURE_IN_PROGRESS',
+    'CAPTURE_COOLDOWN',
+    'CAPTURE_LIMIT_REACHED',
+    'SESSION_ENDING'
 ]);
 
 export const zApiError = z.strictObject({
@@ -317,6 +343,32 @@ export const zSlotTargetList = z.strictObject({
     startAt: z.iso.datetime(),
     durationMinutes: z.int().gt(0),
     items: z.array(zSlotTarget)
+});
+
+/**
+ * One object a live session may RETARGET to now (ADR-079).
+ */
+export const zMissionTargetOption = z.strictObject({
+    target: zTarget,
+    visibility: zSlotVisibility,
+    observableUntil: z.iso.datetime(),
+    current: z.boolean()
+});
+
+/**
+ * `GET /missions/{missionId}/targets` (ADR-079). What the session owner may switch
+ * to at `evaluatedAt`, best first, and when they may.
+ *
+ */
+export const zMissionTargetList = z.strictObject({
+    missionId: z.uuid(),
+    observatoryId: z.uuid(),
+    evaluatedAt: z.iso.datetime(),
+    windowEndsAt: z.iso.datetime(),
+    sessionEndsAt: z.iso.datetime(),
+    currentTargetId: z.uuid().nullable(),
+    retargetAllowedAt: z.iso.datetime().nullable(),
+    items: z.array(zMissionTargetOption)
 });
 
 export const zWeekVoteCandidate = z.strictObject({
@@ -1159,6 +1211,15 @@ export const zPaymentWebhookAck = z.strictObject({
  * web layer. Its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as
  * MissionFailureReason detail on a state above, never as states.
  *
+ * A booked session runs for its whole slot (ADR-079), which adds transitions and
+ * no state: PROCESSING -> OBSERVING after each capture while the slot runs;
+ * OBSERVING -> SLEWING for a RETARGET; OBSERVING -> COMPLETE at the slot's end
+ * with no capture in flight. A capture in flight at the slot's end is finished
+ * early through CAPTURING -> PROCESSING -> COMPLETE with the frames already
+ * stacked. Parking after COMPLETE is not a state: see MissionEndPhase. For a
+ * LUNAR or PLANETARY imaging profile, VERIFYING measures the bright disc's
+ * centroid instead of plate-solving (ADR-080).
+ *
  */
 export const zMissionState = z.enum([
     'REQUESTED',
@@ -1209,6 +1270,9 @@ export const zMission = z.strictObject({
     userId: z.uuid(),
     bookingId: z.uuid().nullable(),
     targetId: z.uuid(),
+    currentTargetId: z.uuid().nullish(),
+    sessionEndsAt: z.iso.datetime().nullish(),
+    retargetAllowedAt: z.iso.datetime().nullish(),
     observatoryId: z.uuid(),
     state: zMissionState,
     failureReason: zMissionFailureReason.nullish(),
@@ -1365,21 +1429,29 @@ export const zCommandType = z.enum([
     'FOCUS',
     'ABORT',
     'PARK',
-    'SET_PROFILE'
+    'SET_PROFILE',
+    'RETARGET'
 ]);
 
 /**
  * What a customer may ask for during a live observation. GOTO, FOCUS, PARK and
  * SET_PROFILE are never client-initiated: the target comes from the booking and
  * the rest are cloud or operator concerns. RECENTER is translated by the cloud
- * into a GOTO back to the booked target; it is not a free-form slew.
+ * into a GOTO back to the current target (`Mission.currentTargetId`, the booked
+ * target until a RETARGET); it is not a free-form slew.
+ *
+ * RETARGET (ADR-079) names a catalogue target id from
+ * `GET /missions/{missionId}/targets`, never coordinates. The cloud looks the
+ * target up, computes its coordinates now and mints a RETARGET envelope; the
+ * client never chooses where the mount points.
  *
  */
 export const zClientCommandType = z.enum([
     'NUDGE',
     'CAPTURE',
     'RECENTER',
-    'ABORT'
+    'ABORT',
+    'RETARGET'
 ]);
 
 /**
@@ -1434,6 +1506,11 @@ export const zNudgePayload = z.strictObject({
  * Phase 1 capture is a short-exposure / live-stacking run, not a long exposure.
  * The requested integration is bounded by the imaging profile.
  *
+ * A booked session may capture many times (ADR-079): one CAPTURE at a time, at
+ * least 30 seconds between successive CAPTUREs' `issuedAt`, at most 50 per
+ * mission, none in the last 60 seconds of the slot. Each CAPTURE is its own
+ * command id and therefore its own upload grants and its own `Capture`.
+ *
  */
 export const zCapturePayload = z.strictObject({
     kind: z.enum(['CAPTURE']),
@@ -1470,6 +1547,43 @@ export const zSetProfilePayload = z.strictObject({
 });
 
 /**
+ * ADR-079. Move a live session to another catalogue object. Minted only by the
+ * cloud from a client RETARGET whose target was in `GET /missions/{missionId}/targets`;
+ * the coordinates are the cloud's, computed at mint time (an EPHEMERIS target's
+ * position now).
+ *
+ * The agent accepts it only while the mission is OBSERVING (else MISSION_BUSY),
+ * no capture is running (else CAPTURE_IN_PROGRESS), at least 300 s of the session
+ * remain (else SESSION_ENDING), the coordinates pass its own envelope (else the
+ * SAFETY_ reason), and its own dwell lock has passed: 600 s since it ACCEPTED the
+ * GOTO or RETARGET that put the mount on the current target, with 15 s of
+ * tolerance for clock skew (else DWELL_LOCKED). It waives its lock while its own
+ * image health is UNRECOVERED.
+ *
+ * Accepted, it resets the nudge offset and the live stack, starts a new dwell
+ * lock, and moves the mission OBSERVING -> SLEWING -> VERIFYING -> CENTERING ->
+ * OBSERVING exactly as the first acquisition. A solve or centring failure on a
+ * retargeted object does not fail the mission: it returns to OBSERVING with image
+ * health UNRECOVERED (ADR-080). `imagingProfile` sets the auto-exposure scene and,
+ * for LUNAR or PLANETARY, centroid centring instead of plate solving.
+ *
+ */
+export const zRetargetPayload = z.strictObject({
+    kind: z.enum(['RETARGET']),
+    targetId: z.uuid(),
+    coordinates: zEquatorialCoordinates,
+    opticalConfig: zOpticalConfig,
+    imagingProfile: zImagingProfile
+});
+
+/**
+ * The client's RETARGET intent. A catalogue target id only (ADR-079).
+ */
+export const zRetargetRequest = z.strictObject({
+    targetId: z.uuid()
+});
+
+/**
  * Discriminated by `kind`. `payload.kind` MUST equal the envelope's `type`; both
  * the cloud and the agent reject an envelope where they disagree.
  *
@@ -1481,7 +1595,8 @@ export const zCommandPayload = z.discriminatedUnion('kind', [
     zFocusPayload.extend({ kind: z.literal('FOCUS') }),
     zAbortPayload.extend({ kind: z.literal('ABORT') }),
     zParkPayload.extend({ kind: z.literal('PARK') }),
-    zSetProfilePayload.extend({ kind: z.literal('SET_PROFILE') })
+    zSetProfilePayload.extend({ kind: z.literal('SET_PROFILE') }),
+    zRetargetPayload.extend({ kind: z.literal('RETARGET') })
 ]);
 
 /**
@@ -1522,6 +1637,7 @@ export const zMissionCommandRequest = z.strictObject({
     type: zClientCommandType,
     nudge: zNudgePayload.nullish(),
     capture: zCapturePayload.nullish(),
+    retarget: zRetargetRequest.nullish(),
     reason: z.string().nullish()
 });
 
@@ -1538,6 +1654,12 @@ export const zCommandAcceptanceStatus = z.enum([
  * Why a command was refused. The SAFETY_ prefixed values are produced by the
  * agent's own envelope check and may occur even when the cloud approved the
  * command; that is the design, not a bug.
+ *
+ * The last seven are a booked session's in-slot rules (ADR-079); the ErrorCode of
+ * the same name describes each. TARGET_NOT_VISIBLE_NOW is the cloud's only: the
+ * target was not in `GET /missions/{missionId}/targets` (ErrorCode
+ * TARGET_NOT_OBSERVABLE). The agent produces MISSION_BUSY, DWELL_LOCKED,
+ * CAPTURE_IN_PROGRESS and SESSION_ENDING from its own state and clock.
  *
  */
 export const zCommandRejectionReason = z.enum([
@@ -1564,7 +1686,14 @@ export const zCommandRejectionReason = z.enum([
     'MODE_NOT_PERMITTED',
     'WEATHER_HOLD_ACTIVE',
     'OBSERVATORY_OFFLINE',
-    'UNATTENDED_DISARMED'
+    'UNATTENDED_DISARMED',
+    'MISSION_BUSY',
+    'DWELL_LOCKED',
+    'TARGET_NOT_VISIBLE_NOW',
+    'CAPTURE_IN_PROGRESS',
+    'CAPTURE_COOLDOWN',
+    'CAPTURE_LIMIT_REACHED',
+    'SESSION_ENDING'
 ]);
 
 export const zMissionCommandAccepted = z.strictObject({
@@ -2023,6 +2152,118 @@ export const zAgentCommandAck = z.strictObject({
 });
 
 /**
+ * ADR-080. What the agent's watchdog on its own live frames concludes, while a
+ * mission is OBSERVING. Display copy is the client's (e.g. "Re-centring the
+ * object", "Clouds over the telescope -- waiting for a gap").
+ * - OK: the picture passes every check.
+ * - RECOVERING: a check failed and the recovery ladder is running a step.
+ * - WAITING: the sky is cloudy (`reason` CLOUDS). The agent holds on the target,
+ * tracking, live view running, and retries the ladder at `nextRetryAt`
+ * (every 120 s). It never slews to look for a gap.
+ * - UNRECOVERED: the ladder gave up on this object. The live view continues,
+ * no further automatic slews are made on it, the dwell lock is waived so the
+ * customer may switch, and a re-check (re-expose and solve, no blind slew)
+ * runs every 300 s. A RETARGET or RECENTER re-arms the ladder.
+ *
+ */
+export const zImageHealthStatus = z.enum([
+    'OK',
+    'RECOVERING',
+    'WAITING',
+    'UNRECOVERED'
+]);
+
+/**
+ * ADR-080. Why the picture is not OK, judged on three consecutive live frames
+ * (and at least 10 s) before it is reported, from the frame statistics of
+ * ADR-080 §2.
+ * - BLANK_FRAME: a flat frame -- nothing above the background (dark, capped or
+ * uniform).
+ * - NO_STARS: a deep-sky or star frame with sky background but fewer than three
+ * stars detected, and the background not raised.
+ * - OFF_CENTRE: the object has drifted from the frame centre beyond the limit
+ * (plate-solved offset for deep sky, disc centroid for Moon and planets), or
+ * the disc is not in the frame at all.
+ * - CLOUDS: the star count fell below 30% of the count at acquisition while the
+ * background rose to 1.5x or more, or a Moon or planet disc lost more than 60%
+ * of its peak at the same exposure and gain, or a fitted sky sensor reports
+ * cloud.
+ * - OVEREXPOSED: more than 25% of the frame clipped, or for a Moon or planet a
+ * blown-out disc.
+ *
+ */
+export const zImageHealthReason = z.enum([
+    'NO_STARS',
+    'BLANK_FRAME',
+    'OFF_CENTRE',
+    'CLOUDS',
+    'OVEREXPOSED'
+]);
+
+/**
+ * ADR-080. The recovery ladder's rungs, in the order tried: RE_EXPOSE (auto
+ * exposure for the object type and the picture), RE_SOLVE (plate solve, or disc
+ * centroid for Moon and planets), RE_CENTRE (a corrective slew of the solved
+ * offset, passing the envelope like any slew), WAIT_FOR_SKY (clouds; hold and
+ * retry).
+ *
+ */
+export const zRecoveryStep = z.enum([
+    'RE_EXPOSE',
+    'RE_SOLVE',
+    'RE_CENTRE',
+    'WAIT_FOR_SKY'
+]);
+
+/**
+ * ADR-080. The agent's verdict on its live picture. Client-safe: no device
+ * identity, exposure detail or address. Sent by the agent on AGENT_STATE_DELTA
+ * and relayed unchanged on MISSION_TELEMETRY. Null outside OBSERVING.
+ *
+ */
+export const zImageHealth = z.strictObject({
+    status: zImageHealthStatus,
+    reason: zImageHealthReason.nullish(),
+    step: zRecoveryStep.nullish(),
+    attempt: z.int().gte(1).nullish(),
+    since: z.iso.datetime(),
+    nextRetryAt: z.iso.datetime().nullish()
+});
+
+/**
+ * ADR-079. How far a booked session's ending has got, derived by the cloud, not a
+ * MissionState (ADR-004 adds no state). Null while the session runs.
+ * - FINISHING: the slot has ended (or the session was ended) and the mission is
+ * still in a live state -- an in-flight capture is being flushed.
+ * - PARKING: the mission is terminal and the agent's telemetry does not yet
+ * report `parked: true`.
+ * - PARKED: the mission is terminal and the agent reports `parked: true`.
+ *
+ */
+export const zMissionEndPhase = z.enum([
+    'FINISHING',
+    'PARKING',
+    'PARKED'
+]);
+
+/**
+ * ADR-079. Why a session ended rather than rotated.
+ * - SLOT_ENDED: the booked slot's end was reached.
+ * - CUSTOMER_ENDED: the owner aborted.
+ * - OPERATOR_ENDED: an operator cancelled or aborted the mission.
+ * - WEATHER: a weather hold ended it.
+ * - FAULT: a hardware error, a refused start or a lost link ended it.
+ *
+ */
+export const zSessionEndReason = z.enum([
+    'SLOT_ENDED',
+    'CUSTOMER_ENDED',
+    'OPERATOR_ENDED',
+    'WEATHER',
+    'FAULT'
+]);
+
+/**
  * Emitted on the agent control loop. Carries telemetry and, if a mission is held, its state.
  */
 export const zAgentStateDelta = z.strictObject({
@@ -2034,7 +2275,9 @@ export const zAgentStateDelta = z.strictObject({
     missionState: zMissionState.nullish(),
     failureReason: zMissionFailureReason.nullish(),
     centeringIteration: z.int().gte(0).nullish(),
-    residualArcminutes: z.number().nullish()
+    residualArcminutes: z.number().nullish(),
+    currentTargetId: z.uuid().nullish(),
+    imageHealth: zImageHealth.nullish()
 });
 
 /**
@@ -2109,6 +2352,7 @@ export const zAgentCaptureReady = z.strictObject({
     solvedFocalLengthMm: z.number().nullish(),
     widthPx: z.int().nullish(),
     heightPx: z.int().nullish(),
+    targetId: z.uuid().nullish(),
     mode: zObservatoryMode
 });
 
@@ -2216,7 +2460,8 @@ export const zCloudSessionUpdate = z.strictObject({
     missionId: z.uuid(),
     sessionId: z.uuid().nullish(),
     userId: z.uuid().nullish(),
-    expiresAt: z.iso.datetime().nullish()
+    expiresAt: z.iso.datetime().nullish(),
+    endReason: zSessionEndReason.nullish()
 });
 
 /**
@@ -2348,7 +2593,12 @@ export const zMissionTelemetryUpdate = z.strictObject({
     residualArcminutes: z.number().nullish(),
     nudgeUsedDegrees: z.number().gte(0).nullish(),
     ambientTemperatureC: z.number().nullish(),
-    pointing: zHorizontalCoordinates.nullish()
+    pointing: zHorizontalCoordinates.nullish(),
+    currentTargetId: z.uuid().nullish(),
+    retargetAllowedAt: z.iso.datetime().nullish(),
+    captureAllowedAt: z.iso.datetime().nullish(),
+    imageHealth: zImageHealth.nullish(),
+    endPhase: zMissionEndPhase.nullish()
 });
 
 /**
@@ -2394,6 +2644,28 @@ export const zMissionCaptureReady = z.strictObject({
 });
 
 /**
+ * ADR-079. Sent once per mission on its channel when the session is over: the
+ * mission is terminal and the agent reports the mount parked, or 300 s after the
+ * mission became terminal without that report (then `parked` is false). Lists every
+ * capture the session kept. The client shows the Parked end state and links the
+ * Collection.
+ *
+ */
+export const zMissionSessionEnded = z.strictObject({
+    type: z.enum(['MISSION_SESSION_ENDED']),
+    messageId: z.uuid(),
+    sentAt: z.iso.datetime(),
+    missionId: z.uuid(),
+    state: zMissionState,
+    failureReason: zMissionFailureReason.nullish(),
+    endReason: zSessionEndReason,
+    endedAt: z.iso.datetime(),
+    parked: z.boolean(),
+    captureIds: z.array(z.uuid()),
+    summaryEmailQueued: z.boolean()
+});
+
+/**
  * The outcome of a command the client submitted over HTTP, delivered asynchronously.
  */
 export const zMissionCommandResult = z.strictObject({
@@ -2424,7 +2696,8 @@ export const zMissionChannelMessage = z.discriminatedUnion('type', [
     zMissionFrameInfo.extend({ type: z.literal('MISSION_FRAME') }),
     zMissionCaptureReady.extend({ type: z.literal('MISSION_CAPTURE_READY') }),
     zMissionCommandResult.extend({ type: z.literal('MISSION_COMMAND_RESULT') }),
-    zMissionChannelError.extend({ type: z.literal('MISSION_ERROR') })
+    zMissionChannelError.extend({ type: z.literal('MISSION_ERROR') }),
+    zMissionSessionEnded.extend({ type: z.literal('MISSION_SESSION_ENDED') })
 ]);
 
 /**
@@ -2940,6 +3213,15 @@ export const zSubmitMissionCommandPath = z.object({
  * Accepted and relayed to the observatory.
  */
 export const zSubmitMissionCommandResponse = zMissionCommandAccepted;
+
+export const zListMissionTargetsPath = z.object({
+    missionId: z.uuid()
+});
+
+/**
+ * The targets observable now, best first.
+ */
+export const zListMissionTargetsResponse = zMissionTargetList;
 
 export const zSetMissionBroadcastBody = zMissionBroadcastSettings;
 

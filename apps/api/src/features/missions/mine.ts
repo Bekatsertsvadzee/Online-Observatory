@@ -4,6 +4,7 @@ import type { Mission, MissionPage } from "@darkview/contracts";
 
 import { getDatabase } from "@/lib/db/client";
 import { readContractMission } from "@/features/missions/observers";
+import { BOOKED_SESSION_SELECT, bookedSessionFields } from "@/features/missions/session";
 
 /**
  * The signed-in customer's missions: upcoming and past, newest first.
@@ -26,7 +27,7 @@ export async function listMyMissions(input: {
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     include: {
-      booking: { select: { id: true } },
+      ...BOOKED_SESSION_SELECT,
       captures: { select: { id: true } },
       participants: { where: { status: "JOINED" }, select: { id: true } },
     },
@@ -50,6 +51,7 @@ export async function listMyMissions(input: {
         requestedAt: row.requestedAt.toISOString(),
         startedAt: row.startedAt?.toISOString() ?? null,
         endedAt: row.completedAt?.toISOString() ?? null,
+        ...bookedSessionFields(row),
         captureIds: row.captures.map((capture) => capture.id),
         observable: row.joinPolicy === "OPEN",
         broadcast: row.broadcast,

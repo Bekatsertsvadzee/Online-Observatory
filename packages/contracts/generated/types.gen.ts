@@ -22,6 +22,26 @@ export const UserRole = { USER: 'USER', OPERATOR: 'OPERATOR' } as const;
 
 export type UserRole = typeof UserRole[keyof typeof UserRole];
 
+/**
+ * Stable machine-readable refusal codes. Client copy is localised from these.
+ *
+ * The last six are a booked session's in-slot refusals (ADR-079), answered by
+ * `POST /missions/{missionId}/command` with 409. Each carries
+ * `details.rejectionReason` (the CommandRejectionReason of the same name) and,
+ * where a wait would make the command acceptable, `details.allowedAt`:
+ * - MISSION_BUSY: the mission is not OBSERVING (it is slewing, verifying,
+ * centring, capturing or processing). RETARGET waits for OBSERVING.
+ * - DWELL_LOCKED: the current object has been held for less than the
+ * 600-second minimum dwell. `details.allowedAt` is `retargetAllowedAt`.
+ * - CAPTURE_IN_PROGRESS: a CAPTURE is already running or awaiting the agent's
+ * verdict. One capture at a time.
+ * - CAPTURE_COOLDOWN: less than 30 seconds since the previous CAPTURE was
+ * issued. `details.allowedAt` is `captureAllowedAt`.
+ * - CAPTURE_LIMIT_REACHED: the mission already holds 50 captures.
+ * - SESSION_ENDING: too little of the slot remains -- under 300 seconds for
+ * RETARGET, under 60 seconds for CAPTURE.
+ *
+ */
 export const ErrorCode = {
     BAD_REQUEST: 'BAD_REQUEST',
     UNAUTHENTICATED: 'UNAUTHENTICATED',
@@ -48,9 +68,35 @@ export const ErrorCode = {
     SAFETY_REFUSED: 'SAFETY_REFUSED',
     SAFETY_NOT_CONFIGURED: 'SAFETY_NOT_CONFIGURED',
     RATE_LIMITED: 'RATE_LIMITED',
-    INTERNAL: 'INTERNAL'
+    INTERNAL: 'INTERNAL',
+    MISSION_BUSY: 'MISSION_BUSY',
+    DWELL_LOCKED: 'DWELL_LOCKED',
+    CAPTURE_IN_PROGRESS: 'CAPTURE_IN_PROGRESS',
+    CAPTURE_COOLDOWN: 'CAPTURE_COOLDOWN',
+    CAPTURE_LIMIT_REACHED: 'CAPTURE_LIMIT_REACHED',
+    SESSION_ENDING: 'SESSION_ENDING'
 } as const;
 
+/**
+ * Stable machine-readable refusal codes. Client copy is localised from these.
+ *
+ * The last six are a booked session's in-slot refusals (ADR-079), answered by
+ * `POST /missions/{missionId}/command` with 409. Each carries
+ * `details.rejectionReason` (the CommandRejectionReason of the same name) and,
+ * where a wait would make the command acceptable, `details.allowedAt`:
+ * - MISSION_BUSY: the mission is not OBSERVING (it is slewing, verifying,
+ * centring, capturing or processing). RETARGET waits for OBSERVING.
+ * - DWELL_LOCKED: the current object has been held for less than the
+ * 600-second minimum dwell. `details.allowedAt` is `retargetAllowedAt`.
+ * - CAPTURE_IN_PROGRESS: a CAPTURE is already running or awaiting the agent's
+ * verdict. One capture at a time.
+ * - CAPTURE_COOLDOWN: less than 30 seconds since the previous CAPTURE was
+ * issued. `details.allowedAt` is `captureAllowedAt`.
+ * - CAPTURE_LIMIT_REACHED: the mission already holds 50 captures.
+ * - SESSION_ENDING: too little of the slot remains -- under 300 seconds for
+ * RETARGET, under 60 seconds for CAPTURE.
+ *
+ */
 export type ErrorCode = typeof ErrorCode[keyof typeof ErrorCode];
 
 export type ApiError = {
@@ -424,6 +470,55 @@ export type SlotTargetList = {
     startAt: string;
     durationMinutes: number;
     items: Array<SlotTarget>;
+};
+
+/**
+ * One object a live session may RETARGET to now (ADR-079).
+ */
+export type MissionTargetOption = {
+    target: Target;
+    /**
+     * The target judged across the dwell window, `evaluatedAt` to `windowEndsAt`.
+     * Always observable here: a target that is not is not listed.
+     *
+     */
+    visibility: SlotVisibility;
+    /**
+     * The last five-minute step, at or before the session's end, up to which the
+     * target still passes every rule. Equal to the session's end when it stays up
+     * for the whole slot. The client may show "sets at" from it.
+     *
+     */
+    observableUntil: string;
+    /**
+     * True for the target the session is on now (`Mission.currentTargetId`).
+     */
+    current: boolean;
+};
+
+/**
+ * `GET /missions/{missionId}/targets` (ADR-079). What the session owner may switch
+ * to at `evaluatedAt`, best first, and when they may.
+ *
+ */
+export type MissionTargetList = {
+    missionId: string;
+    observatoryId: string;
+    evaluatedAt: string;
+    /**
+     * min(sessionEndsAt, evaluatedAt + 600 s), the end of the window every item passes across.
+     */
+    windowEndsAt: string;
+    sessionEndsAt: string;
+    currentTargetId: string | null;
+    /**
+     * As `Mission.retargetAllowedAt`, with the waivers already applied: null when a
+     * RETARGET would not be dwell-locked now (the lock has passed, the agent reports
+     * UNRECOVERED, or the current target is no longer listed).
+     *
+     */
+    retargetAllowedAt: string | null;
+    items: Array<MissionTargetOption>;
 };
 
 export type WeekVoteCandidate = {
@@ -1832,6 +1927,15 @@ export type PaymentWebhookAck = {
  * web layer. Its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as
  * MissionFailureReason detail on a state above, never as states.
  *
+ * A booked session runs for its whole slot (ADR-079), which adds transitions and
+ * no state: PROCESSING -> OBSERVING after each capture while the slot runs;
+ * OBSERVING -> SLEWING for a RETARGET; OBSERVING -> COMPLETE at the slot's end
+ * with no capture in flight. A capture in flight at the slot's end is finished
+ * early through CAPTURING -> PROCESSING -> COMPLETE with the frames already
+ * stacked. Parking after COMPLETE is not a state: see MissionEndPhase. For a
+ * LUNAR or PLANETARY imaging profile, VERIFYING measures the bright disc's
+ * centroid instead of plate-solving (ADR-080).
+ *
  */
 export const MissionState = {
     REQUESTED: 'REQUESTED',
@@ -1867,6 +1971,15 @@ export const MissionState = {
  * are not states -- "Target locked" and "LIVE" are display labels mapped in the
  * web layer. Its SOLVE_FAILED, LINK_LOST and EXPIRED are carried as
  * MissionFailureReason detail on a state above, never as states.
+ *
+ * A booked session runs for its whole slot (ADR-079), which adds transitions and
+ * no state: PROCESSING -> OBSERVING after each capture while the slot runs;
+ * OBSERVING -> SLEWING for a RETARGET; OBSERVING -> COMPLETE at the slot's end
+ * with no capture in flight. A capture in flight at the slot's end is finished
+ * early through CAPTURING -> PROCESSING -> COMPLETE with the frames already
+ * stacked. Parking after COMPLETE is not a state: see MissionEndPhase. For a
+ * LUNAR or PLANETARY imaging profile, VERIFYING measures the bright disc's
+ * centroid instead of plate-solving (ADR-080).
  *
  */
 export type MissionState = typeof MissionState[keyof typeof MissionState];
@@ -1916,7 +2029,32 @@ export type Mission = {
      *
      */
     bookingId: string | null;
+    /**
+     * The booked target -- the first object of the session. A RETARGET never changes it.
+     */
     targetId: string;
+    /**
+     * ADR-079. The target the session is on now, or switching to: set to the
+     * RETARGET's target when the agent ACCEPTS that command, and to `targetId` when
+     * the mission starts. Null only on a mission that never started. RECENTER
+     * returns here.
+     *
+     */
+    currentTargetId?: string | null;
+    /**
+     * ADR-079. When the session ends and the telescope parks: the booked slot's end,
+     * the `expiresAt` of the session. Null when there is no booking and no session.
+     *
+     */
+    sessionEndsAt?: string | null;
+    /**
+     * ADR-079. The dwell lock: the first instant a RETARGET is accepted, equal to the
+     * time the agent ACCEPTED the GOTO or RETARGET that put the mount on the current
+     * target plus 600 seconds. Null when no session is live. A value in the past
+     * means unlocked. Not moved by RECENTER, NUDGE or the agent's own re-centring.
+     *
+     */
+    retargetAllowedAt?: string | null;
     observatoryId: string;
     state: MissionState;
     failureReason?: MissionFailureReason | null;
@@ -1925,6 +2063,9 @@ export type Mission = {
     requestedAt: string;
     startedAt?: string | null;
     endedAt?: string | null;
+    /**
+     * Every capture the mission produced, oldest first. A booked session may hold up to 50 (ADR-079).
+     */
     captureIds?: Array<string>;
     /**
      * Whether the controller has opted this session in to being observed. Sessions
@@ -2087,6 +2228,9 @@ export type Tonight = {
 export type TonightSession = {
     missionId: string;
     observatoryId: string;
+    /**
+     * The object on the telescope now (`Mission.currentTargetId`), which a RETARGET changes (ADR-079).
+     */
     target: {
         slug: string;
         nameEn: string;
@@ -2208,7 +2352,8 @@ export const CommandType = {
     FOCUS: 'FOCUS',
     ABORT: 'ABORT',
     PARK: 'PARK',
-    SET_PROFILE: 'SET_PROFILE'
+    SET_PROFILE: 'SET_PROFILE',
+    RETARGET: 'RETARGET'
 } as const;
 
 /**
@@ -2222,21 +2367,34 @@ export type CommandType = typeof CommandType[keyof typeof CommandType];
  * What a customer may ask for during a live observation. GOTO, FOCUS, PARK and
  * SET_PROFILE are never client-initiated: the target comes from the booking and
  * the rest are cloud or operator concerns. RECENTER is translated by the cloud
- * into a GOTO back to the booked target; it is not a free-form slew.
+ * into a GOTO back to the current target (`Mission.currentTargetId`, the booked
+ * target until a RETARGET); it is not a free-form slew.
+ *
+ * RETARGET (ADR-079) names a catalogue target id from
+ * `GET /missions/{missionId}/targets`, never coordinates. The cloud looks the
+ * target up, computes its coordinates now and mints a RETARGET envelope; the
+ * client never chooses where the mount points.
  *
  */
 export const ClientCommandType = {
     NUDGE: 'NUDGE',
     CAPTURE: 'CAPTURE',
     RECENTER: 'RECENTER',
-    ABORT: 'ABORT'
+    ABORT: 'ABORT',
+    RETARGET: 'RETARGET'
 } as const;
 
 /**
  * What a customer may ask for during a live observation. GOTO, FOCUS, PARK and
  * SET_PROFILE are never client-initiated: the target comes from the booking and
  * the rest are cloud or operator concerns. RECENTER is translated by the cloud
- * into a GOTO back to the booked target; it is not a free-form slew.
+ * into a GOTO back to the current target (`Mission.currentTargetId`, the booked
+ * target until a RETARGET); it is not a free-form slew.
+ *
+ * RETARGET (ADR-079) names a catalogue target id from
+ * `GET /missions/{missionId}/targets`, never coordinates. The cloud looks the
+ * target up, computes its coordinates now and mints a RETARGET envelope; the
+ * client never chooses where the mount points.
  *
  */
 export type ClientCommandType = typeof ClientCommandType[keyof typeof ClientCommandType];
@@ -2289,6 +2447,11 @@ export type NudgePayload = {
  * Phase 1 capture is a short-exposure / live-stacking run, not a long exposure.
  * The requested integration is bounded by the imaging profile.
  *
+ * A booked session may capture many times (ADR-079): one CAPTURE at a time, at
+ * least 30 seconds between successive CAPTUREs' `issuedAt`, at most 50 per
+ * mission, none in the last 60 seconds of the slot. Each CAPTURE is its own
+ * command id and therefore its own upload grants and its own `Capture`.
+ *
  */
 export type CapturePayload = {
     kind: 'CAPTURE';
@@ -2333,6 +2496,46 @@ export type SetProfilePayload = {
 };
 
 /**
+ * ADR-079. Move a live session to another catalogue object. Minted only by the
+ * cloud from a client RETARGET whose target was in `GET /missions/{missionId}/targets`;
+ * the coordinates are the cloud's, computed at mint time (an EPHEMERIS target's
+ * position now).
+ *
+ * The agent accepts it only while the mission is OBSERVING (else MISSION_BUSY),
+ * no capture is running (else CAPTURE_IN_PROGRESS), at least 300 s of the session
+ * remain (else SESSION_ENDING), the coordinates pass its own envelope (else the
+ * SAFETY_ reason), and its own dwell lock has passed: 600 s since it ACCEPTED the
+ * GOTO or RETARGET that put the mount on the current target, with 15 s of
+ * tolerance for clock skew (else DWELL_LOCKED). It waives its lock while its own
+ * image health is UNRECOVERED.
+ *
+ * Accepted, it resets the nudge offset and the live stack, starts a new dwell
+ * lock, and moves the mission OBSERVING -> SLEWING -> VERIFYING -> CENTERING ->
+ * OBSERVING exactly as the first acquisition. A solve or centring failure on a
+ * retargeted object does not fail the mission: it returns to OBSERVING with image
+ * health UNRECOVERED (ADR-080). `imagingProfile` sets the auto-exposure scene and,
+ * for LUNAR or PLANETARY, centroid centring instead of plate solving.
+ *
+ */
+export type RetargetPayload = {
+    kind: 'RETARGET';
+    targetId: string;
+    coordinates: EquatorialCoordinates;
+    opticalConfig: OpticalConfig;
+    imagingProfile: ImagingProfile;
+};
+
+/**
+ * The client's RETARGET intent. A catalogue target id only (ADR-079).
+ */
+export type RetargetRequest = {
+    /**
+     * A `target.id` from `GET /missions/{missionId}/targets`.
+     */
+    targetId: string;
+};
+
+/**
  * Discriminated by `kind`. `payload.kind` MUST equal the envelope's `type`; both
  * the cloud and the agent reject an envelope where they disagree.
  *
@@ -2351,7 +2554,9 @@ export type CommandPayload = ({
     kind: 'PARK';
 } & ParkPayload) | ({
     kind: 'SET_PROFILE';
-} & SetProfilePayload);
+} & SetProfilePayload) | ({
+    kind: 'RETARGET';
+} & RetargetPayload);
 
 /**
  * The only structure by which anything may instruct the observatory.
@@ -2403,6 +2608,10 @@ export type MissionCommandRequest = {
     type: ClientCommandType;
     nudge?: NudgePayload | null;
     capture?: CapturePayload | null;
+    /**
+     * Required when type is RETARGET; 422 VALIDATION_FAILED without it.
+     */
+    retarget?: RetargetRequest | null;
     reason?: string | null;
 };
 
@@ -2421,6 +2630,12 @@ export type CommandAcceptanceStatus = typeof CommandAcceptanceStatus[keyof typeo
  * Why a command was refused. The SAFETY_ prefixed values are produced by the
  * agent's own envelope check and may occur even when the cloud approved the
  * command; that is the design, not a bug.
+ *
+ * The last seven are a booked session's in-slot rules (ADR-079); the ErrorCode of
+ * the same name describes each. TARGET_NOT_VISIBLE_NOW is the cloud's only: the
+ * target was not in `GET /missions/{missionId}/targets` (ErrorCode
+ * TARGET_NOT_OBSERVABLE). The agent produces MISSION_BUSY, DWELL_LOCKED,
+ * CAPTURE_IN_PROGRESS and SESSION_ENDING from its own state and clock.
  *
  */
 export const CommandRejectionReason = {
@@ -2447,13 +2662,26 @@ export const CommandRejectionReason = {
     MODE_NOT_PERMITTED: 'MODE_NOT_PERMITTED',
     WEATHER_HOLD_ACTIVE: 'WEATHER_HOLD_ACTIVE',
     OBSERVATORY_OFFLINE: 'OBSERVATORY_OFFLINE',
-    UNATTENDED_DISARMED: 'UNATTENDED_DISARMED'
+    UNATTENDED_DISARMED: 'UNATTENDED_DISARMED',
+    MISSION_BUSY: 'MISSION_BUSY',
+    DWELL_LOCKED: 'DWELL_LOCKED',
+    TARGET_NOT_VISIBLE_NOW: 'TARGET_NOT_VISIBLE_NOW',
+    CAPTURE_IN_PROGRESS: 'CAPTURE_IN_PROGRESS',
+    CAPTURE_COOLDOWN: 'CAPTURE_COOLDOWN',
+    CAPTURE_LIMIT_REACHED: 'CAPTURE_LIMIT_REACHED',
+    SESSION_ENDING: 'SESSION_ENDING'
 } as const;
 
 /**
  * Why a command was refused. The SAFETY_ prefixed values are produced by the
  * agent's own envelope check and may occur even when the cloud approved the
  * command; that is the design, not a bug.
+ *
+ * The last seven are a booked session's in-slot rules (ADR-079); the ErrorCode of
+ * the same name describes each. TARGET_NOT_VISIBLE_NOW is the cloud's only: the
+ * target was not in `GET /missions/{missionId}/targets` (ErrorCode
+ * TARGET_NOT_OBSERVABLE). The agent produces MISSION_BUSY, DWELL_LOCKED,
+ * CAPTURE_IN_PROGRESS and SESSION_ENDING from its own state and clock.
  *
  */
 export type CommandRejectionReason = typeof CommandRejectionReason[keyof typeof CommandRejectionReason];
@@ -2524,6 +2752,9 @@ export type Capture = {
     id: string;
     missionId: string;
     userId: string;
+    /**
+     * The object this capture shows -- the session's current target when it ran, which after a RETARGET is not the booked one (ADR-079).
+     */
     targetId: string;
     capturedAt: string;
     imagingProfile: ImagingProfile;
@@ -2998,6 +3229,204 @@ export type AgentCommandAck = {
 };
 
 /**
+ * ADR-080. What the agent's watchdog on its own live frames concludes, while a
+ * mission is OBSERVING. Display copy is the client's (e.g. "Re-centring the
+ * object", "Clouds over the telescope -- waiting for a gap").
+ * - OK: the picture passes every check.
+ * - RECOVERING: a check failed and the recovery ladder is running a step.
+ * - WAITING: the sky is cloudy (`reason` CLOUDS). The agent holds on the target,
+ * tracking, live view running, and retries the ladder at `nextRetryAt`
+ * (every 120 s). It never slews to look for a gap.
+ * - UNRECOVERED: the ladder gave up on this object. The live view continues,
+ * no further automatic slews are made on it, the dwell lock is waived so the
+ * customer may switch, and a re-check (re-expose and solve, no blind slew)
+ * runs every 300 s. A RETARGET or RECENTER re-arms the ladder.
+ *
+ */
+export const ImageHealthStatus = {
+    OK: 'OK',
+    RECOVERING: 'RECOVERING',
+    WAITING: 'WAITING',
+    UNRECOVERED: 'UNRECOVERED'
+} as const;
+
+/**
+ * ADR-080. What the agent's watchdog on its own live frames concludes, while a
+ * mission is OBSERVING. Display copy is the client's (e.g. "Re-centring the
+ * object", "Clouds over the telescope -- waiting for a gap").
+ * - OK: the picture passes every check.
+ * - RECOVERING: a check failed and the recovery ladder is running a step.
+ * - WAITING: the sky is cloudy (`reason` CLOUDS). The agent holds on the target,
+ * tracking, live view running, and retries the ladder at `nextRetryAt`
+ * (every 120 s). It never slews to look for a gap.
+ * - UNRECOVERED: the ladder gave up on this object. The live view continues,
+ * no further automatic slews are made on it, the dwell lock is waived so the
+ * customer may switch, and a re-check (re-expose and solve, no blind slew)
+ * runs every 300 s. A RETARGET or RECENTER re-arms the ladder.
+ *
+ */
+export type ImageHealthStatus = typeof ImageHealthStatus[keyof typeof ImageHealthStatus];
+
+/**
+ * ADR-080. Why the picture is not OK, judged on three consecutive live frames
+ * (and at least 10 s) before it is reported, from the frame statistics of
+ * ADR-080 §2.
+ * - BLANK_FRAME: a flat frame -- nothing above the background (dark, capped or
+ * uniform).
+ * - NO_STARS: a deep-sky or star frame with sky background but fewer than three
+ * stars detected, and the background not raised.
+ * - OFF_CENTRE: the object has drifted from the frame centre beyond the limit
+ * (plate-solved offset for deep sky, disc centroid for Moon and planets), or
+ * the disc is not in the frame at all.
+ * - CLOUDS: the star count fell below 30% of the count at acquisition while the
+ * background rose to 1.5x or more, or a Moon or planet disc lost more than 60%
+ * of its peak at the same exposure and gain, or a fitted sky sensor reports
+ * cloud.
+ * - OVEREXPOSED: more than 25% of the frame clipped, or for a Moon or planet a
+ * blown-out disc.
+ *
+ */
+export const ImageHealthReason = {
+    NO_STARS: 'NO_STARS',
+    BLANK_FRAME: 'BLANK_FRAME',
+    OFF_CENTRE: 'OFF_CENTRE',
+    CLOUDS: 'CLOUDS',
+    OVEREXPOSED: 'OVEREXPOSED'
+} as const;
+
+/**
+ * ADR-080. Why the picture is not OK, judged on three consecutive live frames
+ * (and at least 10 s) before it is reported, from the frame statistics of
+ * ADR-080 §2.
+ * - BLANK_FRAME: a flat frame -- nothing above the background (dark, capped or
+ * uniform).
+ * - NO_STARS: a deep-sky or star frame with sky background but fewer than three
+ * stars detected, and the background not raised.
+ * - OFF_CENTRE: the object has drifted from the frame centre beyond the limit
+ * (plate-solved offset for deep sky, disc centroid for Moon and planets), or
+ * the disc is not in the frame at all.
+ * - CLOUDS: the star count fell below 30% of the count at acquisition while the
+ * background rose to 1.5x or more, or a Moon or planet disc lost more than 60%
+ * of its peak at the same exposure and gain, or a fitted sky sensor reports
+ * cloud.
+ * - OVEREXPOSED: more than 25% of the frame clipped, or for a Moon or planet a
+ * blown-out disc.
+ *
+ */
+export type ImageHealthReason = typeof ImageHealthReason[keyof typeof ImageHealthReason];
+
+/**
+ * ADR-080. The recovery ladder's rungs, in the order tried: RE_EXPOSE (auto
+ * exposure for the object type and the picture), RE_SOLVE (plate solve, or disc
+ * centroid for Moon and planets), RE_CENTRE (a corrective slew of the solved
+ * offset, passing the envelope like any slew), WAIT_FOR_SKY (clouds; hold and
+ * retry).
+ *
+ */
+export const RecoveryStep = {
+    RE_EXPOSE: 'RE_EXPOSE',
+    RE_SOLVE: 'RE_SOLVE',
+    RE_CENTRE: 'RE_CENTRE',
+    WAIT_FOR_SKY: 'WAIT_FOR_SKY'
+} as const;
+
+/**
+ * ADR-080. The recovery ladder's rungs, in the order tried: RE_EXPOSE (auto
+ * exposure for the object type and the picture), RE_SOLVE (plate solve, or disc
+ * centroid for Moon and planets), RE_CENTRE (a corrective slew of the solved
+ * offset, passing the envelope like any slew), WAIT_FOR_SKY (clouds; hold and
+ * retry).
+ *
+ */
+export type RecoveryStep = typeof RecoveryStep[keyof typeof RecoveryStep];
+
+/**
+ * ADR-080. The agent's verdict on its live picture. Client-safe: no device
+ * identity, exposure detail or address. Sent by the agent on AGENT_STATE_DELTA
+ * and relayed unchanged on MISSION_TELEMETRY. Null outside OBSERVING.
+ *
+ */
+export type ImageHealth = {
+    status: ImageHealthStatus;
+    /**
+     * Null exactly when status is OK.
+     */
+    reason?: ImageHealthReason | null;
+    /**
+     * The rung running now while RECOVERING; WAIT_FOR_SKY while WAITING; otherwise null.
+     */
+    step?: RecoveryStep | null;
+    /**
+     * Which pass of the ladder this is for the current incident (at most two before UNRECOVERED).
+     */
+    attempt?: number | null;
+    /**
+     * When the status last changed, on the observatory clock.
+     */
+    since: string;
+    /**
+     * While WAITING or UNRECOVERED, when the agent next tries; otherwise null.
+     */
+    nextRetryAt?: string | null;
+};
+
+/**
+ * ADR-079. How far a booked session's ending has got, derived by the cloud, not a
+ * MissionState (ADR-004 adds no state). Null while the session runs.
+ * - FINISHING: the slot has ended (or the session was ended) and the mission is
+ * still in a live state -- an in-flight capture is being flushed.
+ * - PARKING: the mission is terminal and the agent's telemetry does not yet
+ * report `parked: true`.
+ * - PARKED: the mission is terminal and the agent reports `parked: true`.
+ *
+ */
+export const MissionEndPhase = {
+    FINISHING: 'FINISHING',
+    PARKING: 'PARKING',
+    PARKED: 'PARKED'
+} as const;
+
+/**
+ * ADR-079. How far a booked session's ending has got, derived by the cloud, not a
+ * MissionState (ADR-004 adds no state). Null while the session runs.
+ * - FINISHING: the slot has ended (or the session was ended) and the mission is
+ * still in a live state -- an in-flight capture is being flushed.
+ * - PARKING: the mission is terminal and the agent's telemetry does not yet
+ * report `parked: true`.
+ * - PARKED: the mission is terminal and the agent reports `parked: true`.
+ *
+ */
+export type MissionEndPhase = typeof MissionEndPhase[keyof typeof MissionEndPhase];
+
+/**
+ * ADR-079. Why a session ended rather than rotated.
+ * - SLOT_ENDED: the booked slot's end was reached.
+ * - CUSTOMER_ENDED: the owner aborted.
+ * - OPERATOR_ENDED: an operator cancelled or aborted the mission.
+ * - WEATHER: a weather hold ended it.
+ * - FAULT: a hardware error, a refused start or a lost link ended it.
+ *
+ */
+export const SessionEndReason = {
+    SLOT_ENDED: 'SLOT_ENDED',
+    CUSTOMER_ENDED: 'CUSTOMER_ENDED',
+    OPERATOR_ENDED: 'OPERATOR_ENDED',
+    WEATHER: 'WEATHER',
+    FAULT: 'FAULT'
+} as const;
+
+/**
+ * ADR-079. Why a session ended rather than rotated.
+ * - SLOT_ENDED: the booked slot's end was reached.
+ * - CUSTOMER_ENDED: the owner aborted.
+ * - OPERATOR_ENDED: an operator cancelled or aborted the mission.
+ * - WEATHER: a weather hold ended it.
+ * - FAULT: a hardware error, a refused start or a lost link ended it.
+ *
+ */
+export type SessionEndReason = typeof SessionEndReason[keyof typeof SessionEndReason];
+
+/**
  * Emitted on the agent control loop. Carries telemetry and, if a mission is held, its state.
  */
 export type AgentStateDelta = {
@@ -3016,6 +3445,16 @@ export type AgentStateDelta = {
      * Distance between the solved position and the target after the last iteration.
      */
     residualArcminutes?: number | null;
+    /**
+     * ADR-079. The target of the GOTO or RETARGET the agent last accepted for the
+     * held mission. The cloud compares it with `Mission.currentTargetId`.
+     *
+     */
+    currentTargetId?: string | null;
+    /**
+     * ADR-080. The watchdog's verdict while OBSERVING; null in every other state.
+     */
+    imageHealth?: ImageHealth | null;
 };
 
 /**
@@ -3125,6 +3564,13 @@ export type AgentCaptureReady = {
     solvedFocalLengthMm?: number | null;
     widthPx?: number | null;
     heightPx?: number | null;
+    /**
+     * ADR-079. The target the mount was on when the capture ran. The cloud records
+     * the `Capture` against it; when null (an older agent) it uses
+     * `Mission.currentTargetId` at the CAPTURE command's issue time.
+     *
+     */
+    targetId?: string | null;
     mode: ObservatoryMode;
 };
 
@@ -3261,7 +3707,24 @@ export type CloudSessionUpdate = {
      */
     sessionId?: string | null;
     userId?: string | null;
+    /**
+     * The session's end: for a booked mission, the slot's end. The agent observes
+     * until this instant and then ends the mission on its own clock -- flushing an
+     * in-flight capture, COMPLETE, Park -- whether or not the cloud says anything
+     * (ADR-079).
+     *
+     */
     expiresAt?: string | null;
+    /**
+     * ADR-079. Set only when `sessionId` is null and the session ENDED rather than
+     * rotated. With SLOT_ENDED the agent finishes the mission now (flush any
+     * capture, COMPLETE, Park), even if its own clock has not reached `expiresAt`.
+     * A null `sessionId` with no `endReason` is a revocation or rotation: the agent
+     * stops accepting client commands, and the mission keeps observing until a
+     * new owner arrives or `expiresAt` passes.
+     *
+     */
+    endReason?: SessionEndReason | null;
 };
 
 /**
@@ -3430,6 +3893,33 @@ export type MissionTelemetryUpdate = {
      *
      */
     pointing?: HorizontalCoordinates | null;
+    /**
+     * ADR-079. As `Mission.currentTargetId`.
+     */
+    currentTargetId?: string | null;
+    /**
+     * ADR-079. The dwell lock, as `MissionTargetList.retargetAllowedAt`: null when a
+     * RETARGET would not be dwell-locked now. The client counts down to it.
+     *
+     */
+    retargetAllowedAt?: string | null;
+    /**
+     * ADR-079. When the next CAPTURE is accepted: the previous CAPTURE's `issuedAt`
+     * plus 30 s, or null when one is accepted now. Null too while one is in
+     * progress (the mission state says so) and when the limit is reached.
+     *
+     */
+    captureAllowedAt?: string | null;
+    /**
+     * ADR-080. The agent's latest verdict, relayed unchanged; null outside OBSERVING.
+     */
+    imageHealth?: ImageHealth | null;
+    /**
+     * ADR-079. Null while the session runs. The cloud keeps sending MISSION_TELEMETRY
+     * for a mission after it is terminal until it reports PARKED, or for 300 s.
+     *
+     */
+    endPhase?: MissionEndPhase | null;
 };
 
 /**
@@ -3481,6 +3971,43 @@ export type MissionCaptureReady = {
 };
 
 /**
+ * ADR-079. Sent once per mission on its channel when the session is over: the
+ * mission is terminal and the agent reports the mount parked, or 300 s after the
+ * mission became terminal without that report (then `parked` is false). Lists every
+ * capture the session kept. The client shows the Parked end state and links the
+ * Collection.
+ *
+ */
+export type MissionSessionEnded = {
+    type: 'MISSION_SESSION_ENDED';
+    messageId: string;
+    sentAt: string;
+    missionId: string;
+    state: MissionState;
+    failureReason?: MissionFailureReason | null;
+    endReason: SessionEndReason;
+    /**
+     * The mission's `endedAt`.
+     */
+    endedAt: string;
+    /**
+     * True when the agent reported the mount parked; false when the 300 s wait ran out.
+     */
+    parked: boolean;
+    /**
+     * Every capture of the mission, oldest first, as `Mission.captureIds`.
+     */
+    captureIds: Array<string>;
+    /**
+     * True when the session summary email (outbox kind SESSION_SUMMARY) was
+     * written for the owner. It is written once per mission that reached OBSERVING,
+     * listing every capture and linking the Collection.
+     *
+     */
+    summaryEmailQueued: boolean;
+};
+
+/**
  * The outcome of a command the client submitted over HTTP, delivered asynchronously.
  */
 export type MissionCommandResult = {
@@ -3518,7 +4045,9 @@ export type MissionChannelMessage = ({
     type: 'MISSION_COMMAND_RESULT';
 } & MissionCommandResult) | ({
     type: 'MISSION_ERROR';
-} & MissionChannelError);
+} & MissionChannelError) | ({
+    type: 'MISSION_SESSION_ENDED';
+} & MissionSessionEnded);
 
 /**
  * Ask to watch one mission. Sent by the controller and by an observer, which is
@@ -5540,6 +6069,41 @@ export type SubmitMissionCommandResponses = {
 };
 
 export type SubmitMissionCommandResponse = SubmitMissionCommandResponses[keyof SubmitMissionCommandResponses];
+
+export type ListMissionTargetsData = {
+    body?: never;
+    path: {
+        missionId: string;
+    };
+    query?: never;
+    url: '/missions/{missionId}/targets';
+};
+
+export type ListMissionTargetsErrors = {
+    /**
+     * Not authenticated.
+     */
+    401: ApiError;
+    /**
+     * Not found, or not owned by the caller.
+     */
+    404: ApiError;
+    /**
+     * Conflicts with current state, for example a slot already taken or a session already held.
+     */
+    409: ApiError;
+};
+
+export type ListMissionTargetsError = ListMissionTargetsErrors[keyof ListMissionTargetsErrors];
+
+export type ListMissionTargetsResponses = {
+    /**
+     * The targets observable now, best first.
+     */
+    200: MissionTargetList;
+};
+
+export type ListMissionTargetsResponse = ListMissionTargetsResponses[keyof ListMissionTargetsResponses];
 
 export type SetMissionBroadcastData = {
     body: MissionBroadcastSettings;

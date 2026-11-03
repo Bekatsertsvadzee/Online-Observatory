@@ -134,6 +134,11 @@ export type AuditAction =
   | "MISSION_SESSION_OPENED"
   | "MISSION_SESSION_REVOKED"
   | "MISSION_RESOLVED_AFTER_AGENT_RESTART"
+  // ADR-079: the agent accepted a RETARGET; the slot ended and the agent was told;
+  // the session ended and its summary was queued.
+  | "MISSION_TARGET_CHANGED"
+  | "MISSION_SLOT_ENDED"
+  | "MISSION_SESSION_ENDED"
   | "OBSERVER_SEAT_TAKEN"
   | "OBSERVER_SEAT_RELEASED"
   | "MISSION_OPENED_TO_OBSERVERS"
@@ -148,6 +153,8 @@ export type AuditAction =
   // COMMAND
   | "COMMAND_MINTED"
   | "COMMAND_VERDICT_RECORDED"
+  // ADR-079: a RETARGET or CAPTURE refused by a booked session's in-slot rules.
+  | "COMMAND_REFUSED_IN_SLOT"
   // SAFETY
   | "COMMAND_REFUSED_BY_CLOUD"
   | "SAFETY_ENVELOPE_RECORDED"

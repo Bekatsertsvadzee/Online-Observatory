@@ -132,3 +132,66 @@ def test_simulated_mount_parks():
 
     mount.park()
     assert mount.status().parked is True
+
+
+def _nexstar(hardware, tmp_path, monkeypatch):
+    port = tmp_path / "cu.PL2303G-USBtoUART110"
+    model = tmp_path / "nexstar-model.json"
+    port.write_bytes(b"")
+    model.write_text('{"points": []}')
+    real_find_spec = runtime.importlib.util.find_spec
+    monkeypatch.setattr(
+        runtime.importlib.util,
+        "find_spec",
+        lambda name, *a: object() if name == "serial" else real_find_spec(name, *a),
+    )
+    return {
+        **hardware,
+        "DARKVIEW_AGENT_MOUNT_DRIVER": "nexstar_serial",
+        "DARKVIEW_AGENT_NEXSTAR_PORT": str(port),
+        "DARKVIEW_AGENT_NEXSTAR_MODEL_PATH": str(model),
+        "DARKVIEW_AGENT_SITE_LATITUDE": "41.7151",
+        "DARKVIEW_AGENT_SITE_LONGITUDE": "44.8271",
+    }
+
+
+def test_nexstar_serial_builds_the_serial_mount_and_focuser_without_opening_the_port(
+    hardware, tmp_path, monkeypatch
+):
+    from darkview_agent.devices.nexstar import NexStarMount
+    from darkview_agent.devices.nexstar_focuser import NexStarFocuser
+
+    devices = build_devices(load_config(_nexstar(hardware, tmp_path, monkeypatch)))
+    assert isinstance(devices.mount.driver, NexStarMount)
+    assert isinstance(devices.focuser.driver, NexStarFocuser)
+    assert devices.mount.driver._link is devices.focuser.driver._link
+    assert devices.mount.driver._link._port is None
+    assert "serial" not in sys.modules
+
+
+@pytest.mark.parametrize(
+    ("unset", "message"),
+    [
+        ("DARKVIEW_AGENT_NEXSTAR_PORT", "needs DARKVIEW_AGENT_NEXSTAR_PORT"),
+        ("DARKVIEW_AGENT_SITE_LATITUDE", "SITE_LATITUDE"),
+    ],
+)
+def test_nexstar_serial_refuses_to_start_without_what_it_needs(
+    hardware, tmp_path, monkeypatch, unset, message
+):
+    environment = _nexstar(hardware, tmp_path, monkeypatch)
+    environment.pop(unset)
+    if unset == "DARKVIEW_AGENT_SITE_LATITUDE":
+        environment.pop("DARKVIEW_AGENT_SITE_LONGITUDE")
+    with pytest.raises(ConfigurationError, match=message):
+        build_devices(load_config(environment))
+
+
+def test_an_unknown_mount_driver_is_refused():
+    with pytest.raises(ConfigurationError, match="not a mount driver"):
+        load_config({"DARKVIEW_AGENT_MOUNT_DRIVER": "lx200"})
+
+
+def test_the_mount_driver_is_ignored_by_the_simulator():
+    devices = build_devices(load_config({"DARKVIEW_AGENT_MOUNT_DRIVER": "NEXSTAR_SERIAL"}))
+    assert isinstance(devices.mount.driver, SimMount)

@@ -25,6 +25,7 @@ import type { RealtimeStore } from "@/link/prisma-store";
 import { MissionRelay } from "@/mission/broadcast";
 import { MissionChannel } from "@/mission/channel";
 import { MissionChannelRegistry } from "@/mission/registry";
+import { sweepSessionEnds } from "@/mission/session-end";
 import type { ChannelUser } from "@/mission/store";
 import { handleInternalRequest } from "@/internal/http";
 import { handleStreamRequest } from "@/stream/http";
@@ -389,8 +390,14 @@ export function createRealtimeServer(
    * mission SCHEDULED for as long as nobody asked about it.
    */
   const unstartedSweep = setInterval(() => {
-    void store.closeUnstartedMissions(new Date()).catch((error) => {
+    const now = new Date();
+    void store.closeUnstartedMissions(now).catch((error) => {
       console.error("darkview realtime: no-show sweep", error);
+    });
+    // ADR-079: the slot's end reaches the agent, and a session whose park was never
+    // reported is ended anyway. Beside the no-show sweep, on the same minute.
+    void sweepSessionEnds({ store, relay, broadcast, now }).catch((error) => {
+      console.error("darkview realtime: session-end sweep", error);
     });
   }, sweeps.unstartedSeconds * 1000);
 

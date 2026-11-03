@@ -11,7 +11,11 @@ import { recordAuditEvent } from "@darkview/db/audit";
 
 import { getDatabase } from "@/lib/db/client";
 import { readContractMission } from "@/features/missions/observers";
-import { LIVE_MISSION_STATES } from "@/features/missions/session";
+import {
+  BOOKED_SESSION_SELECT,
+  LIVE_MISSION_STATES,
+  bookedSessionFields,
+} from "@/features/missions/session";
 import { notifyAgent } from "@/lib/observatory/relay";
 
 export type AdminMissionFailure = {
@@ -46,7 +50,7 @@ export async function listAllMissions(input: {
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     include: {
-      booking: { select: { id: true } },
+      ...BOOKED_SESSION_SELECT,
       captures: { select: { id: true } },
       participants: { where: { status: "JOINED" }, select: { id: true } },
     },
@@ -70,6 +74,7 @@ export async function listAllMissions(input: {
         requestedAt: row.requestedAt.toISOString(),
         startedAt: row.startedAt?.toISOString() ?? null,
         endedAt: row.completedAt?.toISOString() ?? null,
+        ...bookedSessionFields(row),
         captureIds: row.captures.map((capture) => capture.id),
         observable: row.joinPolicy === "OPEN",
         broadcast: row.broadcast,

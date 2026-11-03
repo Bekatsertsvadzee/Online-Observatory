@@ -23,6 +23,8 @@ dependencies = [
 # light before the README pins it. The simulator and CI never install this.
 hardware = [
     "zwoasi==0.2.0",
+    # ADR-076: the NexStar hand controller's serial port, for a Mac with no ASCOM.
+    "pyserial==3.5",
 ]
 dev = [
     "pytest>=8.3,<9",

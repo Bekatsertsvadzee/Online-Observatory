@@ -97,6 +97,8 @@ class TelemetryReporter:
         mission_state: MissionState | None,
         centering_iteration: int | None,
         weather: WeatherState | None,
+        current_target_id: uuid.UUID | None = None,
+        image_health: dict | None = None,
     ) -> dict | None:
         """The AGENT_STATE_DELTA due now, or None. Reads the devices only when due."""
         if not _elapsed(self._last_sampled_at, at_time, SAMPLE_INTERVAL_SECONDS):
@@ -142,6 +144,8 @@ class TelemetryReporter:
             "failureReason": None,
             "centeringIteration": centering_iteration,
             "residualArcminutes": None,
+            "currentTargetId": str(current_target_id) if current_target_id else None,
+            "imageHealth": image_health,
         }
 
         key = _change_key(delta)
@@ -211,7 +215,15 @@ def _change_key(delta: dict) -> tuple:
         delta["missionId"],
         delta["missionState"],
         delta["centeringIteration"],
+        delta["currentTargetId"],
+        _health_key(delta["imageHealth"]),
     )
+
+
+def _health_key(health: dict | None) -> tuple | None:
+    if health is None:
+        return None
+    return (health["status"], health["reason"], health["step"], health["attempt"])
 
 
 __all__ = [

@@ -1,3 +1,5 @@
+import type { SessionEndReason } from "@darkview/contracts";
+
 import type { AgentLinkRegistry } from "@/link/registry";
 import {
   cloudCommand,
@@ -146,6 +148,21 @@ export class AgentRelay {
     if (session !== null && session.missionId !== missionId) session = null;
 
     return link.dispatch(cloudSessionUpdate(missionId, session)) ? "SENT" : "NO_LINK";
+  }
+
+  /**
+   * Tell the agent its mission's session has ended (ADR-079 §2): the slot-end sweep's
+   * message. It can only make the observatory safer -- the agent finishes, stops
+   * capture and parks -- so it is sent as it is, without a PARK alongside it.
+   */
+  relaySessionEnded(
+    observatoryId: string,
+    missionId: string,
+    endReason: SessionEndReason,
+  ): RelayOutcome {
+    const link = this.registry.get(observatoryId);
+    if (!link) return "NO_LINK";
+    return link.dispatch(cloudSessionUpdate(missionId, null, endReason)) ? "SENT" : "NO_LINK";
   }
 
   /**

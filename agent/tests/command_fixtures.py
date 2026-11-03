@@ -89,6 +89,26 @@ def capture_payload() -> dict:
     }
 
 
+def retarget_payload(
+    ra_hours: float = 18.0,
+    dec_degrees: float = 40.0,
+    target_id: UUID | None = None,
+    imaging_profile: str = "GLOBULAR_CLUSTER",
+) -> dict:
+    return {
+        "kind": "RETARGET",
+        "targetId": str(target_id or uuid4()),
+        "coordinates": {"raHours": ra_hours, "decDegrees": dec_degrees, "epoch": "J2000"},
+        "opticalConfig": "F10_NATIVE",
+        "imagingProfile": imaging_profile,
+    }
+
+
+def retarget(**kwargs) -> dict:
+    payload = kwargs.pop("payload", None) or retarget_payload()
+    return envelope(command_type="RETARGET", payload=payload, **kwargs)
+
+
 def goto(**kwargs) -> dict:
     payload = kwargs.pop("payload", None) or goto_payload()
     return envelope(command_type="GOTO", payload=payload, **kwargs)

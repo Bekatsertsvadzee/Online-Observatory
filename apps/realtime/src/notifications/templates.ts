@@ -100,6 +100,16 @@ function prizeText(locale: EmailLocale, data: Data) {
   return `${percent}% off one booking`;
 }
 
+/** "21:15 — Saturn", one line per capture, in the observatory's time. */
+function sessionCaptures(locale: EmailLocale, data: Data): string[] {
+  const observatory = data.observatory as Names & { timezone: string };
+  const captures = data.captures as { capturedAt: string; target: Names }[];
+  return captures.map(
+    (capture) =>
+      `${clock(locale, capture.capturedAt, observatory.timezone)} — ${name(locale, capture.target)}`,
+  );
+}
+
 const CAUSE: Record<EmailLocale, Record<string, string>> = {
   en: { WEATHER: "the weather", OBSERVATORY_FAULT: "an observatory fault" },
   ka: { WEATHER: "ამინდის", OBSERVATORY_FAULT: "ობსერვატორიის ხარვეზის" },
@@ -296,6 +306,46 @@ const DRAFTS: Record<string, Record<EmailLocale, (data: Data) => Draft>> = {
             : []),
         ],
         action: { label: "კადრის გახსნა", path: `/ka/app/collection/${data.captureId}` },
+      };
+    },
+  },
+  SESSION_SUMMARY: {
+    en: (data) => {
+      const captures = sessionCaptures("en", data);
+      return {
+        subject:
+          captures.length === 0
+            ? "Your session has ended"
+            : `Your session: ${captures.length} ${captures.length === 1 ? "capture" : "captures"}`,
+        paragraphs: [
+          captures.length === 0
+            ? "Your live session has ended and the telescope is parked. Nothing was captured this time."
+            : "Your live session has ended and the telescope is parked. Everything you captured is in your Collection:",
+          ...captures,
+          ...(data.simulated
+            ? ["The session ran on the simulator, and its captures are marked Simulated."]
+            : []),
+        ],
+        action: { label: "Open your Collection", path: "/en/app/collection" },
+      };
+    },
+    ka: (data) => {
+      const captures = sessionCaptures("ka", data);
+      return {
+        subject:
+          captures.length === 0
+            ? "შენი სეანსი დასრულდა"
+            : `შენი სეანსი: ${captures.length} კადრი`,
+        paragraphs: [
+          captures.length === 0
+            ? "შენი პირდაპირი სეანსი დასრულდა და ტელესკოპი საწყის მდგომარეობაშია. ამჯერად კადრი არ გადაგიღია."
+            : "შენი პირდაპირი სეანსი დასრულდა და ტელესკოპი საწყის მდგომარეობაშია. ყველა კადრი შენს კოლექციაშია:",
+          ...captures,
+          ...(data.simulated
+            ? ["სეანსი სიმულატორზე ჩატარდა და მისი კადრები მონიშნულია, როგორც სიმულაცია."]
+            : []),
+        ],
+        action: { label: "კოლექციის გახსნა", path: "/ka/app/collection" },
       };
     },
   },

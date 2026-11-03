@@ -68,6 +68,20 @@ PROFILES: dict[ImagingProfile, Profile] = {
 }
 
 
+#: The exposure range each profile allows, in milliseconds (ADR-080 §1). Auto
+#: exposure never leaves it. Phase 1 is short-exposure: five seconds is the deep-sky
+#: ceiling an alt-azimuth mount's field rotation allows for a stacked sub, not the
+#: panel's fifteen. PROVISIONAL, like the table above; DV-035 measures it.
+EXPOSURE_RANGES: dict[ImagingProfile, tuple[float, float]] = {
+    ImagingProfile.lunar: (0.05, 50.0),
+    ImagingProfile.planetary: (0.05, 100.0),
+    ImagingProfile.double_star: (0.05, 1000.0),
+    ImagingProfile.globular_cluster: (100.0, 5000.0),
+    ImagingProfile.planetary_nebula: (500.0, 5000.0),
+    ImagingProfile.bright_nebula: (500.0, 5000.0),
+}
+
+
 def resolve(
     profile: ImagingProfile,
     requested_frames: int | None = None,
@@ -104,4 +118,4 @@ def resolve(
     )
 
 
-__all__ = ["MAX_FRAMES", "PROFILES", "Profile", "resolve"]
+__all__ = ["EXPOSURE_RANGES", "MAX_FRAMES", "PROFILES", "Profile", "resolve"]

@@ -440,6 +440,7 @@ describe("a capture reaching the Collection", () => {
         widthPx: null,
         heightPx: null,
         solvedFocalLengthMm: null,
+        targetId: null,
         assets: [{ kind: "IMAGE", storageKey: "captures/image.jpg" }],
       });
 

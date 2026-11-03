@@ -10,9 +10,13 @@ Every status and every frame these produce carries ObservatoryMode.simulated.
 
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from contracts.models import DeviceHealth, ObservatoryMode
+import numpy as np
+
+from contracts.models import DeviceHealth, ObservatoryMode, OpticalConfig
 from darkview_agent.clock import Clock, SystemClock
 from darkview_agent.devices import starfield
 from darkview_agent.devices.base import (
@@ -165,11 +169,28 @@ class SimMount(MountDriver):
         self._tracking = tracking
 
 
+@dataclass
+class SimDisc:
+    """A Moon or planet, fixed in the sky where the test put it."""
+
+    altitude_degrees: float
+    azimuth_degrees: float
+    radius_px: float
+    #: Disc brightness per second of exposure at gain 0, in ADU.
+    brightness: float
+    degrees_per_pixel: float
+
+
 class SimCamera(CameraDriver):
     """A simulated ASI585MC.
 
     Renders the star field for wherever the mount is pointing, so a frame is
     evidence of where the telescope actually is.
+
+    It can also be made to show what goes wrong on a real night (ADR-080), on
+    demand: `blank_frames` and `saturate_frames` spoil the next few frames,
+    `set_clouds` dims the stars and lifts the sky until cleared, and `show_disc`
+    puts a bright disc at a fixed sky position that `move_disc` can drift.
     """
 
     DEFAULT_WIDTH_PX = 1920
@@ -200,10 +221,80 @@ class SimCamera(CameraDriver):
         self._exposure_start: float | None = None
         self._exposure_milliseconds = 0.0
         self._gain = 0
+        self._blank_frames = 0
+        self._saturated_frames = 0
+        self._star_transmission = 1.0
+        self._sky_glow = 1.0
+        self._disc: SimDisc | None = None
+        self.frames_read = 0
 
     @property
     def mode(self) -> ObservatoryMode:
         return ObservatoryMode.simulated
+
+    # -- faults on demand (ADR-080) -------------------------------------
+
+    def blank_frames(self, count: int) -> None:
+        """The next `count` frames are flat: a capped lens or a dead sensor."""
+        self._blank_frames = count
+
+    def saturate_frames(self, count: int) -> None:
+        """The next `count` frames are clipped white."""
+        self._saturated_frames = count
+
+    def set_clouds(self, star_transmission: float, sky_glow: float) -> None:
+        """Cloud until `clear_clouds`: starlight dimmed, the sky lit from below."""
+        self._star_transmission = star_transmission
+        self._sky_glow = sky_glow
+
+    def clear_clouds(self) -> None:
+        self._star_transmission = 1.0
+        self._sky_glow = 1.0
+
+    def show_disc(
+        self,
+        altitude_degrees: float,
+        azimuth_degrees: float,
+        radius_px: float = 120.0,
+        brightness: float = 5_000_000.0,
+        degrees_per_pixel: float | None = None,
+    ) -> None:
+        """A Moon or planet at a fixed sky position.
+
+        The scale defaults to the f/10 train on this sensor's height, which is what
+        the runner converts a centroid offset with; a test that passes its own is
+        testing a camera the runner has been told nothing about.
+        """
+        if degrees_per_pixel is None:
+            from darkview_agent.runtime import field_height_degrees
+
+            degrees_per_pixel = field_height_degrees(OpticalConfig.f10_native) / self._height
+        self._disc = SimDisc(
+            altitude_degrees, azimuth_degrees, radius_px, brightness, degrees_per_pixel
+        )
+
+    def move_disc(self, altitude_degrees: float = 0.0, azimuth_degrees: float = 0.0) -> None:
+        """The disc moves against the stars it is tracked at."""
+        assert self._disc is not None
+        self._disc.altitude_degrees += altitude_degrees
+        self._disc.azimuth_degrees += azimuth_degrees
+
+    def hide_disc(self) -> None:
+        self._disc = None
+
+    def disc_offset_px(self) -> tuple[float, float] | None:
+        """Where the disc would land relative to the frame centre, now."""
+        if self._disc is None or self._mount is None:
+            return None
+        status = self._mount.status()
+        disc = self._disc
+        dx = (
+            (disc.azimuth_degrees - status.azimuth_degrees)
+            * math.cos(math.radians(status.altitude_degrees))
+            / disc.degrees_per_pixel
+        )
+        dy = (status.altitude_degrees - disc.altitude_degrees) / disc.degrees_per_pixel
+        return dx, dy
 
     def connect(self) -> None:
         self._connected = True
@@ -268,8 +359,12 @@ class SimCamera(CameraDriver):
                 else abs(self._focuser.optical_position - self._best_focus)
                 / self.STEPS_PER_PIXEL_OF_BLUR
             ),
+            star_transmission=self._star_transmission,
+            sky_glow=self._sky_glow,
         )
+        pixels = self._spoil(self._draw_disc(pixels))
         self._exposure_start = None
+        self.frames_read += 1
 
         return Frame(
             pixels=pixels,
@@ -278,6 +373,37 @@ class SimCamera(CameraDriver):
             captured_at=datetime.now(UTC),
             mode=self.mode,
         )
+
+
+    def _draw_disc(self, pixels: np.ndarray) -> np.ndarray:
+        offset = self.disc_offset_px()
+        if offset is None:
+            return pixels
+        assert self._disc is not None
+        cx = (self._width - 1) / 2.0 + offset[0]
+        cy = (self._height - 1) / 2.0 + offset[1]
+        y_grid, x_grid = np.ogrid[0 : self._height, 0 : self._width]
+        inside = (x_grid - cx) ** 2 + (y_grid - cy) ** 2 <= self._disc.radius_px**2
+        level = (
+            self._disc.brightness
+            * self._exposure_milliseconds
+            / 1000.0
+            * (1.0 + self._gain / 100.0)
+            * self._star_transmission
+        )
+        out = pixels.astype(np.float64)
+        out[inside] += level
+        return np.clip(out, 0, starfield.FULL_WELL).astype(np.uint16)
+
+    def _spoil(self, pixels: np.ndarray) -> np.ndarray:
+        if self._blank_frames > 0:
+            self._blank_frames -= 1
+            rng = np.random.default_rng(self.frames_read)
+            return np.clip(rng.normal(200.0, 4.0, pixels.shape), 0, None).astype(np.uint16)
+        if self._saturated_frames > 0:
+            self._saturated_frames -= 1
+            return np.full(pixels.shape, starfield.FULL_WELL, dtype=np.uint16)
+        return pixels
 
 
 class SimFocuser(FocuserDriver):

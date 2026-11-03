@@ -11,7 +11,11 @@ import { recordAuditEvent } from "@darkview/db/audit";
 
 import { refundSeatsTakenByClose } from "@/features/missions/close-refund";
 import { hasPaidObserverPack } from "@/features/missions/observer-pack";
-import { LIVE_MISSION_STATES } from "@/features/missions/session";
+import {
+  BOOKED_SESSION_SELECT,
+  LIVE_MISSION_STATES,
+  bookedSessionFields,
+} from "@/features/missions/session";
 import { getDatabase } from "@/lib/db/client";
 
 /**
@@ -411,7 +415,7 @@ export async function readContractMission(
   const row = await tx.mission.findUniqueOrThrow({
     where: { id: missionId },
     include: {
-      booking: { select: { id: true } },
+      ...BOOKED_SESSION_SELECT,
       captures: { select: { id: true } },
     },
   });
@@ -433,6 +437,7 @@ export async function readContractMission(
     requestedAt: row.requestedAt.toISOString(),
     startedAt: row.startedAt?.toISOString() ?? null,
     endedAt: row.completedAt?.toISOString() ?? null,
+    ...bookedSessionFields(row),
     captureIds: row.captures.map((capture) => capture.id),
     observable: row.joinPolicy === "OPEN",
     broadcast: row.broadcast,
