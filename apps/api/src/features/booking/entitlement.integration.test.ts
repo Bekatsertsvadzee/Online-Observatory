@@ -437,6 +437,32 @@ describe("taking a free reschedule", () => {
     ).resolves.toMatchObject({ status: 409, code: "CONFLICT" });
   });
 
+  it("refunds once when two refunds race on one entitlement, and the ledger balances", async () => {
+    // Security review 2026-11-07: a refund double-clicked, or replayed from two tabs.
+    const { bookingId, paymentId } = await entitledBooking();
+
+    const results = await Promise.all([
+      refundMyBooking({ userId, bookingId, now: NOW }),
+      refundMyBooking({ userId, bookingId, now: NOW }),
+    ]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect((await database.payment.findUniqueOrThrow({ where: { id: paymentId } })).status).toBe(
+      "REFUNDED",
+    );
+    const reversals = await database.loyaltyLedgerEntry.count({
+      where: { userId, kind: "PURCHASE_REVERSED" },
+    });
+    expect(reversals).toBeLessThanOrEqual(1);
+    const account = await database.loyaltyAccount.findUniqueOrThrow({ where: { userId } });
+    const sum = await database.loyaltyLedgerEntry.aggregate({
+      where: { userId },
+      _sum: { points: true, tierPoints: true },
+    });
+    expect(sum._sum.points ?? 0).toBe(account.balance);
+    expect(sum._sum.tierPoints ?? 0).toBe(account.tierPoints);
+  });
+
   it("lets exactly one of a refund and a reschedule racing on one entitlement succeed", async () => {
     const { bookingId } = await entitledBooking();
 

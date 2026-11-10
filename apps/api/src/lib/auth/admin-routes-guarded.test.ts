@@ -6,6 +6,25 @@ import { describe, expect, it } from "vitest";
 const appDirectory = path.resolve(import.meta.dirname, "../../app");
 const adminDirectory = path.join(appDirectory, "admin");
 
+/**
+ * A route's source without its comments. Every check below asks what the code calls,
+ * and a comment that merely names a guard must not satisfy it (security review
+ * 2026-11-07, SR-15). Good enough for these files: no route holds `//` or `/*` inside
+ * a string literal that a guard name could hide behind.
+ */
+function code(file: string): string {
+  return stripComments(readFileSync(file, "utf8"));
+}
+
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+/** Whether a route exports a handler for a method that changes state, in any form. */
+const MUTATING_EXPORT = /export\s+(?:async\s+)?(?:function|const)\s+(POST|PUT|PATCH|DELETE)\b/;
+
 function routeFilesUnder(directory: string): string[] {
   let entries: string[];
   try {
@@ -92,13 +111,13 @@ describe("every admin route is behind the operator guard", () => {
   it.runIf(adminRoutes.length > 0).each(adminRoutes)(
     "%s calls requireOperator",
     (routeFile) => {
-      expect(readFileSync(routeFile, "utf8")).toContain("requireOperator");
+      expect(code(routeFile)).toContain("requireOperator");
     },
   );
 
   it("finds no unguarded admin route", () => {
     const unguarded = adminRoutes.filter(
-      (routeFile) => !readFileSync(routeFile, "utf8").includes("requireOperator"),
+      (routeFile) => !code(routeFile).includes("requireOperator"),
     );
     expect(unguarded).toEqual([]);
   });
@@ -168,7 +187,7 @@ describe("every admin route is behind the operator guard", () => {
         );
       })
       .filter((file) => {
-        const source = readFileSync(file, "utf8");
+        const source = code(file);
         return (
           !source.includes("requireApiSession") &&
           !source.includes("requireApiMutation") &&
@@ -214,16 +233,15 @@ describe("every admin route is behind the operator guard", () => {
     // as to a first-party one. requireApiSession alone therefore proves who the
     // caller is but not that they meant to call: a mutating route needs
     // requireApiMutation, which checks Origin first.
-    const mutating = routeFilesUnder(appDirectory).filter((file) => {
-      const source = readFileSync(file, "utf8");
-      return /export async function (POST|PUT|PATCH|DELETE)\b/.test(source);
-    });
+    const mutating = routeFilesUnder(appDirectory).filter((file) =>
+      MUTATING_EXPORT.test(code(file)),
+    );
 
     // requireOperatorMutation is requireApiMutation plus a role check -- asserted
     // below, so accepting it here does not widen what this test permits.
     const withoutOriginCheck = mutating
       .filter((file) => {
-        const source = readFileSync(file, "utf8");
+        const source = code(file);
         return (
           !source.includes("requireApiMutation") &&
           !source.includes("requireOperatorMutation")
@@ -257,6 +275,23 @@ describe("every admin route is behind the operator guard", () => {
       expect(source, relative).toContain("signInNative(");
       expect(source, relative).not.toMatch(/createSession\(|cookies\(|set-cookie/i);
     }
+  });
+
+  it("puts every mutating admin route behind the operator mutation guard", () => {
+    // requireOperator plus requireApiMutation would pass the two checks above one
+    // half each; an admin state change needs both in one guard.
+    const missing = routeFilesUnder(adminDirectory)
+      .filter((file) => MUTATING_EXPORT.test(code(file)))
+      .filter((file) => !code(file).includes("requireOperatorMutation("))
+      .map((file) => path.relative(appDirectory, file));
+    expect(missing).toEqual([]);
+  });
+
+  it("reads guards from code, not from comments", () => {
+    expect(stripComments("// requireOperator()\n/* requireApiMutation */\nconst x = 1;").trim()).toBe(
+      "const x = 1;",
+    );
+    expect(stripComments('const url = "https://example";')).toContain("https://example");
   });
 
   it("builds the operator mutation guard on the same-origin guard", () => {

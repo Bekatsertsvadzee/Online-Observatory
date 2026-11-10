@@ -131,6 +131,29 @@ def test_a_nudge_is_judged_on_where_it_would_land():
     assert agent.mount.status().altitude_degrees == pytest.approx(TARGET_ALTITUDE, abs=0.01)
 
 
+def test_a_nudge_is_judged_again_on_the_position_it_is_carried_out_from():
+    """Security review 2026-11-07, SR-17.
+
+    The validator judges a nudge's landing point from one reading of the mount, and
+    the executor re-reads it before the slew. Here the validator's reading is stale
+    -- 50 degrees, where a 30-arcminute step is plainly safe -- while the mount is
+    really at 56.662 under a MAX_ALT_SAFE of 57. The step it would actually take
+    lands at 57.162, and the executor must refuse it rather than trust the verdict.
+    """
+    agent = build_agent(max_altitude_degrees=57.0)
+    agent.own()
+    agent.command(agent.goto())
+    run_to(agent, MissionState.capturing)
+    settled = agent.mount.status()
+    agent.supervisor.validator._pointing = lambda: (50.0, settled.azimuth_degrees)
+
+    ack = agent.command(agent.nudge(step_arcminutes=30.0))
+
+    assert ack["status"] == "REJECTED"
+    assert ack["rejectionReason"] == "SAFETY_ABOVE_MAX_ALTITUDE"
+    assert agent.mount.status().altitude_degrees == pytest.approx(TARGET_ALTITUDE, abs=0.01)
+
+
 def test_a_nudge_within_the_envelope_moves_the_mount():
     agent = build_agent(max_altitude_degrees=57.0)
     agent.own()

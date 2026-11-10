@@ -160,6 +160,11 @@ export class FakeLinkStore implements LinkStore, MissionChannelStore {
     this.observatories.set(tokenHash, observatory);
   }
 
+  /** An operator's revoke or rotate, as the row sees it (ADR-020). */
+  forgetToken(tokenHash: string) {
+    this.observatories.delete(tokenHash);
+  }
+
   async findObservatoryByTokenHash(tokenHash: string) {
     return this.observatories.get(tokenHash) ?? null;
   }

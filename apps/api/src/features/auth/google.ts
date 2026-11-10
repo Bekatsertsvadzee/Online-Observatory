@@ -140,12 +140,23 @@ export async function completeGoogleSignIn(
   if (!user && byEmail) {
     // The address is Google's word that this is the same person: Google verified it,
     // and the password account under it either verified it too or never got that far.
-    user = await database.user.update({
-      where: { id: byEmail.id },
-      data: {
-        googleSubject: identity.subject,
-        emailVerifiedAt: byEmail.emailVerifiedAt ?? new Date(),
-      },
+    // One that never got that far may have been registered by somebody who does not
+    // own the address, so the password they chose goes, as a reset replaces it
+    // (ADR-040). Its owner sets one through the reset link if they want one.
+    const neverVerified = byEmail.emailVerifiedAt === null;
+    user = await database.$transaction(async (tx) => {
+      if (neverVerified) {
+        await tx.account.deleteMany({ where: { userId: byEmail.id } });
+        await tx.emailVerificationToken.deleteMany({ where: { userId: byEmail.id } });
+        await tx.session.deleteMany({ where: { userId: byEmail.id } });
+      }
+      return tx.user.update({
+        where: { id: byEmail.id },
+        data: {
+          googleSubject: identity.subject,
+          emailVerifiedAt: byEmail.emailVerifiedAt ?? new Date(),
+        },
+      });
     });
   }
   const created = !user;

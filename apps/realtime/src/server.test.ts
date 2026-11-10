@@ -9,7 +9,7 @@ import { hashSessionToken } from "@/auth/user-session";
 import { FakeLinkStore } from "@/link/fake-store";
 import type { ObservatoryRecord } from "@/link/store";
 import type { ChannelUser } from "@/mission/store";
-import { createRealtimeServer } from "@/server";
+import { createRealtimeServer, MAX_PENDING_HANDSHAKES } from "@/server";
 import { FAKE_STORAGE } from "@/link/fake-storage";
 
 /**
@@ -190,6 +190,96 @@ describe("who is let in", () => {
     // The incumbent keeps the observatory, and keeps its own record.
     expect(first.readyState).toBe(WebSocket.OPEN);
     expect(server.registry.get(realObservatory.id)!.observatory).toEqual(realObservatory);
+  });
+});
+
+describe("a flood of handshakes", () => {
+  // Security review 2026-11-07, SR-06. Every upgrade cost a database lookup before
+  // the caller had proved anything, with no bound. Handshakes waiting on that lookup
+  // are now capped; past the cap a handshake is refused at once, and the links
+  // already open are not touched.
+  it("refuses handshakes past the cap without asking the store", async () => {
+    let lookups = 0;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const original = store.findObservatoryByTokenHash.bind(store);
+    store.findObservatoryByTokenHash = async (hash: string) => {
+      lookups += 1;
+      await held;
+      return original(hash);
+    };
+
+    const statuses = await Promise.all(
+      Array.from({ length: MAX_PENDING_HANDSHAKES + 5 }, () =>
+        new Promise<number>((resolve) => {
+          const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, {
+            headers: { authorization: `Bearer ${randomUUID()}` },
+          });
+          clients.push(client);
+          client.once("unexpected-response", (_request, response) =>
+            resolve(response.statusCode ?? 0),
+          );
+          client.once("error", () => resolve(-1));
+          // The ones under the cap are still waiting on the store; give up on them.
+          setTimeout(() => resolve(0), 300);
+        }),
+      ),
+    );
+
+    expect(lookups).toBe(MAX_PENDING_HANDSHAKES);
+    expect(statuses.filter((status) => status === 503)).toHaveLength(5);
+    release();
+  });
+});
+
+describe("a token revoked while the notification is lost", () => {
+  // Security review 2026-11-07, SR-03. A revoke reached the open link only as a
+  // NOTIFY; a listener that was reconnecting at that instant missed it, and the
+  // revoked agent kept the observatory for as long as its socket stayed up. The
+  // periodic sweep now checks the token the link was admitted with.
+  it("closes the link at the next sweep", async () => {
+    await server.close();
+    server = createRealtimeServer(
+      store,
+      APP_URL,
+      STREAM_SECRET,
+      FAKE_STORAGE,
+      "an-internal-secret-of-at-least-32-characters",
+      { pendingSeconds: 0.05, unstartedSeconds: 3600 },
+    );
+    const httpServer = server.listen(0);
+    await new Promise<void>((resolve) => httpServer.once("listening", () => resolve()));
+    port = (httpServer.address() as AddressInfo).port;
+
+    const agent = await connect(DEVICE_TOKEN);
+    const closed = new Promise<string>((resolve) =>
+      agent.once("close", (_code, reason) => resolve(reason.toString())),
+    );
+
+    store.forgetToken(hashDeviceToken(DEVICE_TOKEN));
+
+    await expect(closed).resolves.toBe("device token changed");
+    await vi.waitFor(() => expect(server.registry.get(realObservatory.id)).toBeUndefined());
+  });
+
+  it("leaves a link whose token still stands", async () => {
+    await server.close();
+    server = createRealtimeServer(
+      store,
+      APP_URL,
+      STREAM_SECRET,
+      FAKE_STORAGE,
+      "an-internal-secret-of-at-least-32-characters",
+      { pendingSeconds: 0.05, unstartedSeconds: 3600 },
+    );
+    const httpServer = server.listen(0);
+    await new Promise<void>((resolve) => httpServer.once("listening", () => resolve()));
+    port = (httpServer.address() as AddressInfo).port;
+
+    const agent = await connect(DEVICE_TOKEN);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(agent.readyState).toBe(WebSocket.OPEN);
   });
 });
 

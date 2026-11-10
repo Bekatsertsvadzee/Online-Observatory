@@ -34,3 +34,19 @@ export async function authenticateAgent(
 
   return observatory;
 }
+
+/**
+ * Whether a link admitted with this token hash may keep its observatory.
+ *
+ * A token is checked at the handshake; a revoke or rotate reaches an open link as a
+ * NOTIFY, which a reconnecting listener can miss. The periodic sweep asks this, so a
+ * revoked agent is closed within one sweep however the notification fared (SR-03).
+ */
+export async function stillAdmitted(
+  store: LinkStore,
+  tokenHash: string,
+  observatoryId: string,
+): Promise<boolean> {
+  const observatory = await store.findObservatoryByTokenHash(tokenHash);
+  return observatory?.id === observatoryId;
+}

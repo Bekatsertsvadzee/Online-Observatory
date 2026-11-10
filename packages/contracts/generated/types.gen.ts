@@ -1645,6 +1645,12 @@ export type LoyaltyTier = {
     discountPercent: number;
 };
 
+export type ServiceHealth = {
+    service: 'darkview-api';
+    status: 'up';
+    checkedAt: string;
+};
+
 export type LoyaltyScheme = {
     /**
      * Points earned per 1 GEL of settled payment.
@@ -4147,6 +4153,22 @@ export type TargetSlug = string;
  *
  */
 export type IdempotencyKey = string;
+
+export type GetServiceHealthData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/health';
+};
+
+export type GetServiceHealthResponses = {
+    /**
+     * The process is up.
+     */
+    200: ServiceHealth;
+};
+
+export type GetServiceHealthResponse = GetServiceHealthResponses[keyof GetServiceHealthResponses];
 
 export type RegisterData = {
     body: RegisterRequest;

@@ -905,7 +905,7 @@ class Supervisor:
                 if payload.kind == "FOCUS":
                     return self._execute_focus(envelope, payload)
                 if payload.kind == "NUDGE":
-                    return self._execute_nudge(payload)
+                    return self._execute_nudge(envelope, payload, at_time)
                 if payload.kind == "RETARGET":
                     return self._execute_retarget(envelope, payload, at_time)
                 if payload.kind == "ABORT":
@@ -1143,7 +1143,9 @@ class Supervisor:
         )
         return None
 
-    def _execute_nudge(self, payload) -> Refusal | None:
+    def _execute_nudge(
+        self, envelope: CommandEnvelope, payload, at_time: datetime
+    ) -> Refusal | None:
         """One bounded step from wherever the mount is now.
 
         The projected position was already checked against the envelope by the
@@ -1173,6 +1175,18 @@ class Supervisor:
             altitude += signed
         else:
             azimuth = normalise_azimuth(azimuth + signed)
+
+        # Judged again on the reading this slew is actually taken from (SR-17). The
+        # validator's reading was moments earlier; the mount may have moved since.
+        verdict = self._envelope.evaluate_pointing(
+            at_time,
+            altitude,
+            azimuth,
+            operator_override=self._validator.operator_override(envelope),
+        )
+        if not verdict.permitted:
+            assert verdict.reason is not None
+            return (verdict.reason, verdict.detail)
 
         self._devices.mount.slew_to(altitude, azimuth)
         # The live stack belongs to the field before the step (#199), and the

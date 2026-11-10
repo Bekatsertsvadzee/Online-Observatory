@@ -38,6 +38,10 @@ describe("error reporting", () => {
       "9f86d0",
     ],
     ["a JSON web token", "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc123", "eyJhbGci"],
+    // Security review 2026-11-07, SR-19: a client address quoted in a message.
+    ["an IPv4 address", "x-forwarded-for: 203.0.113.7, 10.0.0.2", "203.0.113.7"],
+    ["a full IPv6 address", "from 2001:0db8:85a3:0000:0000:8a2e:0370:7334", "8a2e:0370"],
+    ["a compressed IPv6 address", "client 2001:db8::1 refused", "2001:db8::1"],
   ])("removes %s from text", (_label, text, secret) => {
     const scrubbed = scrubText(text);
     expect(scrubbed).not.toContain(secret);
@@ -48,6 +52,11 @@ describe("error reporting", () => {
     const path =
       "/Users/nika/Desktop/Stellar Observatory/part-1-worktrees/idle-db/apps/realtime/src/conditions/forecast.ts:89";
     expect(scrubText(path)).toBe(path);
+  });
+
+  it("keeps times of day, versions and timestamps, which are not addresses", () => {
+    const text = "next 16.4.2 at 2026-11-07T20:11:50.110Z (00:12:25) took 1.2.3s";
+    expect(scrubText(text)).toBe(text);
   });
 
   it("keeps what is needed to find the fault", () => {

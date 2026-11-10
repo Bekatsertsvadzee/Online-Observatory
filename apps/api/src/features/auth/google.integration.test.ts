@@ -147,6 +147,53 @@ describe("the callback", () => {
     expect(user.name).toBe("Observer");
   });
 
+  it("drops the password somebody else chose for an address they never verified", async () => {
+    // Security review 2026-11-07, SR-01: anybody can register a stranger's address
+    // with a password of their choosing. If its owner later arrives through Google,
+    // the account is verified -- and the stranger's password must not still open it.
+    const email = newAddress();
+    const squatter = await database.user.create({
+      data: {
+        name: "Squatter",
+        email,
+        locale: "en",
+        account: { create: { passwordHash: await hashPassword("the squatter's password") } },
+      },
+    });
+    const { state, stateCookie } = await start();
+
+    const { location } = await completeGoogleSignIn(
+      { code: "code", state, stateCookie },
+      google({ email }),
+    );
+
+    expect(location).toBe("/ka/app");
+    const user = await database.user.findUniqueOrThrow({ where: { id: squatter.id } });
+    expect(user.emailVerifiedAt).not.toBeNull();
+    expect(await database.account.findUnique({ where: { userId: squatter.id } })).toBeNull();
+    expect(
+      await database.emailVerificationToken.count({ where: { userId: squatter.id } }),
+    ).toBe(0);
+  });
+
+  it("keeps the password of an account that had already verified its address", async () => {
+    const email = newAddress();
+    const owner = await database.user.create({
+      data: {
+        name: "Owner",
+        email,
+        locale: "en",
+        emailVerifiedAt: new Date(),
+        account: { create: { passwordHash: await hashPassword("the owner's own password") } },
+      },
+    });
+    const { state, stateCookie } = await start();
+
+    await completeGoogleSignIn({ code: "code", state, stateCookie }, google({ email }));
+
+    expect(await database.account.findUnique({ where: { userId: owner.id } })).not.toBeNull();
+  });
+
   it("finds a linked account by its Google id even after the Google address changed", async () => {
     const email = newAddress();
     const subject = `sub-${randomUUID()}`;

@@ -1179,6 +1179,15 @@ class LoyaltyTier(BaseModel):
     discount_percent: int = Field(..., alias='discountPercent', ge=0, le=100)
 
 
+class ServiceHealth(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    service: Literal['darkview-api']
+    status: Literal['up']
+    checked_at: AwareDatetime = Field(..., alias='checkedAt')
+
+
 class ProgressMarker(RootModel[int]):
     root: int = Field(..., ge=0)
 

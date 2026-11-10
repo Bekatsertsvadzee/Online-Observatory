@@ -7,10 +7,11 @@ import { PrismaClient } from "@darkview/db";
 
 vi.mock("server-only", () => ({}));
 
-const { testDatabase, cookieJar, sentLinks } = vi.hoisted(() => ({
+const { testDatabase, cookieJar, sentLinks, passwordHashes } = vi.hoisted(() => ({
   testDatabase: { current: null as unknown as PrismaClient },
   cookieJar: new Map<string, string>(),
   sentLinks: [] as string[],
+  passwordHashes: { count: 0 },
 }));
 
 vi.mock("@/lib/db/client", () => ({ getDatabase: () => testDatabase.current }));
@@ -31,6 +32,18 @@ vi.mock("@/lib/validation/env", () => ({
     TRUSTED_PROXY_HOPS: 0,
   }),
 }));
+// Counts the scrypt derivations registration pays for, so a test can hold every
+// branch to the same work (SR-02). Behaviour is unchanged.
+vi.mock("@/lib/auth/password", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/auth/password")>();
+  return {
+    ...original,
+    hashPassword: async (password: string) => {
+      passwordHashes.count += 1;
+      return original.hashPassword(password);
+    },
+  };
+});
 vi.mock("@/lib/auth/email-verification", () => ({
   sendEmailVerification: async (message: { verificationUrl: string }) => {
     sentLinks.push(message.verificationUrl);
@@ -102,6 +115,21 @@ describe("registration", () => {
       register({ displayName: "Someone else", email, password: PASSWORD, locale: "en" }),
     ).resolves.toEqual({ ok: true });
     expect(sentLinks).toHaveLength(before);
+  });
+
+  it("does the same scrypt work for a known address as for a new one", async () => {
+    // Security review 2026-11-07, SR-02: a verified address used to answer before any
+    // scrypt work, a new one after it, so the 202's timing said which was which.
+    const verified = newAddress();
+    await verifyEmail({ token: await registerAndCaptureToken(verified) });
+    const unverified = newAddress();
+    await registerAndCaptureToken(unverified);
+
+    for (const email of [newAddress(), verified, unverified]) {
+      const before = passwordHashes.count;
+      await register({ displayName: "Someone", email, password: PASSWORD, locale: "en" });
+      expect(passwordHashes.count - before, email).toBe(1);
+    }
   });
 });
 

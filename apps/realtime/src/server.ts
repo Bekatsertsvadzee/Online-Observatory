@@ -8,7 +8,12 @@ import { PrismaClient } from "@darkview/db";
 import { sweepWaitlist } from "@darkview/db/waitlist";
 import { monitoringOptions } from "@darkview/monitoring/options";
 
-import { authenticateAgent } from "@/auth/device-token";
+import {
+  authenticateAgent,
+  bearerTokenFrom,
+  hashDeviceToken,
+  stillAdmitted,
+} from "@/auth/device-token";
 import { authenticateClient, isAllowedOrigin } from "@/auth/user-session";
 import { AgentLink } from "@/link/agent-link";
 import { AgentRelay } from "@/link/agent-relay";
@@ -102,6 +107,14 @@ const PENDING_SWEEP_INTERVAL_SECONDS = 15;
  */
 const UNSTARTED_SWEEP_INTERVAL_SECONDS = 60;
 
+/**
+ * Upgrades waiting on their credential lookup, at most (SR-06). Each one is a database
+ * read made before the caller has proved anything; past this a handshake is refused at
+ * once with 503. An agent reconnects with backoff, and links already open are never
+ * touched, so a flood costs new connections a retry rather than costing the database.
+ */
+export const MAX_PENDING_HANDSHAKES = 32;
+
 /** `/ws/mission/{missionId}`, as the contract's missionClient channel names it. */
 const MISSION_PATH = /^\/ws\/mission\/([0-9a-fA-F-]{36})$/;
 
@@ -131,6 +144,8 @@ export function createRealtimeServer(
   const missions = new MissionChannelRegistry();
   const live = new LiveStream(appUrl, streamSecret);
   const broadcast = new MissionRelay(store, missions, live);
+  // The token hash each agent link was admitted with, re-checked by the sweep (SR-03).
+  const admittedWith = new WeakMap<AgentLink, string>();
   const httpServer = createServer((request, response) => {
     // The hosted demo's health check (deploy/fly). Database-free on purpose: it says
     // the process is up and listening, which is what the front needs to know to send
@@ -176,7 +191,16 @@ export function createRealtimeServer(
   // mission ownership test -- runs on bytes it has already taken. See DV-116.
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_BINARY_BYTES });
 
+  let pendingHandshakes = 0;
+
   httpServer.on("upgrade", (request, socket, head) => {
+    if (pendingHandshakes >= MAX_PENDING_HANDSHAKES) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    pendingHandshakes += 1;
+
     void (async () => {
       const path = new URL(request.url ?? "/", "http://localhost").pathname;
 
@@ -190,8 +214,9 @@ export function createRealtimeServer(
           return;
         }
 
+        const tokenHash = hashDeviceToken(bearerTokenFrom(request.headers.authorization)!);
         sockets.handleUpgrade(request, socket, head, (connection) => {
-          attach(connection, observatory);
+          attach(connection, observatory, tokenHash);
         });
         return;
       }
@@ -231,7 +256,10 @@ export function createRealtimeServer(
       // ends the process, and the process holds every observatory's socket.
       console.error("darkview realtime: upgrade", error);
       socket.destroy();
-    });
+    })
+      .finally(() => {
+        pendingHandshakes -= 1;
+      });
   });
 
   /**
@@ -242,7 +270,7 @@ export function createRealtimeServer(
    * true to the first piece of code that consults it and be wrong for any
    * observatory an operator had switched to REAL.
    */
-  function attach(connection: WebSocket, observatory: ObservatoryRecord) {
+  function attach(connection: WebSocket, observatory: ObservatoryRecord, tokenHash: string) {
     const link = new AgentLink(
       observatory,
       store,
@@ -259,6 +287,7 @@ export function createRealtimeServer(
       connection.close(1008, "observatory already connected");
       return;
     }
+    admittedWith.set(link, tokenHash);
 
     connection.on("message", (data, isBinary) => {
       // The pixels of the live-frame header that arrived immediately before.
@@ -368,8 +397,15 @@ export function createRealtimeServer(
    */
   const pendingSweep = setInterval(() => {
     for (const observatoryId of registry.observatoryIds()) {
-      void relay
-        .sweepPendingCommands(observatoryId)
+      const link = registry.get(observatoryId);
+      const tokenHash = link ? admittedWith.get(link) : undefined;
+      // A revoke whose NOTIFY was lost is caught here, before any command is sent.
+      void (tokenHash ? stillAdmitted(store, tokenHash, observatoryId) : Promise.resolve(true))
+        .then((admitted) => {
+          if (admitted) return relay.sweepPendingCommands(observatoryId);
+          relay.closeForCredentialChange(observatoryId);
+          return 0;
+        })
         .then((sent) => {
           if (sent > 0) {
             console.warn(
