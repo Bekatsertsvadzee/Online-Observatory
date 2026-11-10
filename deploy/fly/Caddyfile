@@ -7,6 +7,15 @@
 }
 
 :8080 {
+	# Every response, the realtime ones included (security review 2026-11-07, SR-12).
+	# Deferred, so a header the upstream already set is replaced rather than doubled.
+	# Fly terminates TLS and force_https redirects plain HTTP, so HSTS is true here.
+	header {
+		defer
+		Strict-Transport-Security "max-age=63072000"
+		X-Content-Type-Options "nosniff"
+	}
+
 	# handle blocks are mutually exclusive and tried in this order.
 
 	# Never from the internet (RUNBOOK §2, REALTIME_INTERNAL_SECRET).

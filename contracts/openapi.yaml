@@ -161,6 +161,24 @@ x-darkview-internal:
         secret, unknown observatory, no link, no sample yet -- is the same 404.
 
 paths:
+  /health:
+    get:
+      operationId: getServiceHealth
+      tags: [observatory]
+      summary: Liveness of the API process, and nothing else.
+      description: |
+        Says only that the process is up. It reports no database, link or safety state,
+        so it leaks nothing and cannot guess. Added to the contract by the security
+        review of 2026-11-07 (SR-13): it was implemented and undeclared.
+      security: []
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceHealth"
+
   /auth/register:
     post:
       operationId: register
@@ -5528,6 +5546,21 @@ components:
           type: integer
           minimum: 0
           maximum: 100
+
+    ServiceHealth:
+      type: object
+      additionalProperties: false
+      required: [service, status, checkedAt]
+      properties:
+        service:
+          type: string
+          enum: [darkview-api]
+        status:
+          type: string
+          enum: [up]
+        checkedAt:
+          type: string
+          format: date-time
 
     LoyaltyScheme:
       type: object

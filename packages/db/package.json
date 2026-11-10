@@ -31,11 +31,11 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
-    "@prisma/client": "7.9.1",
+    "@prisma/client": "7.10.1",
     "@darkview/contracts": "*"
   },
   "devDependencies": {
-    "prisma": "7.9.1",
+    "prisma": "7.10.1",
     "tsx": "4.23.12",
     "dotenv": "17.4.2"
   }

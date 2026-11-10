@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import getpass
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -64,7 +65,7 @@ def _observatory_id_answer(answer: str) -> str:
 
 
 def _cloud_url_answer(answer: str) -> str:
-    if not answer.startswith(("wss://", "ws://")):
+    if not answer.startswith("wss://"):
         raise ConfigurationError("The cloud URL starts with wss:// and ends in /ws/agent.")
     return answer
 
@@ -128,6 +129,19 @@ def write_env_file(path: Path, values: dict[str, str]) -> None:
         # os.chmod by path: os.fchmod does not exist on Windows (Python 3.12),
         # where the observatory mini-PC runs. mkstemp already makes it 0600 on POSIX.
         os.chmod(temporary, 0o600)
+        if sys.platform == "win32":
+            # On Windows chmod only clears the read-only flag and the file keeps its
+            # folder's ACL. Owner-only, set while the file is still empty (SR-18).
+            subprocess.run(
+                [
+                    "icacls",
+                    temporary,
+                    "/inheritance:r",
+                    "/grant:r",
+                    f"{getpass.getuser()}:F",
+                ],
+                check=True,
+            )
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(body)
         os.replace(temporary, path)

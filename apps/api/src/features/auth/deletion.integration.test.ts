@@ -281,6 +281,27 @@ describe("deleting an account", () => {
     ).toEqual({ actorHash: null, metadata: null });
   });
 
+  it("takes the account off every waiting list", async () => {
+    // Security review 2026-11-07, SR-04: a deleted account's place stayed WAITING, so
+    // the sweep later offered it a freed slot, held that slot from everybody else for
+    // the offer's fifteen minutes, and queued an email to the replacement address.
+    const { userId, session } = await customer();
+    await database.waitlistEntry.create({
+      data: {
+        userId,
+        observatoryId: fixture.observatoryId,
+        slotStartAt: new Date(NOW.getTime() + 48 * HOUR),
+        durationMinutes: 30,
+      },
+    });
+
+    await expect(deleteAccount(session, { currentPassword: PASSWORD }, NOW)).resolves.toEqual({
+      ok: true,
+    });
+
+    expect(await database.waitlistEntry.count({ where: { userId } })).toBe(0);
+  });
+
   it("frees the address for a new registration", async () => {
     const { userId, email, session } = await customer();
     await deleteAccount(session, { currentPassword: PASSWORD }, NOW);

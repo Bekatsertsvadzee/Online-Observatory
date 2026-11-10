@@ -10,6 +10,8 @@ const nextConfig: NextConfig = {
       {
         source: "/:path*",
         headers: [
+          // Two years. No includeSubDomains: the API does not own its parent domain.
+          { key: "Strict-Transport-Security", value: "max-age=63072000" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

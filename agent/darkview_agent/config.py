@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from contracts.models import OpticalConfig
 from darkview_agent.devices.alpaca import require_loopback
@@ -207,7 +208,7 @@ def load_config(environment: dict[str, str] | None = None) -> AgentConfig:
     return AgentConfig(
         driver_mode=driver_mode,
         attended=attended,
-        cloud_url=env.get("DARKVIEW_AGENT_CLOUD_URL") or None,
+        cloud_url=_cloud_url(env),
         device_token=env.get("DARKVIEW_AGENT_DEVICE_TOKEN") or None,
         observatory_id=_observatory_id(env),
         site=_site(env),
@@ -225,6 +226,31 @@ def load_config(environment: dict[str, str] | None = None) -> AgentConfig:
         zwo_camera_index=_optional_whole_number(env, "DARKVIEW_AGENT_ZWO_CAMERA_INDEX"),
         astap_path=_optional_path(env, "DARKVIEW_AGENT_ASTAP_PATH"),
         astap_database_dir=_optional_path(env, "DARKVIEW_AGENT_ASTAP_DATABASE_DIR"),
+    )
+
+
+def _cloud_url(environment: dict[str, str]) -> str | None:
+    """wss://, or ws:// to this machine only.
+
+    Over ws:// the device token and every command cross the network in the clear.
+    The one plain link allowed is to a loopback address, which is how the hosted
+    demo's simulated agents reach realtime inside one machine.
+    """
+    raw = environment.get("DARKVIEW_AGENT_CLOUD_URL") or None
+    if raw is None:
+        return None
+    parsed = urlsplit(raw)
+    if parsed.scheme == "wss" and parsed.hostname:
+        return raw
+    if parsed.scheme == "ws" and parsed.hostname:
+        try:
+            require_loopback(parsed.hostname)
+            return raw
+        except ValueError:
+            pass
+    raise ConfigurationError(
+        "DARKVIEW_AGENT_CLOUD_URL must be wss://; plain ws:// is accepted only to "
+        "127.0.0.1 or ::1. The link is never unencrypted across a network."
     )
 
 

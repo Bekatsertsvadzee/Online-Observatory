@@ -191,6 +191,9 @@ export async function deleteAccount(
         await tx.passwordResetToken.deleteMany({ where: { userId } });
         await tx.emailChangeToken.deleteMany({ where: { userId } });
         await tx.vote.deleteMany({ where: { userId } });
+        // A place left waiting would later be offered a slot, hold it from everybody
+        // else for the offer's length, and email the replacement address (SR-04).
+        await tx.waitlistEntry.deleteMany({ where: { userId } });
         await tx.session.deleteMany({ where: { userId } });
         await tx.account.delete({ where: { userId } });
         // Kept for accounting, but the people they were for are the buyer's to name,

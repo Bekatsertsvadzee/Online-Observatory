@@ -188,3 +188,34 @@ def test_an_alpaca_host_that_is_not_loopback_does_not_load(host):
 def test_a_malformed_number_does_not_load_and_is_named(name, raw):
     with pytest.raises(ConfigurationError, match=name):
         load_config({name: raw})
+
+
+# Security review 2026-11-07, SR-05: `--check` refused an unencrypted cloud URL, but
+# the agent itself started on one. Over ws:// the device token and every command
+# cross the network in the clear. Plain ws:// is allowed only to this machine, which
+# is how the hosted demo's simulated agents reach realtime.
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ws://cloud.example/ws/agent",
+        "ws://10.0.0.5:4001/ws/agent",
+        "http://cloud.example/ws/agent",
+        "cloud.example/ws/agent",
+    ],
+)
+def test_the_agent_refuses_an_unencrypted_or_unknown_cloud_url(url):
+    with pytest.raises(ConfigurationError) as raised:
+        load_config({"DARKVIEW_AGENT_CLOUD_URL": url})
+    assert "DARKVIEW_AGENT_CLOUD_URL" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "wss://cloud.example/ws/agent",
+        "ws://127.0.0.1:4001/ws/agent",
+        "ws://[::1]:4001/ws/agent",
+    ],
+)
+def test_the_agent_accepts_wss_and_loopback_ws(url):
+    assert load_config({"DARKVIEW_AGENT_CLOUD_URL": url}).cloud_url == url

@@ -1026,6 +1026,12 @@ export const zLoyaltyTier = z.strictObject({
     discountPercent: z.int().gte(0).lte(100)
 });
 
+export const zServiceHealth = z.strictObject({
+    service: z.enum(['darkview-api']),
+    status: z.enum(['up']),
+    checkedAt: z.iso.datetime()
+});
+
 export const zLoyaltyScheme = z.strictObject({
     pointsPerGel: z.int().gte(0),
     pointsPerGelRedeemed: z.int().gt(0),
@@ -2785,6 +2791,11 @@ export const zTargetSlug = z.string().regex(/^[a-z0-9-]+$/);
  *
  */
 export const zIdempotencyKey = z.string().min(8).max(128).regex(/^[A-Za-z0-9_.:-]+$/);
+
+/**
+ * The process is up.
+ */
+export const zGetServiceHealthResponse = zServiceHealth;
 
 export const zRegisterBody = zRegisterRequest;
 

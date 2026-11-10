@@ -134,6 +134,36 @@ def test_the_file_is_readable_by_its_owner_alone(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_on_windows_the_file_gets_an_owner_only_acl_before_the_token_is_written(
+    tmp_path, monkeypatch
+):
+    """Security review 2026-11-07, SR-18.
+
+    On Windows `os.chmod(path, 0o600)` only clears the read-only flag; the file keeps
+    whatever ACL its folder hands down. An env file outside the user profile would
+    have been readable by every user of the mini-PC. The ACL is now set explicitly,
+    on the empty temporary file, before the token is written into it.
+    """
+    calls: list[tuple[list[str], int]] = []
+
+    def icacls(command, check):
+        assert check is True
+        calls.append((command, Path(command[1]).stat().st_size))
+
+    monkeypatch.setattr(setup.sys, "platform", "win32")
+    monkeypatch.setattr(setup.subprocess, "run", icacls)
+    monkeypatch.setattr(setup.getpass, "getuser", lambda: "observatory")
+
+    _, path, _ = run(tmp_path, GOOD)
+
+    assert len(calls) == 1
+    command, size_when_restricted = calls[0]
+    assert command[0] == "icacls"
+    assert command[2:] == ["/inheritance:r", "/grant:r", "observatory:F"]
+    assert size_when_restricted == 0
+    assert TOKEN in path.read_text()
+
+
 def test_rewriting_leaves_no_temporary_file_behind(tmp_path):
     run(tmp_path, GOOD)
     run(tmp_path, GOOD)
@@ -197,7 +227,9 @@ def test_the_check_refuses_an_unencrypted_cloud_url(installed):
     code, said = check({**installed, "DARKVIEW_AGENT_CLOUD_URL": "ws://cloud.example/ws/agent"})
 
     assert code == 2
-    assert any(line.startswith("FAIL cloud URL") for line in said)
+    # Refused by the configuration itself since SR-05, so the agent cannot start on it
+    # either; the line still names the cloud URL.
+    assert any(line.startswith("FAIL") and "CLOUD_URL" in line for line in said)
 
 
 def test_the_check_refuses_missing_credentials(tmp_path):

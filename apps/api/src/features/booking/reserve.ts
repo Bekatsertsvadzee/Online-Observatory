@@ -1292,7 +1292,7 @@ export async function retryOnDeadlock<T>(attempt: () => Promise<T>): Promise<T> 
     try {
       return await attempt();
     } catch (error) {
-      if (tries >= DEADLOCK_ATTEMPTS || sqlState(error) !== "40P01") throw error;
+      if (tries >= DEADLOCK_ATTEMPTS || !isDeadlock(error)) throw error;
     }
   }
 }
@@ -1310,6 +1310,22 @@ export async function retryOnDeadlock<T>(attempt: () => Promise<T>): Promise<T> 
  * error here would answer "that slot has just been taken" to a customer whose slot
  * is free.
  */
+/**
+ * A deadlock victim, in either form the driver reports one. Prisma 7.10 maps 40P01 to
+ * its own P2034 ("write conflict or a deadlock") and no longer passes the SQLSTATE on;
+ * 7.9 passed 40P01 through. Without both, the dependency bump silently stopped every
+ * retry, which the race tests caught.
+ */
+function isDeadlock(error: unknown): boolean {
+  if (sqlState(error) === "40P01") return true;
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code: unknown }).code === "P2034"
+  );
+}
+
 export function isSlotConflict(error: unknown): boolean {
   const state = sqlState(error);
   if (state === "23P01" || state === "23505") return true;

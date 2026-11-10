@@ -18,6 +18,10 @@ const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
 
 const PATTERNS = [
   /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,
+  // Client addresses (SR-19): IPv4, full IPv6, and compressed IPv6 with a "::".
+  /\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b/g,
+  /\b(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}\b/gi,
+  /\b(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,5})?\b/gi,
   /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
   /\b[A-Fa-f0-9]{32,}\b/g,
   /[A-Za-z0-9+_-]{40,}={0,2}/g,

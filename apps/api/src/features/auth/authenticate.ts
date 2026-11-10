@@ -166,6 +166,11 @@ export async function register(
     return rateLimited();
   }
 
+  // Hashed before the address is looked up, and kept only for a new account: every
+  // branch below pays the same scrypt work, so the 202's timing does not say which
+  // addresses hold an account (security review 2026-11-07, SR-02).
+  const passwordHash = await hashPassword(request.password);
+
   const database = getDatabase();
   const existingUser = await database.user.findUnique({ where: { email } });
   if (existingUser?.emailVerifiedAt) return { ok: true };
@@ -182,7 +187,7 @@ export async function register(
         locale: request.locale,
         // ADR-049: the demo's word for the address, in place of the link's.
         emailVerifiedAt: verifyAtOnce ? new Date() : null,
-        account: { create: { passwordHash: await hashPassword(request.password) } },
+        account: { create: { passwordHash } },
       },
     }));
 

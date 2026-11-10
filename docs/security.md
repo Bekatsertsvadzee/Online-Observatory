@@ -131,13 +131,15 @@ A native client (the mobile application) holds a bearer session instead (ADR-061
 
 ## CSRF and request integrity
 
-Every authentication mutation compares the `Origin` header with the configured `APP_URL`. Missing, malformed, or cross-origin values fail closed. The exceptions are a bearer request and the native sign-in (ADR-061): a browser never attaches `Authorization` on its own, and the native sign-in sets no cookie and answers no CORS request, so neither is reachable by cross-site request forgery. Authenticated mutations additionally require the session-bound CSRF token. Next.js Proxy is an optimistic navigation gate only; it is never treated as the final authorization check.
+Every authentication mutation compares the `Origin` header with the configured `APP_URL`. Missing, malformed, or cross-origin values fail closed. The exceptions are a bearer request and the native sign-in (ADR-061): a browser never attaches `Authorization` on its own, and the native sign-in sets no cookie and answers no CORS request, so neither is reachable by cross-site request forgery. For a cookie request the Origin check is the CSRF control: `requireApiMutation` refuses a missing, malformed or foreign Origin before the session is read. The CSRF cookie is checked against the hash bound to its session on every cookie request, but no submitted token is compared against it, because a browser attaches that cookie to a cross-site request as readily as the session cookie (security review 2026-11-07, SR-14). Next.js Proxy is an optimistic navigation gate only; it is never treated as the final authorization check.
 
 Production must set `APP_URL` to the exact public HTTPS origin. If a reverse proxy is used, it must replace rather than append untrusted forwarding headers.
 
 ## Rate limiting
 
 Registration and sign-in use PostgreSQL-backed buckets keyed by an HMAC of the request actor and normalized email. Raw IP addresses and email addresses are not stored in rate-limit keys or audit actor fields. The default policy permits five attempts per 15-minute window and blocks further attempts for 15 minutes.
+
+The bucket is keyed by the request's address and the email together. With `TRUSTED_PROXY_HOPS=0` there is no trustworthy address, so every caller shares one bucket per email: five wrong passwords from anybody lock that customer out of web and native sign-in for fifteen minutes, as often as somebody repeats it, and registration has no per-client cap. That is the price of not trusting a forgeable header. Set `TRUSTED_PROXY_HOPS` wherever the proxy chain is known (security review 2026-11-07, SR-07).
 
 At the deployment edge, add a second IP/device-level limit before Next.js. The application limit protects the identity flow; it is not a substitute for upstream denial-of-service controls. Periodically delete expired sessions, consumed/expired verification tokens, old rate-limit buckets, and audit events according to the retention policy.
 
@@ -353,41 +355,25 @@ require an audited administrative path; public registration always creates `USER
 
 ## Dependency advisories
 
-Triaged 2026-09-14, from the P2 finding in `docs/audits/2026-09-13-review.md`, and again
-on 2026-10-08. Next.js went to 16.4.0 (#183) for its October advisories, and `fast-uri`,
-`source-map-js` and `brace-expansion` were lifted to fixed releases inside their parents'
-own ranges by a lockfile refresh, with no override. What remains is below: none is fixed
-by an upgrade the version policy allows, and none is reachable from a request.
+Triaged 2026-09-14 and 2026-10-08, and again by the security review of 2026-11-07, which
+moved `zod` to 4.6.7 (GHSA-mrhx-c7xc-m3w5, reachable: every JSON body is parsed by the
+generated Zod), Prisma to 7.10.1 (which fixed the `deepmerge-ts` and `mysql2` pins inside
+the major) and `fast-uri` to 3.1.9 by a lockfile refresh. `npm audit --omit=dev` then
+reports no high or critical advisory. What remains:
 
 | Package | Installed | Reached through | When it runs | Reachable from a request |
 | --- | --- | --- | --- | --- |
-| `js-yaml` | 4.2.0 | `@hey-api/openapi-ts` 0.99.0 → `@hey-api/json-schema-ref-parser` 1.4.4 | `contracts:generate` and `contracts:check`, parsing this repository's own `contracts/openapi.yaml` | No |
-| `deepmerge-ts` | 7.1.5 | `prisma` 7.9.1 → `@prisma/config` 7.9.1 | The Prisma CLI loading `packages/db/prisma.config.ts` | No |
-| `mysql2` | 3.15.3 | `prisma` 7.9.1 | Never: the datasource is PostgreSQL | No |
-| `braces` | 3.0.3 | `eslint-config-next` → `@next/eslint-plugin-next` → `fast-glob` 3.3.1 → `micromatch` 4.0.8 | ESLint, matching this repository's own globs. No fixed release exists | No |
-| `prisma`, `@prisma/config`, `@hey-api/openapi-ts`, `@hey-api/json-schema-ref-parser`, `@hey-api/shared` | — | the three above | as above | No |
+| `glob`, `minimatch` | 13.0.6 / 10.2.6 | `@sentry/nextjs` 11.7.0 → `@sentry/bundler-plugins` | `next build`, uploading source maps | No |
+| `js-yaml` | 4.2.0 | `@hey-api/openapi-ts` | `contracts:generate` and `contracts:check`, on this repository's own spec | No |
+| `vite`, `@vitest/mocker` | 8.2.2 / 4.1.11 | the test runner | tests | No |
+| `pillow` (agent) | 11.3.0 | the agent's JPEG encoder | encoding the agent's own frames; nothing is decoded from outside | No |
 
-**Why nothing is patched.**
+**Why these are not patched yet.** `@sentry/*` 11.11.0 fixes the first row but was two
+days old at the review; take it once it has been out a fortnight. Pillow's fixes are in
+13.x, a major upgrade the version policy keeps out of this phase.
 
-- `npm audit fix` proposes `prisma` 6.19.3 and `@hey-api/openapi-ts` 0.97.0. Both are
-  major downgrades, which the version policy forbids mid-phase.
-- The newest releases inside the pinned majors do not help. `prisma` 7.10.0 pins the same
-  `mysql2` 3.15.3 and, through `@prisma/config` 7.10.0, the same `deepmerge-ts` 7.1.5.
-  `@hey-api/openapi-ts` 0.99.0 is the latest release and pins `js-yaml` 4.2.0 exactly.
-- Every vulnerable version is an exact pin in its parent. An `overrides` entry would run
-  those tools on a dependency their authors did not release them with, and for
-  `deepmerge-ts` that is a major version. Not done.
-
-**Why the production audit still lists Prisma.** `prisma` is a devDependency of
-`packages/db`, and an *optional* peer of `@prisma/client`. Because the workspace install
-contains it, `npm ls --omit=dev` shows it under both services. A production install that
-omits `packages/db`'s dev dependencies would not contain it, which is to be confirmed when
-hosting is chosen. Migrations (`prisma migrate deploy`) then run from an install that has
-it, not from the service image.
-
-**When to look again:** any release of `prisma` 7.x or `@hey-api/openapi-ts` that changes
-these pins, any advisory against a package that runs while handling a request, and the
-hosting decision.
+**When to look again:** any advisory against a package that runs while handling a
+request, a Sentry release past 11.11.0, and the start of the next phase for Pillow.
 
 ## Verification checklist before first-party hardware operation
 
