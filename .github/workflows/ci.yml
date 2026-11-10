@@ -11,7 +11,9 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # ubuntu-26.04 ships a newer pg_restore that writes `SET transaction_timeout`,
+    # which the PostgreSQL 16 service rejects; 24.04 carries the 16 client.
+    runs-on: ubuntu-24.04
 
     # DV-055 proves that a partial unique index, not application logic, is what
     # stops two people booking the same half hour. That claim can only be tested
