@@ -122,7 +122,13 @@ export async function confirmPasswordReset(
     });
     if (consumed.count !== 1) return null;
 
-    await tx.account.update({ where: { userId: reset.userId }, data: { passwordHash } });
+    // A customer who arrived through Google has no Account row yet (ADR-048): the
+    // reset link is how they set a first password, which deletion then asks for.
+    await tx.account.upsert({
+      where: { userId: reset.userId },
+      update: { passwordHash },
+      create: { userId: reset.userId, passwordHash },
+    });
     await tx.session.deleteMany({ where: { userId: reset.userId } });
     // ADR-042: whoever takes the account back should not find it moving to an address
     // somebody else chose.

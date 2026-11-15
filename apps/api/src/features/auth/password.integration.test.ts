@@ -217,6 +217,22 @@ describe("confirming a reset", () => {
     });
   });
 
+  it("gives a customer who arrived through Google a first password (ADR-048)", async () => {
+    const email = newAddress();
+    const user = await database.user.create({
+      data: { name: "Observer", email, locale: "en", googleSubject: randomUUID(), emailVerifiedAt: new Date() },
+    });
+    const token = await resetToken(email);
+    cookieJar.clear();
+
+    await expect(confirmPasswordReset({ token, password: NEW_PASSWORD })).resolves.toMatchObject({
+      ok: true,
+      user: { id: user.id },
+    });
+    cookieJar.clear();
+    await expect(signIn({ email, password: NEW_PASSWORD })).resolves.toMatchObject({ ok: true });
+  });
+
   it("refuses a token the second time with 404", async () => {
     const { email } = await verifiedAccount();
     const token = await resetToken(email);
