@@ -7,13 +7,21 @@ loop, and the guards a hand controller without alignment does not keep for us.
 
 from __future__ import annotations
 
+import json
+import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from darkview_agent.clock import ManualClock
 from darkview_agent.devices.base import DeviceError, NotConnectedError
-from darkview_agent.devices.nexstar import PointingModel, SyncPoint, load_model_file
+from darkview_agent.devices.nexstar import (
+    SOLVE_POINTS_KEPT,
+    STALE_MODEL_DEGREES,
+    PointingModel,
+    SyncPoint,
+    load_model_file,
+)
 from darkview_agent.safety.coordinates import (
     equatorial_to_horizontal,
     horizontal_to_equatorial,
@@ -229,3 +237,84 @@ def test_an_uncalibrated_focuser_is_refused(port):
 def test_the_focuser_will_not_move_while_disconnected(port):
     with pytest.raises(NotConnectedError):
         nexstar_focuser(port).move_to(100)
+
+
+# ---------------------------------------------------------------------------
+# What the operator's panel learned since ADR-076: solves teach the model, a stale
+# model is rebuilt, and the measured motor directions are kept.
+# ---------------------------------------------------------------------------
+
+START = datetime(2026, 11, 1, 20, 0, tzinfo=UTC)
+
+
+def _parked_at(port, model_path, clock, azimuth, altitude):
+    """A connected mount, not moving, with its axes at (azimuth, altitude)."""
+    port.axes = {16: azimuth, 17: altitude}
+    mount = nexstar_mount(
+        port, model_path, now=lambda: START + timedelta(seconds=clock.monotonic())
+    )
+    mount.connect()
+    return mount
+
+
+def _sky(clock, altitude, azimuth):
+    return horizontal_to_equatorial(
+        altitude, azimuth, START + timedelta(seconds=clock.monotonic()), SITE
+    )
+
+
+def test_a_solve_becomes_a_sync_point_and_is_written_back_with_the_panels_keys(
+    tmp_path, port, clock
+):
+    path = write_model(tmp_path / "observatory.json", lat=41.7, custom=[{"name": "X"}])
+    mount = _parked_at(port, path, clock, 100.0, 40.0)
+    # The identity model believes (40, 100); the sky says the tube is a degree further
+    # round in azimuth.
+    miss = mount.fold_solve(*_sky(clock, 40.0, 101.0))
+    assert miss == pytest.approx(math.cos(math.radians(40.0)), abs=0.01)
+
+    saved = json.loads(path.read_text())
+    assert saved["lat"] == 41.7 and saved["custom"] == [{"name": "X"}]
+    assert [p["name"] for p in saved["points"]][0] == "Vega"
+    assert saved["points"][-1]["name"].startswith("solve")
+    assert saved["points"][-1]["az"] == pytest.approx(101.0, abs=1e-6)
+
+    reloaded = load_model_file(path)
+    assert len(reloaded.model.points) == 2
+    # The next session's model already puts the tube closer to where the sky has it.
+    altitude, azimuth = reloaded.model.mount_to_sky(100.0, 40.0)
+    assert azimuth == pytest.approx(100.5, abs=0.01)
+
+
+def test_only_the_newest_solves_are_kept_beside_every_manual_sync(tmp_path, port, clock):
+    path = write_model(tmp_path / "observatory.json")
+    mount = _parked_at(port, path, clock, 100.0, 40.0)
+    for _ in range(7):
+        clock.advance(30.0)
+        mount.fold_solve(*_sky(clock, 40.0, 100.2))
+    names = [p["name"] for p in json.loads(path.read_text())["points"]]
+    assert names[0] == "Vega"
+    assert len(names) == 1 + SOLVE_POINTS_KEPT
+    assert sum(name.startswith("solve") for name in names) == SOLVE_POINTS_KEPT
+
+
+def test_a_solve_far_from_the_model_rebuilds_it_from_that_solve(tmp_path, port, clock):
+    path = write_model(tmp_path / "observatory.json")
+    mount = _parked_at(port, path, clock, 100.0, 40.0)
+    miss = mount.fold_solve(*_sky(clock, 40.0, 120.0))
+    assert miss > STALE_MODEL_DEGREES
+    names = [p["name"] for p in json.loads(path.read_text())["points"]]
+    assert len(names) == 1 and names[0].startswith("solve")
+    assert mount.status().azimuth_degrees == pytest.approx(120.0, abs=0.01)
+
+
+def test_the_panels_measured_motor_directions_drive_the_axes(tmp_path, port, clock):
+    port.rate_sign[16] = -1  # this azimuth motor turns the other way to a positive rate
+    path = write_model(tmp_path / "observatory.json", motor={"az": -1, "alt": 1})
+    mount = nexstar_mount(port, path)
+    mount.connect()
+    mount.slew_to(40.0, 100.0)
+    clock.advance(60.0)
+    status = mount.status()
+    assert status.slewing is False
+    assert status.azimuth_degrees == pytest.approx(100.0, abs=0.05)

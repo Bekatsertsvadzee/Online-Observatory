@@ -98,6 +98,15 @@ RUNAWAY_TICKS = 12
 #: A moving mount whose loop has not run for this long is a fault.
 STALLED_SECONDS = 2.0
 
+#: A plate solve becomes a sync point (the panel's `add_solve`): every manual sync is
+#: kept, and the newest solves up to this many, so the model follows the night without
+#: one bad field outweighing the rest.
+SOLVE_POINTS_KEPT = 5
+
+#: A first solve this far from where the model says the tube points means the model
+#: is from another night or the tripod moved: it is rebuilt from that solve alone.
+STALE_MODEL_DEGREES = 5.0
+
 #: Park when the model file names no park position: tube near level, at the
 #: current azimuth -- the panel's default.
 PARK_SKY_ALTITUDE_DEGREES = 2.0
@@ -185,6 +194,11 @@ class SyncPoint:
     mount_altitude: float
     azimuth: float
     altitude: float
+    name: str = ""
+
+    @property
+    def solved(self) -> bool:
+        return self.name.startswith("solve")
 
 
 class PointingModel:
@@ -248,6 +262,8 @@ class ModelFile:
     model: PointingModel
     park: tuple[float, float] | None
     """Mount axes (azimuth, altitude), or None for the default."""
+    motor: dict[str, int]
+    """Which way a positive rate turns each axis, as the panel measured it; +1 unmeasured."""
 
 
 def load_model_file(path: Path) -> ModelFile:
@@ -255,13 +271,18 @@ def load_model_file(path: Path) -> ModelFile:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         points = [
-            SyncPoint(float(p["maz"]), float(p["malt"]), float(p["az"]), float(p["alt"]))
+            SyncPoint(
+                float(p["maz"]),
+                float(p["malt"]),
+                float(p["az"]),
+                float(p["alt"]),
+                str(p.get("name", "")),
+            )
             for p in raw.get("points", [])
             if "maz" in p
         ]
-        sign = raw.get("sign")
-        if sign is not None:
-            sign = {"az": 1 if sign["az"] >= 0 else -1, "alt": 1 if sign["alt"] >= 0 else -1}
+        sign = _unit_signs(raw.get("sign"))
+        motor = _unit_signs(raw.get("motor")) or {"az": 1, "alt": 1}
         park = raw.get("park")
         park = (float(park[0]), float(park[1])) if park else None
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
@@ -271,7 +292,41 @@ def load_model_file(path: Path) -> ModelFile:
             f"the pointing model {path} has no sync points. Centre a star in the panel and "
             "Sync at least once; the agent cannot point an unaligned mount."
         )
-    return ModelFile(PointingModel(points, sign), park)
+    return ModelFile(PointingModel(points, sign), park, motor)
+
+
+def _unit_signs(raw: object) -> dict[str, int] | None:
+    if raw is None:
+        return None
+    return {axis: 1 if raw[axis] >= 0 else -1 for axis in ("az", "alt")}  # type: ignore[index]
+
+
+def save_model_points(path: Path, model: PointingModel) -> None:
+    """Write the model's points and signs back into the panel's file, every other key kept.
+
+    The file is the panel's as much as the agent's (ADR-076): an alignment the agent
+    learns from a solve is the panel's next night too. Replaced atomically, so the
+    panel never reads half a file.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raw = {}
+    raw["points"] = [
+        {
+            "name": p.name or "sync",
+            "maz": p.mount_azimuth,
+            "malt": p.mount_altitude,
+            "az": p.azimuth,
+            "alt": p.altitude,
+            "t": time.time(),
+        }
+        for p in model.points
+    ]
+    raw["sign"] = dict(model.sign)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(raw, indent=1), encoding="utf-8")
+    temporary.replace(path)
 
 
 class Motion(StrEnum):
@@ -308,6 +363,7 @@ class NexStarMount(MountDriver):
         self._connected = False
         self._model: PointingModel | None = None
         self._park: tuple[float, float] | None = None
+        self._motor: dict[str, int] = {"az": 1, "alt": 1}
         self._motion = Motion.IDLE
         self._tracking = False
         self._aim: tuple[float, float] | None = None
@@ -344,6 +400,7 @@ class NexStarMount(MountDriver):
         return self._last_axes
 
     def _rate(self, axis: int, degrees_per_second: float) -> None:
+        degrees_per_second *= self._motor["az" if axis == AZIMUTH_AXIS else "alt"]
         value = min(int(abs(degrees_per_second) * 3600 * 4), 65535)
         direction = 6 if degrees_per_second >= 0 else 7
         self._link.command(bytes([80, 3, axis, direction, value >> 8, value & 255, 0, 0]))
@@ -374,7 +431,7 @@ class NexStarMount(MountDriver):
             except DeviceError:
                 self._link.close()
                 raise
-            self._model, self._park = model.model, model.park
+            self._model, self._park, self._motor = model.model, model.park, model.motor
             self._connected = True
             self._fault = None
             self._last_tick = self._clock.monotonic()
@@ -445,6 +502,59 @@ class NexStarMount(MountDriver):
             self._require_connection()
             self._aim = (float(altitude_degrees), float(azimuth_degrees) % 360.0)
             self._begin(Motion.SLEWING)
+
+    def fold_solve(self, right_ascension_hours: float, declination_degrees: float) -> float:
+        """Make a plate solve of where the tube points now a sync point. Returns the miss.
+
+        The panel's `add_solve`: the solve and the axes it was taken at become one more
+        point, the model is refitted, and the file is written back so the panel and the
+        next session start from it. The mount is tracking while the runner solves, so the
+        solved direction is still under the axes when this is called. The miss -- how far
+        the old model put the tube from where the sky says it is -- is returned in
+        degrees. A miss past STALE_MODEL_DEGREES means the old points describe another
+        night or a moved tripod: they are dropped and the model is rebuilt from this solve.
+        """
+        with self._lock:
+            self._require_connection()
+            mount_azimuth, mount_altitude = self._read_axes()
+            here = equatorial_to_horizontal(
+                right_ascension_hours, declination_degrees, self._now(), self._site
+            )
+            believed_altitude, believed_azimuth = self._model.mount_to_sky(
+                mount_azimuth, mount_altitude
+            )
+            miss = _separation(
+                believed_altitude, believed_azimuth, here.altitude_degrees, here.azimuth_degrees
+            )
+            point = SyncPoint(
+                mount_azimuth,
+                mount_altitude,
+                here.azimuth_degrees,
+                here.altitude_degrees,
+                f"solve {self._now().strftime('%H:%M:%S')}",
+            )
+            points = self._model.points
+            if miss > STALE_MODEL_DEGREES:
+                logger.warning(
+                    "pointing model was %.1f deg off: rebuilt from this solve alone", miss
+                )
+                kept: list[SyncPoint] = []
+            else:
+                manual = [p for p in points if not p.solved]
+                kept = manual + [p for p in points if p.solved][-(SOLVE_POINTS_KEPT - 1) :]
+            self._model = PointingModel([*kept, point], self._model.sign)
+            try:
+                save_model_points(self._model_path, self._model)
+            except OSError as error:
+                logger.error("could not write the pointing model back: %s", error)
+            logger.info(
+                "solve folded into the pointing model: %.2f deg miss, %d point(s), "
+                "residual %.3f deg",
+                miss,
+                len(self._model.points),
+                self._model.residual_degrees,
+            )
+            return miss
 
     def abort_slew(self) -> None:
         with self._lock:
@@ -621,6 +731,12 @@ class NexStarMount(MountDriver):
             self._start_tracking(*self._aim)
         else:
             self._motion = Motion.IDLE
+
+
+def _separation(alt1: float, az1: float, alt2: float, az2: float) -> float:
+    a1, e1, a2, e2 = map(math.radians, (az1, alt1, az2, alt2))
+    cosine = math.sin(e1) * math.sin(e2) + math.cos(e1) * math.cos(e2) * math.cos(a1 - a2)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
 
 
 def _clamp(degrees_per_second: float) -> float:

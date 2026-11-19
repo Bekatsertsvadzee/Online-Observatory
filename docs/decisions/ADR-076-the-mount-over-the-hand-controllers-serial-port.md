@@ -58,3 +58,37 @@ Celestron focus motor at AUX device 0x12.
   work.
 - `docs/ENGINEERING.md` "Mount control" names Alpaca as the mount path. If this record is
   approved, that section gains this second implementation.
+
+## Amendment — 2026-11-19: the panel's pointing since this record
+
+The operator's panel kept learning after this record was written. The maintainer asked for
+the agent to find and hold objects the way the panel now does, so customers get the same
+smooth pointing. The agent takes four of the panel's rules:
+
+1. **A plate solve is a sync point.** `NexStarMount.fold_solve(ra, dec)` reads the axes,
+   turns the solved direction into altitude and azimuth, and adds the pair to the model:
+   every manual sync is kept, and the five newest solves (the panel's `add_solve`). The
+   file is written back, every other key kept and the write atomic, so the panel and the
+   next session start from what this one learned. `DARKVIEW_AGENT_NEXSTAR_MODEL_PATH`
+   pointed at the panel's own `observatory.json` makes it one alignment for both.
+2. **A model that is far off is rebuilt.** A solve more than 5 degrees from where the model
+   puts the tube means another night or a moved tripod: the old points are dropped and the
+   model is rebuilt from that solve alone.
+3. **After a solve the mount is aimed at the target itself.** The runner offers each
+   deep-sky solve to a driver that has `fold_solve`; once taken, CENTERING slews to the
+   target through the improved model instead of "as far the other way as it missed". The
+   simulator and Alpaca mounts, which keep no model of their own, are corrected as before.
+4. **Centring that will not get closer is observed, not failed.** After the last centring
+   pass a target still within one field height is observed where it is and the watch
+   reports OFF_CENTRE (the panel: "could not get closer; tracking anyway"). A target
+   further out than that still ends the mission, so a lost mount never shows a customer
+   the wrong sky. `MAX_CENTERING_ITERATIONS` stays three.
+
+Also from the panel: the motor directions it measured (`motor` in the file) multiply every
+rate command, and ASTAP runs with up to 500 stars, quad tolerance 0.012 and a downsampling
+ladder (`-z 2`, then `-z 0`) inside the existing timeout.
+
+Not taken, and why: the panel's camera-guided planet lock and its learned drift
+(`trim_v`) steer the motors from the live picture, which needs the camera's rotation
+against the axes (DV-035) and the runner's disc centring (ADR-080) already covers the
+customer's view. Nothing here is hardware evidence; DV-034 still measures the figures.
