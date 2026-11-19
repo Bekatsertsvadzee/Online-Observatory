@@ -224,6 +224,8 @@ class _Progress:
     solve_attempts: int = 0
     #: The solve CENTERING corrects from.
     solved: SolveResult | None = None
+    #: The mount took the latest solve into its own pointing model (`fold_solve`).
+    folded: bool = False
     #: A FOCUS in progress. OBSERVING holds while it runs.
     focus: Autofocus | FocusMove | None = None
     frames_captured: int = 0
@@ -662,6 +664,21 @@ class MissionRunner:
             self._enter_observing(at_time)
             return
 
+        if (
+            progress.centering_iterations >= MAX_CENTERING_ITERATIONS
+            and offset <= self._near_enough_to_observe(frame)
+        ):
+            # The panel's rule: a target that will not come closer after the last
+            # pass is observed where it is, not given up on. The customer keeps the
+            # session; the watch reports OFF_CENTRE.
+            logger.warning(
+                "target %.3f deg from centre after %d corrections: observing anyway",
+                offset,
+                progress.centering_iterations,
+            )
+            self._enter_observing(at_time, gave_up=ImageHealthReason.off_centre)
+            return
+
         if progress.acquired:
             # A retargeted object that cannot be centred is not a failed session
             # (ADR-080 §3). Decided here, because CENTERING may only lead back to
@@ -749,6 +766,7 @@ class MissionRunner:
         progress.solved = solved
         if solved is None:
             return None
+        self._learn_pointing(solved)
         request = progress.request
         return separation_degrees(
             solved.right_ascension_hours,
@@ -756,6 +774,25 @@ class MissionRunner:
             request.right_ascension_hours,
             request.declination_degrees,
         )
+
+    def _learn_pointing(self, solved: SolveResult) -> None:
+        """Teach a mount that keeps its own pointing model where it really points.
+
+        The operator's panel folds every plate solve into its alignment (ADR-076's
+        model), so each object found makes the next GoTo land closer. A mount driver
+        that can do the same offers `fold_solve`; the simulator and an Alpaca mount,
+        which align themselves, do not, and keep the offset correction below.
+        """
+        fold = getattr(self._devices.mount, "fold_solve", None)
+        if fold is None:
+            return
+        try:
+            miss = fold(solved.right_ascension_hours, solved.declination_degrees)
+        except DeviceError as error:
+            logger.warning("could not fold the solve into the pointing model: %s", error)
+            return
+        self._require_progress().folded = True
+        logger.info("pointing model learned from the solve: the tube was %.2f deg off", miss)
 
     def _centred_tolerance(self, frame: Frame) -> float:
         if self._disc_profile():
@@ -765,6 +802,12 @@ class MissionRunner:
                 * self._degrees_per_pixel(frame)
             )
         return CENTERING_TOLERANCE_DEGREES
+
+    def _near_enough_to_observe(self, frame: Frame) -> float:
+        """Off centre, but still in or beside the picture: one field height."""
+        if self._disc_profile():
+            return min(frame.height_px, frame.width_px) * self._degrees_per_pixel(frame)
+        return field_height_degrees(self._require_progress().request.optical_config)
 
     def _off_centre_limit(self, frame: Frame) -> float:
         if self._disc_profile():
@@ -803,16 +846,22 @@ class MissionRunner:
             azimuth = (status.azimuth_degrees + found.dx_px * scale / cos_alt) % 360.0
             aim = progress.aim
         else:
-            # The mount landed `solved` when sent to `aim`. Sending it to `aim`
-            # again lands it in the same wrong place; sending it as far the other
-            # way as it missed by lands it on the target.
             solved = progress.solved
             assert solved is not None
-            aim_ra, aim_dec = progress.aim
-            corrected_ra = (
-                aim_ra + request.right_ascension_hours - solved.right_ascension_hours
-            ) % 24.0
-            corrected_dec = aim_dec + request.declination_degrees - solved.declination_degrees
+            if progress.folded:
+                # The mount's model now holds this solve: the target itself is where
+                # to aim, as the panel re-aims after a solve.
+                corrected_ra = request.right_ascension_hours
+                corrected_dec = request.declination_degrees
+            else:
+                # The mount landed `solved` when sent to `aim`. Sending it to `aim`
+                # again lands it in the same wrong place; sending it as far the other
+                # way as it missed by lands it on the target.
+                aim_ra, aim_dec = progress.aim
+                corrected_ra = (
+                    aim_ra + request.right_ascension_hours - solved.right_ascension_hours
+                ) % 24.0
+                corrected_dec = aim_dec + request.declination_degrees - solved.declination_degrees
             if not -90.0 <= corrected_dec <= 90.0:
                 return (
                     f"a correction to declination {corrected_dec:.2f} is past the pole; "

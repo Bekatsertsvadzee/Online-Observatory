@@ -43,6 +43,11 @@ cards = {header[i:i + 8].strip(): header[i + 10:i + 80].strip() for i in range(0
 assert cards["SIMPLE"] == "T" and cards["BITPIX"] == "16", cards
 
 time.sleep(behaviour.get("sleep", 0))
+calls = image.with_name("calls.txt")
+before = calls.read_text() if calls.exists() else ""
+calls.write_text(before + options["-z"] + "\n")
+if behaviour.get("only_z") not in (None, options["-z"]):
+    sys.exit(1)
 if behaviour.get("ini") is not None:
     image.with_suffix(".ini").write_text(behaviour["ini"])
 sys.exit(behaviour.get("exit", 0))
@@ -263,3 +268,21 @@ def test_the_frame_is_not_left_on_disk(astap):
 def test_a_field_height_that_is_not_positive_is_refused(tmp_path):
     with pytest.raises(ValueError):
         AstapSolver(tmp_path / "astap", field_height_degrees=0.0)
+
+
+def test_the_panels_settings_are_passed(astap):
+    executable, configure, arguments = astap
+    configure(ini=SOLVED_INI, exit=0)
+    AstapSolver(executable, field_height_degrees=0.24).solve(_frame())
+    options = dict(zip(arguments()[0::2], arguments()[1::2], strict=True))
+    assert options["-z"] == "2" and options["-s"] == "500" and options["-t"] == "0.012"
+
+
+def test_a_field_the_first_setting_misses_is_tried_at_the_next(astap):
+    executable, configure, arguments = astap
+    configure(ini=SOLVED_INI, exit=0, only_z="0")
+    result = AstapSolver(executable, field_height_degrees=0.24).solve(_frame())
+    assert result is not None
+    assert result.declination_degrees == pytest.approx(-5.3911)
+    options = dict(zip(arguments()[0::2], arguments()[1::2], strict=True))
+    assert options["-z"] == "0"

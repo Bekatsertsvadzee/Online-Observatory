@@ -27,6 +27,7 @@ import logging
 import math
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +44,14 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 #: How far from the hint ASTAP searches. A mount whose GOTO is off by more than
 #: this has a pointing problem a plate solve should not paper over.
 DEFAULT_SEARCH_RADIUS_DEGREES = 5.0
+
+#: The operator's panel's settings, tried against real survey fields at this
+#: telescope's scale: up to 500 stars and a wider quad tolerance, and a ladder of
+#: downsampling factors, because one fixed setting missed fields another solved in
+#: under a second. Each rung runs only while the time budget lasts.
+MAX_STARS = "500"
+QUAD_TOLERANCE = "0.012"
+DOWNSAMPLE_LADDER = ("2", "0")
 
 FITS_BLOCK = 2880
 FITS_CARD = 80
@@ -135,13 +144,19 @@ class AstapSolver(PlateSolver):
         """Where the mount was sent. ASTAP searches around it instead of the whole sky."""
         self._hint = (ra_hours, dec_degrees)
 
-    def command(self, image: Path) -> list[str]:
+    def command(self, image: Path, downsample: str = DOWNSAMPLE_LADDER[0]) -> list[str]:
         arguments = [
             str(self._executable),
             "-f",
             str(image),
             "-fov",
             f"{self._field_height:.4f}",
+            "-z",
+            downsample,
+            "-s",
+            MAX_STARS,
+            "-t",
+            QUAD_TOLERANCE,
         ]
         if self._database_dir is not None:
             # ASTAP's `-d`: the star database's folder, when it is not ASTAP's own.
@@ -170,26 +185,37 @@ class AstapSolver(PlateSolver):
         with tempfile.TemporaryDirectory(prefix="darkview-solve-") as directory:
             image = Path(directory) / "frame.fits"
             image.write_bytes(fits_bytes(frame))
-            try:
-                completed = subprocess.run(
-                    self.command(image),
-                    capture_output=True,
-                    timeout=self._timeout,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired:
-                logger.warning("ASTAP did not finish within %.0fs", self._timeout)
-                return None
-            except OSError as error:
-                logger.error("ASTAP could not be started: %s", error)
-                return None
-
             ini = image.with_suffix(".ini")
-            if completed.returncode != 0 or not ini.is_file():
+            deadline = time.monotonic() + self._timeout
+            for downsample in DOWNSAMPLE_LADDER:
+                left = deadline - time.monotonic()
+                if left < 1.0:
+                    break
+                ini.unlink(missing_ok=True)
+                try:
+                    completed = subprocess.run(
+                        self.command(image, downsample),
+                        capture_output=True,
+                        timeout=left,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    logger.warning("ASTAP did not finish within %.0fs", self._timeout)
+                    return None
+                except OSError as error:
+                    logger.error("ASTAP could not be started: %s", error)
+                    return None
+
+                if completed.returncode == 0 and ini.is_file():
+                    return read_solution(ini)
+                said = completed.stdout.decode("utf-8", errors="replace").strip()[-200:]
                 logger.warning(
-                    "ASTAP did not solve the frame (exit %s): %s",
+                    "ASTAP did not solve the frame at -z %s (exit %s): %s",
+                    downsample,
                     completed.returncode,
-                    completed.stdout.decode("utf-8", errors="replace").strip()[-200:],
+                    said,
                 )
-                return None
-            return read_solution(ini)
+                if "nough stars" in said:
+                    # Too few stars in the picture: another downsampling cannot help.
+                    return None
+            return None

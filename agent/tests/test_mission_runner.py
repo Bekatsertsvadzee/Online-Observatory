@@ -914,3 +914,54 @@ def test_a_park_still_happens_when_stopping_the_camera_fails():
 
     assert runner.mount_parked is True
     assert "park" in recording.calls
+
+
+# --------------------------------------------------------------------------
+# The operator's panel's rules (ADR-076 amendment, 2026-11-19)
+# --------------------------------------------------------------------------
+
+
+class LearningMount(SimMount):
+    """A mount that keeps its own pointing model, like the NexStar driver."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.folds: list[tuple[float, float]] = []
+
+    def fold_solve(self, right_ascension_hours: float, declination_degrees: float) -> float:
+        self.folds.append((right_ascension_hours, declination_degrees))
+        return 0.5
+
+
+def test_a_target_a_little_off_after_the_last_pass_is_observed_not_given_up():
+    """The panel tracks anyway once centring stops getting closer."""
+    clock = ManualClock()
+    # Every correction is met by as much new error: it hovers 0.1 degrees out.
+    solver = SimSolver(initial_error_degrees=0.1, error_drift_degrees=0.1)
+    runner = build_runner(clock, solver=solver)
+
+    runner.offer(request(requested_frames=1), NIGHT)
+    run_to_completion(runner, clock)
+
+    assert runner.state is MissionState.complete
+    assert runner.centering_iterations == MAX_CENTERING_ITERATIONS
+
+
+def test_a_mount_with_its_own_model_learns_each_solve_and_is_aimed_at_the_target():
+    clock = ManualClock()
+    mount = LearningMount(clock=clock)
+    devices = Devices(
+        mount=mount,
+        camera=SimCamera(clock=clock, mount=mount, width_px=64, height_px=64),
+        focuser=SimFocuser(clock=clock),
+    )
+    solver = SimSolver(initial_error_degrees=0.5)
+    runner = build_runner(clock, solver=solver, devices=devices)
+
+    runner.offer(request(requested_frames=1), NIGHT)
+    run_to_completion(runner, clock)
+
+    assert mount.folds
+    assert mount.folds[0] == pytest.approx((TARGET_RA_HOURS, TARGET_DEC_DEGREES + 0.5), abs=1e-6)
+    # Aimed at the target itself, not as far the other way as it missed.
+    assert solver.commanded == pytest.approx((TARGET_RA_HOURS, TARGET_DEC_DEGREES))
