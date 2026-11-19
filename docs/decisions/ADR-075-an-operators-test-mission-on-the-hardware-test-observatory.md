@@ -4,6 +4,7 @@
 - **Status:** APPROVED (maintainer's request of 2026-10-27, "continue with the next task";
   ADR-074 names this as the next piece of work)
 - **Decided by:** project maintainer
+- **Amended by:** ADR-082 (2026-11-19): any first-party observatory, target optional
 - **Relates to:** ADR-074 (the hardware test observatory), ADR-004 (a booked mission is born
   SCHEDULED), ADR-015 (what is bookable), clients ADR-072 (quarter-hour lengths), DV-036
 

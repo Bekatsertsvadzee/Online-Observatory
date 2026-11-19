@@ -943,7 +943,7 @@ class ScheduleTestMissionRequest(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    target_id: UUID = Field(..., alias='targetId')
+    target_id: UUID | None = Field(None, alias='targetId', description='Left out, the brightest target the observatory may point at now (ADR-082).')
     duration_minutes: int = Field(..., alias='durationMinutes', description="Quarter hours, as a customer's session (clients ADR-072).", ge=15, le=240, multiple_of=15)
 
 

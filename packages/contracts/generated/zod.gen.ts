@@ -791,7 +791,7 @@ export const zBookableTelescope = z.strictObject({
 });
 
 export const zScheduleTestMissionRequest = z.strictObject({
-    targetId: z.uuid(),
+    targetId: z.uuid().optional(),
     durationMinutes: z.int().gte(15).lte(240)
 });
 
