@@ -24,8 +24,8 @@ const { startMissionSession } = await import("@/features/missions/session");
 const { zTestMission } = await import("@darkview/contracts/zod");
 
 /**
- * ADR-075 against a real PostgreSQL instance: an operator's own mission on the
- * hardware test observatory, which no customer can book.
+ * ADR-075 and ADR-082 against a real PostgreSQL instance: an operator's own free
+ * session on the hardware test observatory or a first-party one.
  */
 const CONNECTION_STRING =
   process.env.DATABASE_TEST_URL ??
@@ -37,6 +37,18 @@ const NOW = new Date("2026-07-15T20:00:42.500Z");
 let database: PrismaClient;
 let operatorId: string;
 let targetId: string;
+
+async function firstParty(row: { id: string }) {
+  await database.observatoryNetworkNode.create({
+    data: {
+      ownerId: operatorId,
+      observatoryId: row.id,
+      kind: "FIRST_PARTY",
+      approvalStatus: "APPROVED",
+    },
+  });
+  return row;
+}
 
 async function observatory(slug: string, compatible = true) {
   const row = await database.observatory.create({
@@ -165,28 +177,138 @@ describe("an operator's test mission (ADR-075)", () => {
     expect(audit.map((row) => row.action)).toEqual(["MISSION_SCHEDULED"]);
   });
 
-  it("refuses an observatory that is not the hardware test one", async () => {
-    const test = await observatory("hardware-test");
-    const other = await observatory("demo");
-    environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = test.id;
-
-    await expect(schedule(other.id)).resolves.toMatchObject({ ok: false, status: 403 });
-    expect(await database.booking.count()).toBe(0);
-  });
-
-  it("refuses the hardware test observatory once a customer could book it", async () => {
-    const test = await observatory("hardware-test");
+  it("refuses an observatory Stellar does not run", async () => {
+    const partner = await observatory("partner");
     await database.observatoryNetworkNode.create({
       data: {
         ownerId: operatorId,
-        observatoryId: test.id,
-        kind: "FIRST_PARTY",
+        observatoryId: partner.id,
+        kind: "PARTNER",
         approvalStatus: "APPROVED",
       },
     });
-    environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = test.id;
+    const unlisted = await observatory("unlisted");
 
-    await expect(schedule(test.id)).resolves.toMatchObject({ ok: false, status: 403 });
+    await expect(schedule(partner.id)).resolves.toMatchObject({ ok: false, status: 403 });
+    await expect(schedule(unlisted.id)).resolves.toMatchObject({
+      ok: false,
+      status: 403,
+    });
+    expect(await database.booking.count()).toBe(0);
+  });
+
+  it("gives an operator free time on a first-party observatory customers book", async () => {
+    const demo = await firstParty(await observatory("demo"));
+
+    const result = await schedule(demo.id, 60);
+    if (!result.ok) throw new Error(result.message);
+    const booking = await database.booking.findUniqueOrThrow({
+      where: { id: result.testMission.bookingId },
+    });
+    expect(booking).toMatchObject({
+      userId: operatorId,
+      priceMinor: 0,
+      status: "CONFIRMED",
+    });
+  });
+
+  it("never takes a customer's booked time", async () => {
+    const demo = await firstParty(await observatory("demo"));
+    const customer = await database.user.create({
+      data: {
+        email: `${randomUUID()}@example.test`,
+        name: "Customer",
+        emailVerifiedAt: NOW,
+      },
+    });
+    const telescope = await database.telescope.findFirstOrThrow({
+      where: { observatoryId: demo.id },
+    });
+    await database.booking.create({
+      data: {
+        userId: customer.id,
+        targetId,
+        observatoryId: demo.id,
+        telescopeId: telescope.id,
+        slotStartAt: new Date("2026-07-15T20:15:00.000Z"),
+        durationMinutes: 30,
+        status: "CONFIRMED",
+        priceMinor: 2000,
+      },
+    });
+
+    await expect(schedule(demo.id, 30)).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      code: "SLOT_UNAVAILABLE",
+    });
+    expect(await database.booking.count()).toBe(1);
+  });
+
+  it("chooses the brightest target that is up when none is named", async () => {
+    const demo = await firstParty(await observatory("demo"));
+    // Tbilisi at 20:00 UTC on 15 July: M13 is high, brighter Canopus never rises.
+    const low = await database.target.create({
+      data: {
+        slug: `canopus-${randomUUID()}`,
+        nameEn: "Canopus",
+        nameKa: "Canopus",
+        type: "DOUBLE_STAR",
+        positionSource: "FIXED",
+        rightAscensionHours: 6.3992,
+        declinationDegrees: -52.6957,
+        angularSizeArcmin: 1,
+        magnitude: -0.7,
+        opticalConfig: "F10_NATIVE",
+        imagingProfile: "GLOBULAR_CLUSTER",
+        minAltitudeDegrees: 25,
+        expectedMissionMinutes: 30,
+      },
+    });
+    await database.targetObservatory.create({
+      data: { targetId: low.id, observatoryId: demo.id },
+    });
+
+    const result = await scheduleTestMission({
+      observatoryId: demo.id,
+      actorUserId: operatorId,
+      request: { durationMinutes: 30 },
+      now: NOW,
+    });
+    if (!result.ok) throw new Error(result.message);
+    expect(result.testMission.targetId).toBe(targetId);
+  });
+
+  it("answers 409 when nothing the observatory can observe is up", async () => {
+    const demo = await firstParty(await observatory("demo"));
+    // 07:00 in Tbilisi: M13 has set.
+    const morning = new Date("2026-07-15T03:00:00.000Z");
+
+    await expect(
+      scheduleTestMission({
+        observatoryId: demo.id,
+        actorUserId: operatorId,
+        request: { durationMinutes: 30 },
+        now: morning,
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 409, code: "SAFETY_REFUSED" });
+    expect(await database.booking.count()).toBe(0);
+  });
+
+  it("hands back the operator's own session that is already live", async () => {
+    const demo = await firstParty(await observatory("demo"));
+
+    const first = await schedule(demo.id, 60);
+    if (!first.ok) throw new Error(first.message);
+    await database.mission.update({
+      where: { id: first.testMission.missionId },
+      data: { state: "OBSERVING" },
+    });
+    const later = new Date(NOW.getTime() + 20 * 60_000);
+
+    await expect(schedule(demo.id, 30, later)).resolves.toEqual(first);
+    expect(await database.booking.count()).toBe(1);
+    expect(await database.mission.count()).toBe(1);
   });
 
   it("refuses a target the observatory cannot observe", async () => {
@@ -219,26 +341,6 @@ describe("an operator's test mission (ADR-075)", () => {
       where: { id: second.testMission.bookingId },
     });
     expect(kept.status).toBe("CONFIRMED");
-  });
-
-  it("never replaces a test mission that has started, and writes nothing", async () => {
-    const test = await observatory("hardware-test");
-    environment.DARKVIEW_HARDWARE_TEST_OBSERVATORY_ID = test.id;
-
-    const first = await schedule(test.id, 60);
-    if (!first.ok) throw new Error(first.message);
-    await database.mission.update({
-      where: { id: first.testMission.missionId },
-      data: { state: "OBSERVING" },
-    });
-    const later = new Date(NOW.getTime() + 20 * 60_000);
-    await expect(schedule(test.id, 30, later)).resolves.toMatchObject({
-      ok: false,
-      status: 409,
-      code: "SLOT_UNAVAILABLE",
-    });
-    expect(await database.booking.count()).toBe(1);
-    expect(await database.mission.count()).toBe(1);
   });
 
   it("never replaces another operator's test mission", async () => {

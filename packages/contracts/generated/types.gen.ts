@@ -1272,7 +1272,10 @@ export type AdminObservatory = {
 };
 
 export type ScheduleTestMissionRequest = {
-    targetId: string;
+    /**
+     * Left out, the brightest target the observatory may point at now (ADR-082).
+     */
+    targetId?: string;
     /**
      * Quarter hours, as a customer's session (clients ADR-072).
      */
