@@ -75,3 +75,26 @@ the operator's refunds screen.
   first visit the payment's `redirectUrl` is the bank's own page.
 - A capture that arrives after the hold was swept is recorded as captured without a slot
   (DV-056) and is owed back, refunded at the bank.
+
+## Amendment of 2026-11-26: the gateway's v1.3.0
+
+The maintainer asked for Stellar's payments to be "exactly the same" as astroman.ge's,
+whose gateway reached v1.3.0 on 2026-11-24. What carries over:
+
+- **A retry under its own key.** The create-order retry without `ttl` is sent under a
+  fresh `Idempotency-Key`; under the payment id the bank replays its first refusal.
+- **A refused token is dropped.** A 401 from the bank forgets the cached token: the
+  create-order retry signs in again, and a receipt read is tried once more.
+- **The bank is asked when the payer comes back.** Both `redirect_urls` are
+  `GET /payments/{paymentId}/return`, which reads the receipt, settles from it as the
+  callback would, and sends the payer to the purchase's page. It needs no session (the
+  payer may have finished in the bank's app) and changes nothing a caller says.
+- **A decline says why.** A rejected receipt keeps the bank's result code as
+  `failureReason` `BOG_DECLINED_<code>`. The return adds `payment=declined&code=<code>`,
+  `payment=expired` or `payment=pending` to the page's address, and the web client words
+  it as the gateway does, with a way to try again and the BOG mobile bank named as an
+  option.
+
+What does not: the gateway keeps a declined WooCommerce order for another attempt; here
+a decline still releases the slot (§1), so the payer reserves again. The gateway's
+per-order lock is `settlePayment`'s own once-only settlement.

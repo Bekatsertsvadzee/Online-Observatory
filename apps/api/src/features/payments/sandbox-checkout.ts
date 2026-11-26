@@ -152,6 +152,19 @@ export async function loadOwnPayment(
   paymentId: string,
   provider: PaymentProvider,
 ): Promise<Loaded> {
+  return loadPayment(paymentId, provider, userId);
+}
+
+/**
+ * `loadOwnPayment` for anybody's payment when `userId` is left out: the Bank of
+ * Georgia return (ADR-073), which reaches nothing but the bank's own record and
+ * the purchase's page.
+ */
+export async function loadPayment(
+  paymentId: string,
+  provider: PaymentProvider,
+  userId?: string,
+): Promise<Loaded> {
   const payment = await getDatabase().payment.findUnique({
     where: { id: paymentId },
     select: {
@@ -178,7 +191,7 @@ export async function loadOwnPayment(
     },
   });
 
-  if (!payment || payment.userId !== userId) return notFound;
+  if (!payment || (userId !== undefined && payment.userId !== userId)) return notFound;
 
   if (payment.provider !== provider) {
     return conflict(

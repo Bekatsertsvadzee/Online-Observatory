@@ -4,12 +4,13 @@ import type { PaymentProvider } from "@darkview/contracts";
 import { recordAuditEvent } from "@darkview/db/audit";
 
 import {
+  bogReturnNotice,
   createBogOrder,
   fetchBogReceipt,
   outcomeFromBogReceipt,
   type BogCredentials,
 } from "@/features/payments/bog";
-import { sandboxCheckoutUrl, holdIsOpen, loadOwnPayment } from "@/features/payments/sandbox-checkout";
+import { sandboxCheckoutUrl, holdIsOpen, loadOwnPayment, loadPayment } from "@/features/payments/sandbox-checkout";
 import { settlePayment } from "@/features/payments/settle";
 import { sandboxMoneyAllowed } from "@/lib/deployment";
 import { getDatabase } from "@/lib/db/client";
@@ -24,7 +25,9 @@ import { getServerEnvironment } from "@/lib/validation/env";
  * payer to the bank's page. The bank calls `/payments/bog/callback`; that body is
  * only ever a hint of which order to look at. What settles a payment is the
  * receipt this API reads back from the bank itself, as the astroman.ge gateway
- * does.
+ * does. The bank sends the payer back through `/payments/{paymentId}/return`,
+ * which reads the receipt too, so the page they land on is already right
+ * (gateway v1.3.0).
  */
 
 function credentials(): BogCredentials | null {
@@ -119,6 +122,7 @@ export async function openBogCheckout(input: {
     ? Math.max(2, Math.ceil((hold.holdExpiresAt.getTime() - input.now.getTime()) / 60_000))
     : GIFT_WINDOW_MINUTES;
   const { APP_URL } = getServerEnvironment();
+  const backFromBank = new URL(`/api/payments/${payment.id}/return`, APP_URL).toString();
 
   let order: { orderId: string; redirectUrl: string };
   try {
@@ -129,8 +133,8 @@ export async function openBogCheckout(input: {
       description: DESCRIPTION[purpose][locale],
       locale,
       callbackUrl: new URL("/api/payments/bog/callback", APP_URL).toString(),
-      successUrl: returnUrl,
-      failUrl: returnUrl,
+      successUrl: backFromBank,
+      failUrl: backFromBank,
       ttlMinutes,
     });
   } catch (error) {
@@ -149,6 +153,48 @@ export async function openBogCheckout(input: {
     data: { providerRef: order.orderId, redirectUrl: order.redirectUrl },
   });
   return { ok: true, location: order.redirectUrl };
+}
+
+/**
+ * GET /payments/{paymentId}/return: where the bank sends the payer, paid or not.
+ *
+ * Asks the bank straight away rather than waiting for the callback, then sends
+ * the payer to the purchase's own page, told what happened when it is not paid.
+ * Needs no session: it only makes this API read the bank's own record, and the
+ * page it sends to asks for sign-in itself.
+ */
+export async function returnFromBog(paymentId: string, now: Date): Promise<string> {
+  const loaded = await loadPayment(paymentId, "BOG_IPAY");
+  if (!loaded.ok) return new URL("/", getServerEnvironment().APP_URL).toString();
+
+  const database = getDatabase();
+  const row = await database.payment.findUnique({
+    where: { id: paymentId },
+    select: { providerRef: true },
+  });
+  const keys = credentials();
+  if (loaded.payment.status === "PENDING" && row?.providerRef && keys) {
+    // Unreadable now is fine: the callback settles it, and the page says pending.
+    // Callback and return can arrive together; `settlePayment` applies one outcome once.
+    const receipt = await fetchBogReceipt(keys, row.providerRef).catch((error: unknown) => {
+      console.error("[bog] receipt not read on return", { paymentId, error: String(error) });
+      return null;
+    });
+    const outcome = receipt && outcomeFromBogReceipt(paymentId, row.providerRef, receipt);
+    if (outcome) await settlePayment({ provider: "BOG_IPAY", outcome, now });
+  }
+
+  const settled = await database.payment.findUnique({
+    where: { id: paymentId },
+    select: { status: true, failureReason: true },
+  });
+  const notice = settled ? bogReturnNotice(settled.status, settled.failureReason) : null;
+  const target = new URL(loaded.returnUrl);
+  if (notice) {
+    target.searchParams.set("payment", notice.payment);
+    if (notice.code) target.searchParams.set("code", notice.code);
+  }
+  return target.toString();
 }
 
 export type BogCallbackResult = { status: 200 | 400 | 502 | 503 };

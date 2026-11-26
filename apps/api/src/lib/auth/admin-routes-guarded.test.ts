@@ -73,6 +73,15 @@ const SIGNED_SERVER_TO_SERVER = new Set(["payments/webhook/route.ts"]);
 const RECEIPT_VERIFIED_SERVER_TO_SERVER = new Set(["payments/bog/callback/route.ts"]);
 
 /**
+ * ADR-073, gateway v1.3.0: where the bank sends the payer back. A GET navigation
+ * from the bank's page, which may come without the session (the payer finished in
+ * the bank's app). It changes nothing a caller says: it only reads the bank's own
+ * receipt, and redirects to the purchase's page, which asks for sign-in itself.
+ * The test below holds it to that.
+ */
+const BANK_RETURN = new Set(["payments/[paymentId]/return/route.ts"]);
+
+/**
  * Routes that issue a session, so there is none yet to require (ADR-016), and the
  * reset request, made by somebody who cannot sign in (ADR-040). They are still
  * mutations a cross-site form could send, so each must refuse a foreign Origin
@@ -181,6 +190,7 @@ describe("every admin route is behind the operator guard", () => {
           !publicFiles.has(relative) &&
           !SIGNED_SERVER_TO_SERVER.has(relative) &&
           !RECEIPT_VERIFIED_SERVER_TO_SERVER.has(relative) &&
+          !BANK_RETURN.has(relative) &&
           !SESSION_ISSUING.has(relative) &&
           !NATIVE_SESSION_ISSUING.has(relative) &&
           !GOOGLE_NAVIGATIONS.has(relative)
@@ -228,6 +238,25 @@ describe("every admin route is behind the operator guard", () => {
     expect(callback).toContain("outcomeFromBogReceipt(payment.id, orderId, receipt)");
   });
 
+  it("settles a bank return only from the receipt the bank is asked for", () => {
+    for (const relative of BANK_RETURN) {
+      const source = readFileSync(path.join(appDirectory, relative), "utf8");
+      expect(source, relative).not.toMatch(/export async function (POST|PUT|PATCH|DELETE)/);
+      expect(source, relative).toContain("returnFromBog(path.data.paymentId, new Date())");
+    }
+    const handler = readFileSync(
+      path.resolve(import.meta.dirname, "../../features/payments/bog-checkout.ts"),
+      "utf8",
+    );
+    const start = handler.indexOf("export async function returnFromBog");
+    const back = handler.slice(start, handler.indexOf("export type BogCallbackResult"));
+    const read = back.indexOf("fetchBogReceipt(");
+    const settle = back.indexOf("settlePayment(");
+    expect(read).toBeGreaterThan(0);
+    expect(settle).toBeGreaterThan(read);
+    expect(back).toContain("outcomeFromBogReceipt(paymentId, row.providerRef, receipt)");
+  });
+
   it("puts every mutating route behind the same-origin guard", () => {
     // A session cookie is attached by the browser to a cross-site POST as readily
     // as to a first-party one. requireApiSession alone therefore proves who the
@@ -252,6 +281,7 @@ describe("every admin route is behind the operator guard", () => {
         (relative) =>
           !SIGNED_SERVER_TO_SERVER.has(relative) &&
           !RECEIPT_VERIFIED_SERVER_TO_SERVER.has(relative) &&
+          !BANK_RETURN.has(relative) &&
           !SESSION_ISSUING.has(relative) &&
           !NATIVE_SESSION_ISSUING.has(relative),
       );

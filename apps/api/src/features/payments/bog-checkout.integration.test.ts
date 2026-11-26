@@ -35,7 +35,9 @@ vi.mock("@/lib/db/client", () => ({ getDatabase: () => testDatabase.current }));
 vi.mock("@/lib/validation/env", () => ({ getServerEnvironment: () => environment }));
 
 const { PAYMENT_HOLD_MINUTES, reserveSlot } = await import("@/features/booking/reserve");
-const { openBogCheckout, receiveBogCallback } = await import("@/features/payments/bog-checkout");
+const { openBogCheckout, receiveBogCallback, returnFromBog } = await import(
+  "@/features/payments/bog-checkout"
+);
 const { purchaseGiftVoucher } = await import("@/features/vouchers/vouchers");
 const { nightWindow } = await import("@/lib/slots/darkness");
 const { generateSlots, SLOT_DURATION_MINUTES } = await import("@/lib/slots/generate");
@@ -254,8 +256,8 @@ describe("Bank of Georgia as the provider (ADR-073)", () => {
       locale: "ka",
       ttlMinutes: PAYMENT_HOLD_MINUTES,
       callbackUrl: "https://darkview.test/api/payments/bog/callback",
-      successUrl: `https://darkview.test/ka/app/bookings/${booking.id}`,
-      failUrl: `https://darkview.test/ka/app/bookings/${booking.id}`,
+      successUrl: `https://darkview.test/api/payments/${paymentIntent.paymentId}/return`,
+      failUrl: `https://darkview.test/api/payments/${paymentIntent.paymentId}/return`,
     });
 
     expect(await opened(paymentIntent.paymentId, payer)).toBe(BANK_PAGE);
@@ -381,13 +383,57 @@ describe("Bank of Georgia as the provider (ADR-073)", () => {
     await opened(paymentIntent.paymentId);
     expect(bank.createBogOrder.mock.calls[0][1]).toMatchObject({
       ttlMinutes: 60,
-      successUrl: `https://darkview.test/en/gift/${voucher.id}`,
+      successUrl: `https://darkview.test/api/payments/${paymentIntent.paymentId}/return`,
     });
+    bank.fetchBogReceipt.mockResolvedValueOnce(await receipt(paymentIntent.paymentId, "in_progress"));
+    expect(await returnFromBog(paymentIntent.paymentId, NOW)).toBe(
+      `https://darkview.test/en/gift/${voucher.id}?payment=pending`,
+    );
 
     bank.fetchBogReceipt.mockResolvedValue(await receipt(paymentIntent.paymentId, "completed"));
     expect(await receiveBogCallback(callback("bog-1"), NOW)).toEqual({ status: 200 });
     expect(
       (await database.giftVoucher.findUniqueOrThrow({ where: { id: voucher.id } })).status,
     ).not.toBe("PENDING_PAYMENT");
+  });
+
+  it("asks the bank when the payer comes back, so the booking is already confirmed", async () => {
+    const paid = await reserve();
+    await opened(paid.paymentIntent.paymentId);
+    bank.fetchBogReceipt.mockResolvedValueOnce(await receipt(paid.paymentIntent.paymentId, "completed"));
+    expect(await returnFromBog(paid.paymentIntent.paymentId, NOW)).toBe(
+      `https://darkview.test/en/app/bookings/${paid.booking.id}`,
+    );
+    expect((await database.booking.findUniqueOrThrow({ where: { id: paid.booking.id } })).status).toBe(
+      "CONFIRMED",
+    );
+    // The callback after it changes nothing.
+    bank.fetchBogReceipt.mockResolvedValueOnce(await receipt(paid.paymentIntent.paymentId, "completed"));
+    expect(await receiveBogCallback(callback("bog-1"), NOW)).toEqual({ status: 200 });
+    expect(await database.mission.count()).toBe(1);
+  });
+
+  it("tells a payer the bank declined why, and does not ask the bank twice", async () => {
+    const declined = await reserve(await createUser("ka"));
+    expect(await opened(declined.paymentIntent.paymentId, declined.booking.userId)).toBe(BANK_PAGE);
+    bank.fetchBogReceipt.mockResolvedValueOnce(
+      await receipt(declined.paymentIntent.paymentId, "rejected", {
+        reject_reason: "declined",
+        payment_detail: { code: "107" },
+      }),
+    );
+    expect(await returnFromBog(declined.paymentIntent.paymentId, NOW)).toBe(
+      `https://darkview.test/ka/app/bookings/${declined.booking.id}?payment=declined&code=107`,
+    );
+    expect(
+      await database.payment.findUniqueOrThrow({ where: { id: declined.paymentIntent.paymentId } }),
+    ).toMatchObject({ status: "FAILED", failureReason: "BOG_DECLINED_107" });
+
+    // Already settled: the bank is not asked again.
+    bank.fetchBogReceipt.mockClear();
+    expect(await returnFromBog(declined.paymentIntent.paymentId, NOW)).toContain("payment=declined&code=107");
+    expect(bank.fetchBogReceipt).not.toHaveBeenCalled();
+
+    expect(await returnFromBog(randomUUID(), NOW)).toBe("https://darkview.test/");
   });
 });
