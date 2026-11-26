@@ -1857,6 +1857,29 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
 
+  /payments/{paymentId}/return:
+    get:
+      operationId: getPaymentReturn
+      tags: [booking]
+      summary: Where Bank of Georgia sends a BOG_IPAY payer back (ADR-073).
+      description: |
+        The success and fail address of every order the cloud opens at Bank of Georgia.
+        The cloud reads the order's receipt from the bank at once, settles the payment
+        from it as the callback would, and answers 303 to the purchase's own page on the
+        web client. When the payment is not captured the page's address carries
+        `payment=declined` (with the bank's result `code` when it gave one),
+        `payment=expired` or `payment=pending`. No session is needed: the route changes
+        nothing a caller says, and the page it sends to asks for sign-in itself. An
+        unknown payment is sent to the web client's home page.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      responses:
+        "303":
+          description: "`Location` is the purchase's own page."
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
   /payments/bog/callback:
     post:
       operationId: receiveBogCallback

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const { bogOrderPayload, createBogOrder, fetchBogReceipt, forgetBogToken, outcomeFromBogReceipt } =
+const { bogOrderPayload, bogReturnNotice, createBogOrder, fetchBogReceipt, forgetBogToken, outcomeFromBogReceipt } =
   await import("./bog");
 
 const KEYS = { clientId: "99971", secretKey: "unit-test-secret" };
@@ -76,13 +76,26 @@ describe("the order Stellar opens at the bank (ADR-073)", () => {
     });
   });
 
-  it("asks once more without the window when the bank refuses the full body", async () => {
+  it("asks once more without the window, under a key of its own, when the bank refuses the full body", async () => {
     const { fetcher, calls } = bank(json(400, { message: "bad ttl" }), json(200, created));
     await expect(createBogOrder(KEYS, order, fetcher)).resolves.toMatchObject({ orderId: "bog-order-1" });
     const bodies = calls.slice(1).map((call) => JSON.parse(String(call.init.body)));
     expect(bodies[0]).toHaveProperty("ttl", 12);
     expect(bodies[1]).not.toHaveProperty("ttl");
-    expect(calls[2].init.headers).toMatchObject({ "Idempotency-Key": PAYMENT_ID });
+    const retryKey = (calls[2].init.headers as Record<string, string>)["Idempotency-Key"];
+    expect(retryKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(retryKey).not.toBe(PAYMENT_ID);
+  });
+
+  it("signs in again when the bank no longer accepts the token", async () => {
+    const { fetcher, calls } = bank(json(401, {}), json(200, created));
+    await expect(createBogOrder(KEYS, order, fetcher)).resolves.toMatchObject({ orderId: "bog-order-1" });
+    expect(calls.filter((call) => call.url.includes("oauth2")).length).toBe(2);
+
+    forgetBogToken();
+    const receipts = bank(json(401, {}), json(200, { ok: 1 }));
+    await expect(fetchBogReceipt(KEYS, "a", receipts.fetcher)).resolves.toEqual({ ok: 1 });
+    expect(receipts.calls.filter((call) => call.url.includes("oauth2")).length).toBe(2);
   });
 
   it("throws when the bank refuses both, and never follows a page that is not the bank's", async () => {
@@ -128,6 +141,21 @@ describe("a receipt, read into Darkview's terms", () => {
     expect(
       outcomeFromBogReceipt(PAYMENT_ID, "o1", receipt({ order_status: { key: "rejected" } })),
     ).toMatchObject({ result: "FAILED", failureReason: "PAYMENT_REJECTED" });
+    expect(
+      outcomeFromBogReceipt(
+        PAYMENT_ID,
+        "o1",
+        receipt({ order_status: { key: "rejected" }, reject_reason: "declined", payment_detail: { code: "107" } }),
+      ),
+    ).toMatchObject({ result: "FAILED", failureReason: "BOG_DECLINED_107" });
+  });
+
+  it("tells a payer back from the bank what happened", () => {
+    expect(bogReturnNotice("CAPTURED", null)).toBeNull();
+    expect(bogReturnNotice("FAILED", "PAYMENT_EXPIRED")).toEqual({ payment: "expired" });
+    expect(bogReturnNotice("FAILED", "BOG_DECLINED_122")).toEqual({ payment: "declined", code: "122" });
+    expect(bogReturnNotice("FAILED", "PAYMENT_REJECTED")).toEqual({ payment: "declined" });
+    expect(bogReturnNotice("PENDING", null)).toEqual({ payment: "pending" });
   });
 
   it("is nothing while the bank waits, for a refund, for another payment, or in another currency", () => {

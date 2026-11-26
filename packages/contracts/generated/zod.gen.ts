@@ -3181,6 +3181,10 @@ export const zGetPaymentCheckoutPath = z.object({
     paymentId: z.uuid()
 });
 
+export const zGetPaymentReturnPath = z.object({
+    paymentId: z.uuid()
+});
+
 /**
  * The bank's callback body, opaque to this contract.
  */

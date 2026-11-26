@@ -5915,6 +5915,24 @@ export type GetPaymentCheckoutErrors = {
 
 export type GetPaymentCheckoutError = GetPaymentCheckoutErrors[keyof GetPaymentCheckoutErrors];
 
+export type GetPaymentReturnData = {
+    body?: never;
+    path: {
+        paymentId: string;
+    };
+    query?: never;
+    url: '/payments/{paymentId}/return';
+};
+
+export type GetPaymentReturnErrors = {
+    /**
+     * Rate limited. The body does not say how much budget remains or when it returns.
+     */
+    429: ApiError;
+};
+
+export type GetPaymentReturnError = GetPaymentReturnErrors[keyof GetPaymentReturnErrors];
+
 export type ReceiveBogCallbackData = {
     /**
      * The bank's callback body, opaque to this contract.

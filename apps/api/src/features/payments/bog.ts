@@ -1,5 +1,7 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+
 import type { Currency } from "@darkview/contracts";
 
 import type { PaymentOutcome } from "@/features/payments/provider";
@@ -13,6 +15,26 @@ import type { PaymentOutcome } from "@/features/payments/provider";
  * The contract's provider value is still `BOG_IPAY`: it names the bank, and
  * renaming an enum would cost a migration for no change in behaviour.
  */
+
+const BOG_DECLINED = "BOG_DECLINED_";
+
+/**
+ * Where a payer back from the bank is told what happened (gateway v1.3.0): nothing
+ * once paid, `expired`, `declined` with the bank's result code, or `pending` while
+ * the bank has not decided.
+ */
+export function bogReturnNotice(
+  status: string,
+  failureReason: string | null,
+): { payment: "expired" | "declined" | "pending"; code?: string } | null {
+  if (status === "CAPTURED") return null;
+  if (status === "FAILED") {
+    if (failureReason === "PAYMENT_EXPIRED") return { payment: "expired" };
+    const code = failureReason?.startsWith(BOG_DECLINED) ? failureReason.slice(BOG_DECLINED.length) : "";
+    return code ? { payment: "declined", code } : { payment: "declined" };
+  }
+  return { payment: "pending" };
+}
 
 const OAUTH_URL = "https://oauth2.bog.ge/auth/realms/bog/protocol/openid-connect/token";
 const API_BASE = "https://api.bog.ge/payments/v1";
@@ -115,17 +137,17 @@ function bankRedirect(body: Record<string, unknown>): string | null {
  *
  * Keyed by the payment id, so two presses of the same button open one order. If
  * the bank refuses the full body, it is sent once more without the payment
- * window -- the gateway's lesson: an option the bank will not take must never
- * take checkout down.
+ * window and under a fresh key -- the gateway's lesson (v1.3.0): an option the
+ * bank will not take must never take checkout down. A token the bank no longer
+ * accepts is dropped, so the retry signs in again.
  */
 export async function createBogOrder(
   credentials: BogCredentials,
   input: BogOrderInput,
   fetcher: Fetch = fetch,
 ): Promise<{ orderId: string; redirectUrl: string }> {
-  const token = await accessToken(credentials, fetcher);
-
-  const attempt = async (minimal: boolean) => {
+  const attempt = async (minimal: boolean, idempotencyKey: string) => {
+    const token = await accessToken(credentials, fetcher);
     const response = await fetcher(`${API_BASE}/ecommerce/orders`, {
       method: "POST",
       headers: {
@@ -133,11 +155,12 @@ export async function createBogOrder(
         "Content-Type": "application/json",
         Accept: "application/json",
         "Accept-Language": input.locale,
-        "Idempotency-Key": input.paymentId,
+        "Idempotency-Key": idempotencyKey,
       },
       body: JSON.stringify(bogOrderPayload(input, minimal)),
       signal: AbortSignal.timeout(30_000),
     });
+    if (response.status === 401) forgetBogToken();
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     const redirectUrl = bankRedirect(body);
     if (!response.ok || typeof body.id !== "string" || !redirectUrl) {
@@ -146,9 +169,10 @@ export async function createBogOrder(
     return { ok: true as const, orderId: body.id, redirectUrl };
   };
 
-  const first = await attempt(false);
+  const first = await attempt(false, input.paymentId);
   if (first.ok) return { orderId: first.orderId, redirectUrl: first.redirectUrl };
-  const second = await attempt(true);
+  // A key of its own: under the first one the bank replays its refusal.
+  const second = await attempt(true, randomUUID());
   if (second.ok) return { orderId: second.orderId, redirectUrl: second.redirectUrl };
   throw new Error(`BOG refused the order (HTTP ${first.status}, then ${second.status}).`);
 }
@@ -158,12 +182,17 @@ export async function fetchBogReceipt(
   credentials: BogCredentials,
   orderId: string,
   fetcher: Fetch = fetch,
+  retry = true,
 ): Promise<Record<string, unknown>> {
   const token = await accessToken(credentials, fetcher);
   const response = await fetcher(`${API_BASE}/receipt/${encodeURIComponent(orderId)}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
     signal: AbortSignal.timeout(30_000),
   });
+  if (response.status === 401 && retry) {
+    forgetBogToken();
+    return fetchBogReceipt(credentials, orderId, fetcher, false);
+  }
   if (!response.ok) throw new Error(`BOG receipt read failed (HTTP ${response.status}).`);
   return (await response.json()) as Record<string, unknown>;
 }
@@ -211,14 +240,22 @@ export function outcomeFromBogReceipt(
 
   if (status === "rejected") {
     const reason = typeof receipt.reject_reason === "string" ? receipt.reject_reason : "";
+    const detail = (receipt.payment_detail ?? {}) as Record<string, unknown>;
+    const code = typeof detail.code === "string" || typeof detail.code === "number" ? String(detail.code) : "";
     return {
       paymentId,
       providerRef: orderId,
       result: "FAILED",
       amountMinor: minor(units.request_amount) ?? 0,
       currency,
-      // An expired order: the payer never entered a card.
-      failureReason: reason === "expiration" ? "PAYMENT_EXPIRED" : (reason || "PAYMENT_REJECTED").slice(0, 256),
+      // An expired order: the payer never entered a card. A decline keeps the
+      // bank's result code, which the payer is told in words (`bogDecline`).
+      failureReason:
+        reason === "expiration"
+          ? "PAYMENT_EXPIRED"
+          : /^\d{1,4}$/.test(code)
+            ? `${BOG_DECLINED}${code}`
+            : (reason || "PAYMENT_REJECTED").slice(0, 256),
     };
   }
 
